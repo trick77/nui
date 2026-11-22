@@ -21,6 +21,17 @@ func Client(ua string) string {
 		b, o, _ := ParseUA(ua)
 		return b + " · " + o
 	}
+	// A tool behind the Mozilla/5.0 compatibility prefix (Mozilla/5.0 zgrab/0.x, HeadlessChrome, Googlebot): the
+	// token naming the tool, not the prefix.
+	if looksLikeBrowser(ua) {
+		for _, tok := range strings.FieldsFunc(ua, func(r rune) bool { return strings.ContainsRune(" ();,+", r) }) {
+			if automationUA.MatchString(tok) {
+				if m := productRE.FindStringSubmatch(tok); m != nil {
+					return strings.TrimSuffix(m[0], "/")
+				}
+			}
+		}
+	}
 	if m := productRE.FindStringSubmatch(ua); m != nil {
 		if m[2] != "" {
 			return m[1] + "/" + m[2]
