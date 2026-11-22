@@ -57,6 +57,7 @@ func seededHistory(t testing.TB, seed uint64, scale float64, days int, scenarios
 
 // The checks are not vacuous: a quiet history fails every story it did not play.
 func TestExpectationsFailWithoutTheirStory(t *testing.T) {
+	t.Parallel()
 	scale := 1.0
 	if raceOn {
 		scale = 0.3
@@ -152,7 +153,8 @@ func dashboardOf(t *testing.T, st *store.Store, w *sim.World) *Dashboard {
 	return d
 }
 
-// Every scenario, played with the baseline alone, shows on the real dashboard what it says it shows.
+// Every scenario, played with the baseline alone, shows on the real dashboard what it says it shows. The tests
+// that set a package variable (exportRanges, checkWorld) run before the parallel ones: they are not parallel.
 func TestScenarioExpectations(t *testing.T) {
 	for _, sc := range sim.Catalogue() {
 		t.Run(sc.Name, func(t *testing.T) {

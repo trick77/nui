@@ -88,6 +88,7 @@ func TestExport(t *testing.T) {
 }
 
 func TestCommands(t *testing.T) {
+	t.Parallel()
 	if code, _, errs := run(t, nil); code != 2 || !strings.Contains(errs, "usage") {
 		t.Errorf("no command: %d", code)
 	}
@@ -210,6 +211,7 @@ func TestCheckCountsTheBaseline(t *testing.T) {
 
 // Live over HTTP, the rate setting the scale, the feed key from -key.
 func TestLiveCommand(t *testing.T) {
+	t.Parallel()
 	ref, err := sim.OpenReference(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -266,6 +268,7 @@ func TestLiveCommand(t *testing.T) {
 }
 
 func TestServer(t *testing.T) {
+	t.Parallel()
 	k := sim.DefaultKnobs()
 	k.Days, k.Scale, k.Port, k.Speed, k.SlowMS = 1, 0.3, 9099, 3600, 1
 	s, err := NewServer(k, time.Now())
