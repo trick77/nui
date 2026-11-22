@@ -43,10 +43,12 @@ var Cadence = map[string]time.Duration{
 	"24h": 6 * time.Hour, "7d": 24 * time.Hour, "30d": 48 * time.Hour, "90d": 72 * time.Hour, "12mo": 7 * 24 * time.Hour,
 }
 
-// failBackoff keeps a failed job from being retried at once; labelRetry a value that got no usable label.
+// failBackoff keeps a failed job from being retried at once; labelRetry a value that got no usable label. maxFailed
+// and maxMisses bound the maps that remember them.
 const (
 	failBackoff = 30 * time.Minute
 	labelRetry  = 24 * time.Hour
+	maxFailed   = 10_000
 	maxMisses   = 10_000
 )
 
@@ -152,7 +154,10 @@ func (s *Service) enqueue(j job, urgent bool) {
 		return
 	}
 	s.mu.Lock()
-	if s.queued[j.key] || s.o.Now().Sub(s.failed[j.key]) < failBackoff {
+	if at, ok := s.failed[j.key]; ok && s.o.Now().Sub(at) >= failBackoff {
+		delete(s.failed, j.key)
+	}
+	if _, backoff := s.failed[j.key]; backoff || s.queued[j.key] {
 		s.mu.Unlock()
 		return
 	}
@@ -173,9 +178,24 @@ func (s *Service) done(key string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.queued, key)
-	if err != nil {
-		s.failed[key] = s.o.Now()
+	if err == nil {
+		delete(s.failed, key)
+		return
 	}
+	// Bounded: a spent budget fails every queued job at once, each with its own key. At the bound the expired
+	// entries go, and if all are fresh the lot (a key asked again early fails again, cheaply).
+	now := s.o.Now()
+	if len(s.failed) >= maxFailed {
+		for k, at := range s.failed {
+			if now.Sub(at) >= failBackoff {
+				delete(s.failed, k)
+			}
+		}
+		if len(s.failed) >= maxFailed {
+			clear(s.failed)
+		}
+	}
+	s.failed[key] = now
 }
 
 // Run works the queue until ctx ends, urgent jobs (a reading the user opened) first.

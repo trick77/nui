@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -335,6 +336,44 @@ func TestBudgetAndFailures(t *testing.T) {
 	<-done
 	if len(r.srv.Requests()) == calls {
 		t.Error("Run did not work the queue")
+	}
+}
+
+// The failed jobs' backoff is bounded and expires: with the budget spent every queued job fails at once, each with
+// its own key.
+func TestFailedBounded(t *testing.T) {
+	r := newRig(t, 0) // no budget: every job fails without a call
+	for i := range 3 {
+		r.s.Labels(t.Context(), 1, "ua", []string{fmt.Sprintf("bot/%d", i)})
+		r.s.Drain(t.Context())
+	}
+	if len(r.s.failed) != 3 {
+		t.Fatalf("failed = %d, want 3", len(r.s.failed))
+	}
+	// An expired entry goes when its key is asked again, and the job is queued anew.
+	r.now = r.now.Add(failBackoff)
+	r.s.Labels(t.Context(), 1, "ua", []string{"bot/0"})
+	if len(r.s.normal) != 1 || len(r.s.failed) != 2 {
+		t.Errorf("expired: queued %d, failed %d", len(r.s.normal), len(r.s.failed))
+	}
+	r.s.Drain(t.Context())
+	// At the bound the expired entries are swept, and a map of fresh ones is cleared rather than grown.
+	for i := range maxFailed + 10 {
+		r.s.done(fmt.Sprintf("k%d", i), errBudget)
+		if len(r.s.failed) > maxFailed {
+			t.Fatalf("failed grew to %d", len(r.s.failed))
+		}
+	}
+	r.now = r.now.Add(failBackoff)
+	r.s.done("fresh", errBudget)
+	r.s.done("fresh2", errBudget)
+	if len(r.s.failed) > maxFailed {
+		t.Errorf("failed = %d", len(r.s.failed))
+	}
+	// A success clears its key's backoff.
+	r.s.done("fresh", nil)
+	if _, ok := r.s.failed["fresh"]; ok {
+		t.Error("a success kept its backoff")
 	}
 }
 
