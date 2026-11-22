@@ -64,7 +64,7 @@ load (the first 50):
   {"t": 1764000000000, "ip": "203.0.113.7", "method": "GET", "path": "/users/42", "route": "GET /users/{id}",
    "status": 200, "dur_ms": 12, "bytes": 5123, "ua": "Mozilla/5.0 ...", "ref": "https://example.org/",
    "lang": "en-US,en;q=0.9", "ch_ua": "\"Chromium\";v=\"142\"", "sf_site": "cross-site", "sf_mode": "navigate",
-   "sf_dest": "document", "account": "u_8f3a"}
+   "sf_dest": "document", "sig_agent": "\"https://chatgpt.com\"", "account": "u_8f3a"}
 ]}
 ```
 
@@ -79,6 +79,7 @@ load (the first 50):
 | `status`, `dur_ms`, `bytes` | Response status, handler time in ms, response body bytes. |
 | `ua`, `ref`, `lang` | `User-Agent`, `Referer`, `Accept-Language`. |
 | `ch_ua`, `sf_site`, `sf_mode`, `sf_dest` | `Sec-CH-UA`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`. |
+| `sig_agent` | `Signature-Agent` (Web Bot Auth): the agent a client says it is, as sent. Empty when absent. |
 | `account` | The signed-in account, if any: an opaque id, never an email or a name. |
 
 Send exactly these fields, never raw headers (they carry cookies and credentials). Every request counts, 404s and

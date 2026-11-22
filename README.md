@@ -184,8 +184,8 @@ otherwise, the limits are:
 | A batch's rows, as stored | 64 KiB |
 
 "As stored" counts the event's columns, its `url` with its path, a page view's referrer and the props re-encoded
-(U+2028 and U+2029 take six bytes each); the request's client-hint and fetch headers are kept up to 2 KiB, on the
-batch's first row. The rate is 60 events a minute per address or IPv6 /64 and 600 per /48 (IPv4 /24), with a burst
+(U+2028 and U+2029 take six bytes each); the request's client-hint, fetch and `Signature-Agent` headers are kept up
+to 2 KiB, on the batch's first row. The rate is 60 events a minute per address or IPv6 /64 and 600 per /48 (IPv4 /24), with a burst
 of 60; a batch is charged one event per event or per 2 KiB stored, whichever is more, and every request pays one on
 arrival (429 with `Retry-After` beyond it). `Retry-After` covers the retry: the same batch sent again after it
 passes, its arrival token included, unless other requests from the address spent the tokens meanwhile. A body not
@@ -210,6 +210,7 @@ with the unknown domains every footer shows.
 | `sf_site`, `sf_mode`, `sf_dest` | 32 |
 | `account` | 128 |
 | `route` | 200 |
+| `sig_agent` | 256 |
 | `ua`, `lang`, `ch_ua` | 512 |
 | `path`, `ref` | 2048 (query and fragment dropped) |
 | `ip` | an IPv4 or IPv6 address; a zone (`%eth0`) is dropped |
