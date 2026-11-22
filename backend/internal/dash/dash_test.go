@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/trick77/nui/backend/internal/apix"
-	"github.com/trick77/nui/backend/internal/demo"
 	"github.com/trick77/nui/backend/internal/ingest"
 	"github.com/trick77/nui/backend/internal/insight"
+	"github.com/trick77/nui/backend/internal/sim"
 	"github.com/trick77/nui/backend/internal/sites"
 	"github.com/trick77/nui/backend/internal/store"
 )
@@ -70,9 +70,10 @@ func (f *fakeModel) Labels(_ context.Context, _ int64, _ string, values []string
 func (f *fakeModel) Usage(context.Context, int64) (int64, int64) { return 3, 200 }
 
 type rig struct {
-	s   *Server
-	h   http.Handler
-	end time.Time
+	s     *Server
+	h     http.Handler
+	end   time.Time
+	world *sim.World // the simulated history's, nil without one
 }
 
 func newRig(t *testing.T, days, people int, model insight.Model) *rig {
@@ -82,8 +83,9 @@ func newRig(t *testing.T, days, people int, model insight.Model) *rig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	rules, _ := json.Marshal(sim.LookupRules)
 	rows, err := st.SyncSites(t.Context(), []store.Site{
-		{Domain: feedSite, Kind: "site", Product: "Lens", FeedKeyHash: sites.HashKey("k"), PathRules: "[]"},
+		{Domain: feedSite, Kind: "site", Product: "Lens", FeedKeyHash: sites.HashKey("k"), PathRules: string(rules)},
 		{Domain: plainSite, Kind: "site", Product: "Blog", PathRules: "[]"},
 	})
 	if err != nil {
@@ -94,15 +96,13 @@ func newRig(t *testing.T, days, people int, model insight.Model) *rig {
 		t.Fatal(err)
 	}
 	end := time.Date(2026, 11, 22, 13, 30, 0, 0, time.UTC)
+	r := &rig{end: end}
 	if days > 0 {
-		for _, d := range []struct {
-			id   int64
-			feed bool
-		}{{rows[feedSite].ID, true}, {rows[plainSite].ID, false}} {
-			if _, err := demo.Generate(t.Context(), st, demo.Options{SiteID: d.id, Days: days, People: people, End: end,
-				Seed: 7, Feed: d.feed, Classes: true}); err != nil {
-				t.Fatal(err)
-			}
+		// About people visitors a day on each site, the API walker and a scan wave on the lookup site.
+		if r.world, _, err = sim.History(t.Context(), st, sim.HistoryOptions{Seed: 7, Anchor: end, Days: days,
+			Scale: float64(people) / 25, Scenarios: "api-walker,scan-wave", RefDir: filepath.Join(t.TempDir(), "ref"),
+			Classify: true}); err != nil {
+			t.Fatal(err)
 		}
 		if err := st.AddStats(t.Context(), []store.IngestStat{{SiteID: rows[feedSite].ID, Hour: end.Unix()/3600 - 30,
 			Accepted: 100, AcceptedServer: 60, RateLimited: 4}, {SiteID: 0, Hour: end.Unix() / 3600, UnknownDomain: 2}}); err != nil {
@@ -116,7 +116,18 @@ func newRig(t *testing.T, days, people int, model insight.Model) *rig {
 		Now: func() time.Time { return end.Add(time.Minute) }}
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/dash/{endpoint}", s)
-	return &rig{s: s, h: mux, end: end}
+	r.s, r.h = s, mux
+	return r
+}
+
+// monitor is the simulated uptime probe's address on the lookup site.
+func (r *rig) monitor(t *testing.T) string {
+	t.Helper()
+	a, ok := r.world.Bot("monitor", feedSite)
+	if !ok {
+		t.Fatal("no uptime probe in the world")
+	}
+	return a.String()
 }
 
 func (r *rig) get(t *testing.T, endpoint string, params map[string]string) (int, map[string]any) {
@@ -435,7 +446,7 @@ func TestLists(t *testing.T) {
 		t.Errorf("entry shares sum to %v", entries)
 	}
 	_, body = r.get(t, "list", p(feedSite, "dim", "pages", "range", "30d", "within", "/:cidr"))
-	if rows := listRows(body); len(rows) == 0 || rows[0]["label"] != "/1.1.1.0/24" || rows[0]["expandable"] == true ||
+	if rows := listRows(body); len(rows) == 0 || rows[0]["label"] != "/198.51.100.0/24" || rows[0]["expandable"] == true ||
 		rows[0]["entry"] == nil {
 		t.Errorf("within %v", body)
 	}
@@ -554,7 +565,7 @@ func TestVisitorsAndDetail(t *testing.T) {
 		t.Errorf("a foreign cursor: %d", code)
 	}
 	_, monitors := r.get(t, "visitors", p(feedSite, "class", "monitor"))
-	if rows := listRows(monitors); len(rows) != 1 || rows[0]["key"] != "69.162.124.230" {
+	if rows := listRows(monitors); len(rows) != 1 || rows[0]["key"] != r.monitor(t) {
 		t.Errorf("monitor filter %v", monitors)
 	}
 	// The search matches the model's client label the table shows, as stored.
@@ -809,7 +820,7 @@ func TestVisitorReadsOwnClass(t *testing.T) {
 		mu.Unlock()
 	}
 	t.Cleanup(func() { traceSQL = nil })
-	code, d := r.get(t, "visitor", p(feedSite, "key", "69.162.124.230", "range", "24h"))
+	code, d := r.get(t, "visitor", p(feedSite, "key", r.monitor(t), "range", "24h"))
 	if code != http.StatusOK || d["class"] != "monitor" {
 		t.Fatalf("visitor %d %v", code, d)
 	}
@@ -1004,7 +1015,7 @@ func TestLog(t *testing.T) {
 		params []string
 		check  func(map[string]any) bool
 	}{
-		{[]string{"addr", "69.162.124.230"}, func(m map[string]any) bool { return m["class"] == "monitor" }},
+		{[]string{"addr", r.monitor(t)}, func(m map[string]any) bool { return m["class"] == "monitor" }},
 		{[]string{"addr", "2001:db8:1:1::/64"}, func(map[string]any) bool { return true }},
 		{[]string{"status", "4xx"}, func(m map[string]any) bool { return strings.Contains(m["what"].(string), "→ 4") }},
 		{[]string{"status", "401"}, func(m map[string]any) bool { return strings.HasSuffix(m["what"].(string), "→ 401") }},

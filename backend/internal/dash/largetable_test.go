@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/demo"
+	"github.com/trick77/nui/backend/internal/sim"
 	"github.com/trick77/nui/backend/internal/store"
 )
 
@@ -27,9 +27,9 @@ func TestLargeTable(t *testing.T) {
 	}
 	r := newRig(t, 0, 0, &fakeModel{})
 	site, _ := r.s.Sites.Lookup(feedSite)
-	// No actor_class rows: one transaction per actor-day is what makes generating slow; the reads do not need them.
-	if _, err := demo.Generate(t.Context(), r.s.DB, demo.Options{SiteID: site.ID, Days: days, People: people,
-		End: r.end, Seed: 3, Feed: true}); err != nil {
+	// No classifier pass: one transaction per actor-day is what makes a history slow; the reads do not need it.
+	if _, _, err := sim.History(t.Context(), r.s.DB, sim.HistoryOptions{Seed: 3, Anchor: r.end, Days: days,
+		Scale: float64(people) / 25, Scenarios: "api-walker,scan-wave"}); err != nil {
 		t.Fatal(err)
 	}
 	var n int64
