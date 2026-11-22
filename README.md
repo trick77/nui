@@ -2,6 +2,8 @@
 
 Self-hosted usage analytics that sees all of your incoming traffic, not only the part that runs JavaScript.
 
+The name: *nui* is Hawaiian and Māori for "many", for all the data that comes in.
+
 Most analytics tools are a browser script, so they only ever see visitors whose browser runs it. nui also takes a
 feed from your backend and puts the two together: the people, and everything else that knocks on your door, from
 crawlers and uptime probes to scanners and scripts walking your API.
@@ -24,8 +26,6 @@ crawlers and uptime probes to scanners and scripts walking your API.
 ![Visitors by address, each with what it does, and one opened: a scanner probing for exposed files](docs/img/visitor.png)
 
 Both screenshots show simulated traffic.
-
-The name: *nui* is Hawaiian and Māori for "many", for all the data that comes in.
 
 ## Development
 
