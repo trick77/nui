@@ -42,7 +42,11 @@ func history(t testing.TB, scale float64, days int, scenarios string) (*store.St
 
 // The checks are not vacuous: a quiet history fails every story it did not play.
 func TestExpectationsFailWithoutTheirStory(t *testing.T) {
-	st, w := history(t, 1, 3, "baseline")
+	scale := 1.0
+	if raceOn {
+		scale = 0.3
+	}
+	st, w := history(t, scale, 3, "baseline")
 	sc, _ := sim.Scenarios("all")
 	w.Scenarios = sc
 	fails, err := Check(t.Context(), st, w)
@@ -71,6 +75,12 @@ func TestScenarioExpectations(t *testing.T) {
 			days, scale := max(sc.MinDays, 9), 1.0
 			if days > 30 {
 				scale = 0.3
+			}
+			if raceOn {
+				if days > 30 {
+					t.Skip("half a year of history: checked without -race")
+				}
+				days, scale = max(sc.MinDays, 3), 0.3
 			}
 			st, w := history(t, scale, days, sc.Name)
 			fails, err := Check(t.Context(), st, w)

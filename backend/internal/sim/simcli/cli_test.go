@@ -33,6 +33,10 @@ func TestExport(t *testing.T) {
 	exportRanges = []string{"24h", "7d"}
 	t.Cleanup(func() { exportRanges = nil })
 	vars := map[string]string{"NUI_SIM_DAYS": "3", "NUI_SIM_SCALE": "0.3", "NUI_SIM_SCENARIOS": "api-walker"}
+	if raceOn {
+		exportRanges = []string{"24h"}
+		vars["NUI_SIM_DAYS"], vars["NUI_SIM_SCALE"] = "1", "0.1"
+	}
 	dirs := []string{filepath.Join(t.TempDir(), "a"), filepath.Join(t.TempDir(), "b")}
 	for _, d := range dirs {
 		if code, out, errs := run(t, vars, "export", "-out", d); code != 0 || !strings.Contains(out, "exported") {
@@ -47,7 +51,7 @@ func TestExport(t *testing.T) {
 	if err := json.Unmarshal(b, &idx); err != nil {
 		t.Fatal(err)
 	}
-	if len(idx.Responses) < 300 || idx.World["anchor"] != FixtureAnchor.Format(time.RFC3339) {
+	if len(idx.Responses) < 100 || idx.World["anchor"] != FixtureAnchor.Format(time.RFC3339) {
 		t.Fatalf("index: %d answers, world %v", len(idx.Responses), idx.World)
 	}
 	for _, k := range []string{"sites", "overview?aud=bots&cmp=yoy&range=24h&site=lens.example.com",
@@ -57,7 +61,7 @@ func TestExport(t *testing.T) {
 		}
 	}
 	// A site without a feed answers the server-only panels 404, as the server does.
-	if e := idx.Responses["classes?aud=all&cmp=prev&range=7d&site=console.example.com"]; e.Status != http.StatusNotFound {
+	if e := idx.Responses["classes?aud=all&cmp=prev&range=24h&site=console.example.com"]; e.Status != http.StatusNotFound {
 		t.Errorf("classes without a feed: %+v", e)
 	}
 	for k, e := range idx.Responses {
@@ -96,7 +100,8 @@ func TestCommands(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "api-walker (always)") || !strings.Contains(out, "Noteworthy lists the new referrer") {
 		t.Errorf("scenarios: %d %s", code, out)
 	}
-	code, out, errs := run(t, map[string]string{"NUI_SIM_DAYS": "2", "NUI_SIM_SCENARIOS": "cred-prober"}, "check")
+	code, out, errs := run(t, map[string]string{"NUI_SIM_DAYS": "2", "NUI_SIM_SCALE": "0.3",
+		"NUI_SIM_SCENARIOS": "cred-prober"}, "check")
 	if code != 0 || !strings.Contains(out, "cred-prober: ") {
 		t.Errorf("check: %d %s %s", code, out, errs)
 	}

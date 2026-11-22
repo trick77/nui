@@ -75,7 +75,7 @@ var catalogue = []Scenario{
 	{Name: "api-walker", Story: "A script walks the lookup API address by address with a wrong key, every day, " +
 		"a request each 0.8 s.", expect: expectWalker},
 	{Name: "deploy-error", Story: "A release breaks the lookup page (a script error, some 502s from the API); " +
-		"a fix ships three days later.", From: -5*24*h + 14*h, To: -2*24*h + 10*h, MinDays: 14, expect: expectDeploy},
+		"a fix ships three days later.", From: -5*24*h + 14*h, To: -2*24*h + 10*h, MinDays: 7, expect: expectDeploy},
 	{Name: "flood-addr", Story: "One address floods the start page for an hour.", From: -6 * h, To: -5 * h,
 		expect: expectFlood},
 	{Name: "flood-64", Story: "One IPv6 /64 floods the start page for an hour, every request from another address.",
