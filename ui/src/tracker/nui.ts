@@ -130,10 +130,12 @@ export function bound(v: unknown, key: string, depth: number): unknown {
   if (typeof v === "number") return isFinite(v) ? v : null;
   if (typeof v === "boolean") return v;
   if (!v || typeof v !== "object" || depth >= LIMITS.depth) return null;
-  if (Array.isArray(v)) {
+  // Typed arrays by index too: for-in would first list every element.
+  if (Array.isArray(v) || ArrayBuffer.isView(v)) {
+    const l = v as ArrayLike<unknown>;
     const a: unknown[] = [];
-    for (let i = 0; i < v.length && i < LIMITS.items && budget > 0; i++)
-      a.push(bound(v[i], key, depth + 1));
+    for (let i = 0; i < l.length && i < LIMITS.items && budget > 0; i++)
+      a.push(bound(l[i], key, depth + 1));
     return a;
   }
   const out: Props = {};

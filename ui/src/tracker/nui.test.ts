@@ -89,6 +89,17 @@ describe("strings", () => {
     for (let i = 0; i < 40; i++) many["k" + i] = i;
     expect(Object.keys(cleanProps(many))).toHaveLength(32);
   });
+
+  it("walks a typed array by index, never listing all its elements", () => {
+    expect(cleanProps({ buf: new Uint8Array([1, 2, 3]) })).toEqual({
+      buf: "[1,2,3]",
+    });
+    const huge = cleanProps({ buf: new Float64Array(5_000_000) });
+    expect(JSON.parse(huge.buf as string)).toHaveLength(LIMITS.items);
+    expect(cleanProps({ v: new DataView(new ArrayBuffer(8)) })).toEqual({
+      v: "[]",
+    });
+  });
 });
 
 describe("sending", () => {
