@@ -154,7 +154,8 @@ func dashboardOf(t *testing.T, st *store.Store, w *sim.World) *Dashboard {
 }
 
 // Every scenario, played with the baseline alone, shows on the real dashboard what it says it shows. The tests
-// that set a package variable (exportRanges, checkWorld) run before the parallel ones: they are not parallel.
+// that set a package variable (exportRanges, checkWorld) or time the wall clock (live sends) are not parallel: they
+// run before the parallel ones, alone.
 func TestScenarioExpectations(t *testing.T) {
 	for _, sc := range sim.Catalogue() {
 		t.Run(sc.Name, func(t *testing.T) {
