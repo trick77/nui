@@ -216,7 +216,9 @@ describe("the built script", () => {
       "arrival",
       "pageInputs",
       "errorsSeen",
-      // the test-only state
+      // the handle only tests use
+      "stop",
+      "state",
       "queued",
       "errorKeys",
       ...props,

@@ -1213,33 +1213,6 @@ export function start(
   const g = win as unknown as { nui?: NuiGlobal };
   const stub = g.nui;
   const pending = stub && Array.isArray(stub.q) ? (stub.q as unknown[]) : [];
-  const api = {
-    event,
-    flush: (final = false) => guard(() => flush(final)),
-    stop: () => {
-      for (const off of offs.splice(0)) guard(off);
-      for (const o of observers.splice(0)) guard(() => o.disconnect());
-      for (const [m, o] of orig.splice(0))
-        guard(() => {
-          (hist as unknown as Record<string, unknown>)[m] = o;
-        });
-      if (timer) clearTimeout(timer);
-      timer = 0;
-      disabled = true;
-    },
-  } as Tracker;
-  // Not in the shipped script: nothing on a page reads it.
-  if (import.meta.env.MODE !== "production")
-    api.state = () => ({
-      queued: queue.length,
-      disabled,
-      failures,
-      backoff,
-      dropped,
-      errorKeys: errorsSeen.size,
-      sid,
-      vid,
-    });
   try {
     g.nui = {
       event,
@@ -1272,7 +1245,34 @@ export function start(
   };
   if (pre()) on(doc, "prerenderingchange", begin, { once: true });
   else begin();
-  return api;
+  // The handle is for tests: nothing on a page can reach it, so the
+  // shipped script carries none.
+  if (import.meta.env.MODE === "production") return {} as Tracker;
+  return {
+    event,
+    flush: (final = false) => guard(() => flush(final)),
+    stop: () => {
+      for (const off of offs.splice(0)) guard(off);
+      for (const o of observers.splice(0)) guard(() => o.disconnect());
+      for (const [m, o] of orig.splice(0))
+        guard(() => {
+          (hist as unknown as Record<string, unknown>)[m] = o;
+        });
+      if (timer) clearTimeout(timer);
+      timer = 0;
+      disabled = true;
+    },
+    state: () => ({
+      queued: queue.length,
+      disabled,
+      failures,
+      backoff,
+      dropped,
+      errorKeys: errorsSeen.size,
+      sid,
+      vid,
+    }),
+  };
 }
 
 type UAData = {
