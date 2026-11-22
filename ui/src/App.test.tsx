@@ -666,6 +666,61 @@ describe("log page", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/dashboard/"));
   });
 
+  describe("text filters typed within the pause", () => {
+    const pause = () => new Promise((r) => setTimeout(r, 500));
+    const box = (log: HTMLElement, name: string) =>
+      within(log).getByRole("textbox", { name });
+
+    it("keeps each of them", async () => {
+      start("/dashboard/log?site=lens.example.com");
+      const log = await screen.findByRole("region", { name: "Log" });
+      await within(log).findByText("25 of 70 events in this range");
+      fireEvent.change(box(log, "Address or /64"), {
+        target: { value: "192.0.2.120" },
+      });
+      fireEvent.change(box(log, "Path or event name"), {
+        target: { value: "/api" },
+      });
+      await pause();
+      const q = lastCall("/api/dash/log");
+      expect([q.get("addr"), q.get("path")]).toEqual(["192.0.2.120", "/api"]);
+      const url = new URLSearchParams(window.location.search);
+      expect([url.get("addr"), url.get("path")]).toEqual([
+        "192.0.2.120",
+        "/api",
+      ]);
+    });
+
+    it("are dropped when the filters are cleared", async () => {
+      start("/dashboard/log?site=lens.example.com&path=/x");
+      const log = await screen.findByRole("region", { name: "Log" });
+      await within(log).findByText(/events in this range/);
+      fireEvent.change(box(log, "Address or /64"), {
+        target: { value: "203.0.113.99" },
+      });
+      fireEvent.click(
+        within(log).getByRole("button", { name: "Clear filters" }),
+      );
+      await pause();
+      expect(window.location.search).not.toMatch(/addr|path/);
+      expect(lastCall("/api/dash/log").get("addr")).toBeNull();
+      expect(box(log, "Address or /64")).toHaveValue("");
+    });
+
+    it("never pull the visitor back into the log", async () => {
+      start("/dashboard/log?site=lens.example.com");
+      const log = await screen.findByRole("region", { name: "Log" });
+      await within(log).findByText("25 of 70 events in this range");
+      fireEvent.change(box(log, "Path or event name"), {
+        target: { value: "/api" },
+      });
+      fireEvent.click(screen.getByRole("link", { name: "Visitors" }));
+      await pause();
+      expect(window.location.pathname).toBe("/dashboard/");
+      expect(screen.queryByRole("region", { name: "Log" })).toBeNull();
+    });
+  });
+
   it("hides server kinds and the source column without a feed", async () => {
     start("/dashboard/log?site=console.example.com");
     const log = await screen.findByRole("region", { name: "Log" });

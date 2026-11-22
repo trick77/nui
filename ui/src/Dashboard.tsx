@@ -85,6 +85,22 @@ export default function Dashboard({ me }: { me: Me }) {
     [base],
   );
 
+  // The log's filter, changed in place: applied to the view as it is when
+  // the change lands (two text filters can fire before a render), and
+  // never bringing the log back once the visitor has left it. The URL
+  // follows below.
+  const filterLog = useCallback((change: (f: LogFilter) => LogFilter) => {
+    setView((cur) =>
+      cur.page === "log" ? { ...cur, log: change(cur.log) } : cur,
+    );
+  }, []);
+  useEffect(() => {
+    if (view.page !== "log") return;
+    const href = viewHref(base, view);
+    if (href !== window.location.pathname + window.location.search)
+      window.history.replaceState(null, "", href);
+  }, [base, view]);
+
   const sites = useApi("sites", (s) => api.sites(s));
   const list = sites.data?.sites ?? null;
   const site: SiteInfo | null =
@@ -250,14 +266,7 @@ export default function Dashboard({ me }: { me: Me }) {
               onCmp={(c) => set({ cmp: c })}
             />
             {view.page === "log" ? (
-              <LogPage
-                filter={view.log}
-                onFilter={(f) => {
-                  const v = { ...view, log: f };
-                  window.history.replaceState(null, "", viewHref(base, v));
-                  setView(v);
-                }}
-              />
+              <LogPage filter={view.log} onFilter={filterLog} />
             ) : (
               <>
                 <OverviewSection

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { api, type Log, type LogFilter, type LogRow } from "./api";
 import { num, when } from "./format";
 import { useApi, useMore } from "./hooks";
@@ -43,7 +43,8 @@ const STATUS_OPTS: [string, string][] = [
 ];
 
 // A text filter applied after a short pause; follows the URL when a click
-// elsewhere sets it.
+// elsewhere sets it. The pending change dies with the field or a newer value
+// and reaches the latest onChange, so it applies to the filter as it is then.
 function TextFilter({
   label,
   value,
@@ -55,11 +56,17 @@ function TextFilter({
 }) {
   const [draft, setDraft] = useState(value);
   const [seen, setSeen] = useState(value);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   if (value !== seen) {
     setSeen(value);
     setDraft(value);
   }
+  const apply = useEffectEvent((v: string) => onChange(v));
+  useEffect(() => {
+    const v = draft.trim();
+    if (v === value) return;
+    const t = setTimeout(() => apply(v), 300);
+    return () => clearTimeout(t);
+  }, [draft, value]);
   return (
     <input
       className="field w-[230px]"
@@ -67,12 +74,7 @@ function TextFilter({
       placeholder={label}
       aria-label={label}
       value={draft}
-      onChange={(e) => {
-        const v = e.target.value;
-        setDraft(v);
-        if (timer.current) clearTimeout(timer.current);
-        timer.current = setTimeout(() => onChange(v.trim()), 300);
-      }}
+      onChange={(e) => setDraft(e.target.value)}
     />
   );
 }
@@ -112,7 +114,9 @@ export function LogPage({
   onFilter,
 }: {
   filter: LogFilter;
-  onFilter: (f: LogFilter) => void;
+  // Changes apply to the filter as it is when they land, not as it was
+  // rendered: two text filters can fire before a render.
+  onFilter: (change: (f: LogFilter) => LogFilter) => void;
 }) {
   const { scope, feed, both } = useDash();
   const { site, range } = scope;
@@ -121,12 +125,15 @@ export function LogPage({
   const more = useMore<LogRow>(key);
   const rows = [...(page.data?.rows ?? []), ...more.items];
   const next = more.next ?? page.data?.next ?? "";
-  const set = (k: keyof LogFilter, v: string) => {
-    const f = { ...filter };
-    if (v) f[k] = v;
-    else delete f[k];
-    onFilter(f);
-  };
+  // Clearing starts the text fields afresh, dropping what is still pending.
+  const [cleared, setCleared] = useState(0);
+  const set = (k: keyof LogFilter, v: string) =>
+    onFilter((cur) => {
+      const f = { ...cur };
+      if (v) f[k] = v;
+      else delete f[k];
+      return f;
+    });
   const kinds: [string, string][] = [
     ["", "Kind: any"],
     ...(feed ? [["request", "request"] as [string, string]] : []),
@@ -144,11 +151,13 @@ export function LogPage({
         <CardHead title="Events">
           <div className="flex flex-wrap items-center gap-2.5">
             <TextFilter
+              key={`addr${cleared}`}
               label="Address or /64"
               value={filter.addr ?? ""}
               onChange={(v) => set("addr", v)}
             />
             <TextFilter
+              key={`path${cleared}`}
               label="Path or event name"
               value={filter.path ?? ""}
               onChange={(v) => set("path", v)}
@@ -177,7 +186,10 @@ export function LogPage({
               <button
                 type="button"
                 className="link"
-                onClick={() => onFilter({})}
+                onClick={() => {
+                  setCleared((n) => n + 1);
+                  onFilter(() => ({}));
+                }}
               >
                 Clear filters
               </button>
