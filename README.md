@@ -29,26 +29,36 @@ and open <http://localhost:8080/dashboard/>. `-demo 30` fills an empty database 
 
 ## Running it
 
-`compose.yaml` runs the released image behind an existing Traefik:
+`compose.yaml` runs the released image behind an existing Traefik. A deployment is three files in one directory:
+`compose.yaml`, `.env` and `data/sites.json`.
 
 ```sh
-cp .env.example .env    # set PUBLIC_FQDN, the OIDC client and BACKEND_SESSION_SECRET
-mkdir -p data && sudo chown 65532:65532 data
+curl -fsSLO https://raw.githubusercontent.com/trick77/nui/master/compose.yaml
+curl -fsSL -o .env https://raw.githubusercontent.com/trick77/nui/master/.env.example
+mkdir -p data
+curl -fsSL -o data/sites.json https://raw.githubusercontent.com/trick77/nui/master/docs/sites.example.json
+# edit .env: PUBLIC_FQDN, the OIDC client, BACKEND_SESSION_SECRET
+# edit data/sites.json: your domains (next section)
+sudo chown -R 65532:65532 data
 docker compose pull && docker compose up -d
 ```
 
 ### Sites
 
-nui only stores events for the sites listed in `data/sites.json` (see
+nui only stores events for the sites listed in `data/sites.json` (the container's `/data/sites.json`; shape in
 [docs/sites.example.json](docs/sites.example.json)): domain, product, path rules that group raw paths into
-templates, and for a server feed the SHA-256 of its key. Create a key and its hash with
+templates, and for a server feed the SHA-256 of its key. The file is read at start: restart nui after changing it.
+Without it nui still starts, logs `Sites file missing`, refuses every event (403) and the dashboard lists no domain;
+with it, the start log names the loaded domains (`Sites loaded`).
+
+A site without a server feed leaves `feed_key_sha256` empty. For one with a feed, create a key and its hash with
 
 ```sh
 docker compose run --rm nui -new-feed-key
 ```
 
 The key goes to the product's feed emitter (`Authorization: Bearer <key>` on `POST /api/feed`), the hash into
-`sites.json`. Restart nui after changing the file.
+`sites.json`.
 
 On a page, include the script:
 
