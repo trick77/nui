@@ -142,6 +142,61 @@ func TestRequestsIndependentOfTicks(t *testing.T) {
 	}
 }
 
+// No visit runs longer than maxVisit, and no day plan reaches past its day further than a visit begun at midnight and
+// its last batch: every session's first event to its last, every plan's batches and records, over a week of every
+// scenario's days. Records may come a moment before the day (a document is requested before its page shows), within a
+// feed window: they are sent after midnight. A visit drawn longer than the bound ends at it.
+func TestVisitBound(t *testing.T) {
+	w := testWorld(t, 2, "all")
+	for d := dayOf(anchor) - 6; d <= dayOf(anchor)+1; d++ {
+		p, d0 := w.plan(d), dayStart(d)
+		reach := d0.Add(day + maxVisit + batchWait)
+		visits := map[string][2]time.Time{}
+		for _, b := range p.batches {
+			if b.at.Before(d0) || !b.at.Before(reach) {
+				t.Fatalf("%s: a batch at %v", d0.Format(time.DateOnly), b.at)
+			}
+			for _, e := range b.events {
+				v, ok := visits[b.sid]
+				if !ok {
+					v = [2]time.Time{e.t, e.t}
+				}
+				visits[b.sid] = [2]time.Time{earlier(v[0], e.t), later(v[1], e.t)}
+			}
+		}
+		for _, v := range visits {
+			if v[1].Sub(v[0]) > maxVisit {
+				t.Fatalf("%s: a visit from %v to %v", d0.Format(time.DateOnly), v[0], v[1])
+			}
+		}
+		for _, rs := range p.records {
+			for _, r := range rs {
+				if r.t.Before(d0.Add(-feedWindow)) || !r.t.Before(reach) {
+					t.Fatalf("%s: a record at %v", d0.Format(time.DateOnly), r.t)
+				}
+			}
+		}
+	}
+	start := anchor
+	var pages []page
+	for i := range 12 {
+		at := start.Add(time.Duration(i) * 21 * time.Minute)
+		pages = append(pages, page{at: at, leave: at.Add(20 * time.Minute)})
+	}
+	pages = endBy(pages, start.Add(maxVisit))
+	last := pages[len(pages)-1]
+	if len(pages) != 9 || last.leave.Sub(start) != maxVisit || !last.leave.After(last.at) {
+		t.Errorf("a visit cut to %d pages, the last from %v to %v", len(pages), last.at.Sub(start), last.leave.Sub(start))
+	}
+}
+
+func later(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
 // Every request keeps within the collector's limits, and the baseline's clients are all accepted.
 func TestRequestsWithinLimits(t *testing.T) {
 	w := testWorld(t, 2, "all")
