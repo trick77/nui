@@ -28,10 +28,11 @@ import (
 	"github.com/trick77/nui/backend/internal/app"
 	"github.com/trick77/nui/backend/internal/classify"
 	"github.com/trick77/nui/backend/internal/dash"
-	"github.com/trick77/nui/backend/internal/demo"
 	"github.com/trick77/nui/backend/internal/ingest"
 	"github.com/trick77/nui/backend/internal/llm"
 	"github.com/trick77/nui/backend/internal/refdata"
+	"github.com/trick77/nui/backend/internal/sim"
+	"github.com/trick77/nui/backend/internal/sim/simcli"
 	"github.com/trick77/nui/backend/internal/sites"
 	"github.com/trick77/nui/backend/internal/store"
 	"github.com/trick77/nui/backend/web"
@@ -41,10 +42,18 @@ var (
 	// The container healthcheck: distroless has no wget.
 	healthcheckFlag = flag.Bool("healthcheck", false, "probe the local /readyz and exit 0 (ready) or 1 (not)")
 	newKeyFlag      = flag.Bool("new-feed-key", false, "print a new feed key and the hash the sites file takes, then exit")
-	demoFlag        = flag.Int("demo", 0, "fill an empty database with this many days of synthetic traffic per site (development)")
+	demoFlag        = flag.Int("demo", 0, "fill an empty database with this many days of simulated traffic on the configured sites (development)")
+	simFlag         = flag.Bool("sim", false, "serve a simulated world from a temporary data directory, sign-in off (development; NUI_SIM_* knobs, README)")
 )
 
 func main() {
+	// server sim <command>: the simulator's own command line (backfill, live, export, check).
+	if len(os.Args) > 1 && os.Args[1] == "sim" {
+		ctx, stop := run.Context(context.Background())
+		code := simcli.Main(ctx, os.Args[2:], os.Getenv, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
 	flag.Parse()
 	if *newKeyFlag {
 		key, hash := newFeedKey()
@@ -59,7 +68,25 @@ func main() {
 	if *healthcheckFlag {
 		os.Exit(httpx.Healthcheck(httpx.LocalURL(cfg.Addr, "/readyz")))
 	}
-	if err := serve(cfg); err != nil {
+	var simulated *simcli.Server
+	if *simFlag {
+		k := sim.ReadKnobs(os.Getenv, func(s string) { slog.Warn(s) })
+		if simulated, err = simcli.NewServer(k, time.Now()); err == nil {
+			err = simulated.Configure(&cfg)
+		}
+		if err != nil {
+			slog.Error("sim", logging.Err(err))
+			if simulated != nil {
+				simulated.Close()
+			}
+			os.Exit(1)
+		}
+	}
+	err = serve(cfg, simulated)
+	if simulated != nil {
+		simulated.Close()
+	}
+	if err != nil {
 		slog.Error("fatal", logging.Err(err))
 		os.Exit(1)
 	}
@@ -72,7 +99,7 @@ func newFeedKey() (key, hash string) {
 	return key, sites.HashKey(key)
 }
 
-func serve(cfg app.Config) error {
+func serve(cfg app.Config, simulated *simcli.Server) error {
 	if _, err := logging.Setup(logging.Options{Level: cfg.LogLevel, LevelVar: "BACKEND_LOG_LEVEL"}); err != nil {
 		return err
 	}
@@ -91,7 +118,12 @@ func serve(cfg app.Config) error {
 		return err
 	}
 	if *demoFlag > 0 {
-		if err := seedDemo(ctx, st, reg, *demoFlag); err != nil {
+		if err := seedDemo(ctx, st, cfg, *demoFlag); err != nil {
+			return err
+		}
+	}
+	if simulated != nil {
+		if err := simulated.Backfill(ctx, st); err != nil {
 			return err
 		}
 	}
@@ -168,8 +200,13 @@ func serve(cfg app.Config) error {
 		})
 	}
 
+	var dashAPI http.Handler = ds
+	if simulated != nil {
+		dashAPI = simulated.Wrap(ds, sim.Handlers{Browser: http.HandlerFunc(collector.HandleBrowser),
+			Feed: http.HandlerFunc(collector.HandleFeed)})
+	}
 	srv := httpx.NewServer(cfg.Addr, app.Build(app.Routes{TrustedHops: cfg.TrustedHops, Dashboard: dashboard, Tracker: tracker,
-		Browser: http.HandlerFunc(collector.HandleBrowser), Feed: http.HandlerFunc(collector.HandleFeed), Dash: ds, Auth: a,
+		Browser: http.HandlerFunc(collector.HandleBrowser), Feed: http.HandlerFunc(collector.HandleFeed), Dash: dashAPI, Auth: a,
 		Ready: []httpx.Check{{Name: "db", Run: st.Ping}}}))
 	slog.Info("listening", "addr", cfg.Addr, "sites", len(reg.All()))
 	err = httpx.Serve(ctx, srv, httpDrain)
@@ -248,19 +285,28 @@ func flushCounters(ctx context.Context, c *ingest.Counters, st *store.Store) {
 	}
 }
 
-// seedDemo fills an empty database with synthetic traffic for every site.
-func seedDemo(ctx context.Context, st *store.Store, reg *sites.Registry, days int) error {
+// seedDemo fills an empty database with simulated traffic on the configured sites, enriched and classified with
+// the data directory's cached reference data. Without a cache, the world's own is written there when the refresh
+// is off (the server then enriches as the backfill did); with it on, the backfill takes the world's from a directory
+// of its own and the refresh fills the cache.
+func seedDemo(ctx context.Context, st *store.Store, cfg app.Config, days int) error {
 	var n int
 	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM event LIMIT 1)`).Scan(&n); err != nil || n > 0 {
 		return err
 	}
-	for i, s := range reg.All() {
-		written, err := demo.Generate(ctx, st, demo.Options{SiteID: s.ID, Days: days, People: 25, Seed: uint64(i + 1),
-			Feed: s.HasFeed, Classes: true})
+	refDir := filepath.Join(cfg.DataDir, "ref")
+	if _, err := os.Stat(filepath.Join(refDir, "crawlers.json")); err != nil && !cfg.RefDataDisabled {
+		tmp, err := os.MkdirTemp("", "nui-demo-ref-")
 		if err != nil {
 			return err
 		}
-		slog.Info("demo traffic written", "site", s.Domain, "events", written)
+		defer func() { _ = os.RemoveAll(tmp) }()
+		refDir = tmp
 	}
+	stats, err := simcli.Demo(ctx, st, days, refDir, slog.Default())
+	if err != nil {
+		return err
+	}
+	slog.Info("Demo traffic written", "days", days, "stats", stats.String())
 	return nil
 }
