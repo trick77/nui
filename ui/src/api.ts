@@ -44,10 +44,11 @@ export type Tile = {
   value: number;
   prev: number | null;
   change: Change;
-  verdict: Verdict | null;
+  // flat with the comparison off; prev_series then empty.
+  verdict: Verdict;
   series: number[];
-  prev_series: number[] | null;
-  median: number | null;
+  prev_series: number[];
+  median: number;
   server: boolean;
 };
 
@@ -89,7 +90,7 @@ export type ClassRow = {
   share: number;
   addresses: number;
   change: Change;
-  verdict: Verdict | null;
+  verdict: Verdict;
 };
 
 export type Classes = {
@@ -116,11 +117,11 @@ export type ListRow = {
   sub: string;
   gen: string | null;
   value: number;
-  second: number | null;
+  second: number;
   share: number;
   change: Change;
-  verdict: Verdict | null;
-  expandable?: boolean;
+  verdict: Verdict;
+  expandable: boolean;
   // Optional: for pages and entry pages the percent of visits that began
   // there, the map shade for countries (1 lightest to 4). Shown only when
   // the backend sends them.
@@ -166,7 +167,7 @@ export type VisitorRow = {
   does: Gen;
   // The model's label for an unknown automated client's user agent; null
   // when there is none, and client stands.
-  client_gen?: string | null;
+  client_gen: string | null;
 };
 
 export type Visitors = { rows: VisitorRow[]; total: number; next: string };
@@ -176,9 +177,10 @@ export type TrailItem = {
   kind: string;
   what: string;
   count: number;
-  from: string | null;
-  to: string | null;
-  interval_s: number | null;
+  // A single event's span is its own moment, its interval 0.
+  from: string;
+  to: string;
+  interval_s: number;
 };
 
 export type Reading = {
@@ -197,7 +199,7 @@ export type Visitor = {
   country: string;
   client: string;
   // The model's label for an unknown automated client, as in the table.
-  client_gen?: string | null;
+  client_gen: string | null;
   signals: string[];
   // What it does in one sentence, as in the table.
   does: Gen;
