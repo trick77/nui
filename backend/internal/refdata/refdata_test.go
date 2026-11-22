@@ -387,12 +387,16 @@ func TestParse_OverbroadPrefixes(t *testing.T) {
 		t.Errorf("rejected %+v", b.Rejected)
 	}
 	n, err := parseNetworks(bytes.NewReader(tarball(t, map[string]string{
-		"as/64500/aggregated.json": `{"asn":64500,"prefixes":{"ipv4":["0.0.0.0/0","192.0.2.0/24"],"ipv6":["::/8"]}}`})))
+		"as/64500/aggregated.json": `{"asn":64500,"prefixes":{"ipv4":["0.0.0.0/0","192.0.2.0/24","28.0.0.0/7"],"ipv6":["::/8"]}}`})))
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A /7 is real (adjacent /8s of one owner): kept.
 	if _, ok := n.Lookup(addr("198.51.100.1")); ok || n.Rejected.Count != 2 {
 		t.Errorf("networks: rejected %+v", n.Rejected)
+	}
+	if _, ok := n.Lookup(addr("29.1.1.1")); !ok {
+		t.Error("a real /7 rejected")
 	}
 	c, err := parseCountries(bytes.NewReader(tarball(t, map[string]string{
 		"country/ch/ch.json": `{"countryCode":"ch","prefixes":{"ipv4":["0.0.0.0/1","192.0.2.0/24"]}}`})))

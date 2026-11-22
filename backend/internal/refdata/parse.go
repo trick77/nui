@@ -22,12 +22,14 @@ const (
 )
 
 // The shortest prefixes a list may name, per family. One broader entry would swallow everything: 0.0.0.0/0 in the
-// bot list made every address that bot. A bot operator's or an AS's block is at most a /8 (IPv4); IPv6 bot ranges
-// stay within an organisation's allocation (/20 and longer), AS and country data within an RIR's (/12). An
-// IPv4-mapped IPv6 prefix is refused too: it would stand for IPv4 space under another name.
+// bot list made every address that bot. A bot operator's block is at most a /8 (IPv4), its IPv6 ranges stay within
+// an organisation's allocation (/20 and longer). AS and country data aggregate adjacent blocks: the real files hold
+// IPv4 /7s (AS749 28.0.0.0/7; US 6.0.0.0/7, 20.0.0.0/7, 214.0.0.0/7, measured 2026-11), so /6 there, and IPv6 within
+// an RIR's allocation (/12). An IPv4-mapped IPv6 prefix is refused too: it would stand for IPv4 space under
+// another name.
 const (
 	botMinV4, botMinV6 = 8, 20
-	netMinV4, netMinV6 = 8, 12
+	netMinV4, netMinV6 = 6, 12
 )
 
 func plausible(p netip.Prefix, v4, v6 int) bool {
