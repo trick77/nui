@@ -368,8 +368,9 @@ var figureRE = regexp.MustCompile(`(?i)[0-9%]|\b(zero|two|three|four|five|six|se
 // rateRE matches a frequency or a count without a number word: a rate per interval ("every minute", "per hour", "a
 // few times a day", "each night", "daily") and "single" as a count ("a single probe", "single requests"), not the
 // compound ("a single-page app"). A cached reading is shown beside actors whose own pace differs.
-var rateRE = regexp.MustCompile(`(?i)\b(every|per|each|an?)\s+(\w+\s+)?(second|minute|hour|day|night|week|month|` +
-	`year)s?\b|\b(hourly|daily|nightly|weekly|monthly|yearly|annually)\b|\bsingle([^-\w]|$)`)
+var rateRE = regexp.MustCompile(`(?i)\b(every|per|each)\s+(\w+\s+)?(second|minute|hour|day|night|week|month|` +
+	`year)s?\b|\ban?\s+(second|minute|hour|day|night|week|month|year)\b|` +
+	`\b(hourly|daily|nightly|weekly|monthly|yearly|annually)\b|\bsingle([^-\w]|$)`)
 
 // oneRE matches "one" as a quantity: bounded, compared, counted or a rate ("only one", "more than one", "at least
 // one", "one out of", "one or more", "one request per minute", "one probe an hour"). With another number word ("one in ten", "twenty-one", "one

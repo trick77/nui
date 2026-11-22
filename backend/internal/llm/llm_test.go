@@ -469,7 +469,8 @@ func TestHelpers(t *testing.T) {
 		"One of the scanners returns daily": false, "Probes each night": false, "Runs hourly": false,
 		"Sent a single request": false, "Single requests from rotating addresses": false, "single probe": false,
 		"Loads a single-page app": true, "Every page loads its assets": true, "Polls the status endpoint": true,
-		"Requests arrive in bursts, then pause": true,
+		"Requests arrive in bursts, then pause": true, "A quiet week": true, "A busy day for scanners": true,
+		"Every few minutes a probe": false, "Polls an hour apart": false,
 		// "one" as a quantity, alone or beside another number word.
 		"Only one address sends requests": false, "More than one client": false, "At least one probe": false,
 		"One request per minute": false, "one probe an hour": false, "one out of the lot": false, "One or more scanners": false,
