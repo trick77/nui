@@ -124,7 +124,16 @@ export default defineConfig({
   },
   server: {
     host: "127.0.0.1",
-    proxy: { "/api": "http://127.0.0.1:8080" },
+    // NUI_API_TARGET: another server (make sim's on NUI_SIM_PORT). Read off
+    // globalThis: the config is type-checked without Node's types.
+    proxy: {
+      "/api":
+        (
+          globalThis as {
+            process?: { env: Record<string, string | undefined> };
+          }
+        ).process?.env.NUI_API_TARGET ?? "http://127.0.0.1:8080",
+    },
   },
   test: {
     environment: "jsdom",
