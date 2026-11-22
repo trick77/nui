@@ -583,6 +583,156 @@ describe("capture", () => {
   });
 });
 
+// The collector's limits (backend/internal/ingest/collector.go): a breach
+// anywhere refuses the whole batch.
+const bytes = (s: string) => new TextEncoder().encode(s).length;
+const URL_KEYS = new Set(["url", "ref", "src", "href"]);
+function overLimit(key: string, v: unknown, depth: number): string | null {
+  if (depth > 8) return key + ": too deep";
+  if (typeof v === "string")
+    return bytes(v) > (URL_KEYS.has(key) ? 2048 : 512) ? key + ": long" : null;
+  if (typeof v === "number") return isFinite(v) ? null : key + ": number";
+  if (Array.isArray(v)) {
+    if (v.length > 50) return key + ": array";
+    for (const x of v) {
+      const e = overLimit(key, x, depth + 1);
+      if (e) return e;
+    }
+  } else if (v && typeof v === "object") {
+    const ks = Object.keys(v);
+    if (ks.length > 64) return key + ": map";
+    for (const k of ks) {
+      if (bytes(k) > 64) return k + ": key";
+      const e = overLimit(k, (v as Record<string, unknown>)[k], depth + 1);
+      if (e) return e;
+    }
+  }
+  return null;
+}
+// Go's url.Parse refuses a bad escape in the path or the fragment.
+const badEscape = (u: string) =>
+  /%(?![0-9a-f]{2})/i.test(u.replace(/\?[^#]*/, ""));
+function batchProblems(raw: string): string[] {
+  const out: string[] = [];
+  const b = JSON.parse(raw) as Body & { events: { title?: string }[] };
+  if (bytes(raw) > 32 * 1024) out.push("body");
+  if (b.events.length > 50) out.push("events");
+  if (bytes(b.vid) > 512 || bytes(b.sid) > 512) out.push("ids");
+  for (const [k, v] of Object.entries(b.ctx)) {
+    const e = overLimit(k, v, 0);
+    if (e) out.push("ctx." + e);
+  }
+  if (badEscape(String(b.ctx.url))) out.push("ctx.url escape");
+  for (const e of b.events) {
+    if (bytes(e.url ?? "") > 2048) out.push(e.k + ".url");
+    if (e.url && badEscape(e.url)) out.push(e.k + ".url escape");
+    if (bytes(e.title ?? "") > 512) out.push(e.k + ".title");
+    if (bytes(e.n ?? "") > 512) out.push(e.k + ".n");
+    if (bytes(JSON.stringify(e.p)) > 4096) out.push(e.k + ".p size");
+    const p = overLimit("p", e.p, 0);
+    if (p) out.push(e.k + "." + p);
+  }
+  return out;
+}
+
+describe("collector limits", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    delete (navigator as { userAgentData?: unknown }).userAgentData;
+  });
+
+  it("keeps every property it sends within the collector's limits", async () => {
+    localStorage.setItem("nui.vid", "v".repeat(2000));
+    localStorage.setItem("nui.sid", "s".repeat(2000));
+    const long = "é".repeat(3000);
+    Object.defineProperty(navigator, "userAgentData", {
+      configurable: true,
+      value: {
+        mobile: false,
+        platform: long,
+        brands: Array.from({ length: 80 }, () => ({
+          brand: long,
+          version: "1",
+        })),
+      },
+    });
+    // A path that ends in a cut escape once clipped, and a stray "%".
+    history.replaceState(
+      null,
+      "",
+      "/%zz/" + "%C3%A9".repeat(400) + "?q=" + long,
+    );
+    document.title = long;
+    const t = boot();
+    const hugeAttr = "a".repeat(5000);
+    document.body.innerHTML =
+      `<form id="${hugeAttr}" name="${hugeAttr}" action="/join/${"x".repeat(3000)}">` +
+      `<input id="i" name="mail"></form>` +
+      `<form id="s"><input type="search" name="q" value="${hugeAttr}"></form>` +
+      `<a id="out" href="https://github.com/${"p".repeat(3000)}">${hugeAttr}</a>` +
+      `<a id="dl" href="/f/${"d".repeat(3000)}.csv">x</a>`;
+    document
+      .getElementById("i")!
+      .dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    document
+      .getElementById(hugeAttr)!
+      .dispatchEvent(new Event("submit", { bubbles: true }));
+    document
+      .getElementById("s")!
+      .dispatchEvent(new Event("submit", { bubbles: true }));
+    for (const id of ["out", "dl"])
+      document
+        .getElementById(id)!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    window.dispatchEvent(
+      new ErrorEvent("error", { message: long, filename: "/" + long }),
+    );
+    const img = document.createElement("img");
+    img.src = "https://cdn.example.com/" + "i".repeat(3000);
+    document.body.appendChild(img);
+    img.dispatchEvent(new Event("error"));
+    const deep: Record<string, unknown> = {};
+    let cur = deep;
+    for (let i = 0; i < 20; i++) cur = cur["d"] = {};
+    const wide: Record<string, string> = {};
+    for (let i = 0; i < 100; i++) wide["k".repeat(80) + i] = long;
+    t.event(long, {
+      url: "https://example.com/" + "u".repeat(3000),
+      [long]: 1,
+      deep,
+      big: BigInt(1),
+      list: Array.from({ length: 100 }, () => long),
+    });
+    t.event("wide", wide);
+    history.pushState(null, "", "/next/" + "n".repeat(3000));
+    vi.advanceTimersByTime(61_000);
+    t.flush(true);
+    await vi.advanceTimersByTimeAsync(LIMITS.flushAfterMs * 4);
+    const raws = fetchMock.mock.calls.map(
+      (c) => (c[1] as RequestInit).body as string,
+    );
+    const sent = raws.flatMap((r) => JSON.parse(r).events as Body["events"]);
+    for (const k of [
+      "form",
+      "search",
+      "outbound_click",
+      "download",
+      "js_error",
+      "resource_error",
+      "custom",
+      "page_view",
+    ])
+      expect(sent.map((e) => e.k)).toContain(k);
+    for (const r of raws) expect(batchProblems(r)).toEqual([]);
+    // Every string key outside the URL ones is held to 512 bytes, the form's
+    // action included.
+    const form = sent.find((e) => e.k === "form" && e.p.phase === "submit")!;
+    expect(bytes(form.p.action as string)).toBeLessThanOrEqual(512);
+    expect(JSON.parse(raws[0]).vid).toMatch(/^[0-9a-f]{32}$/);
+    expect(JSON.parse(raws[0]).sid).toMatch(/^[0-9a-f]{32}$/);
+  });
+});
+
 describe("host page safety", () => {
   it("never builds scripts or markup from strings", () => {
     const code = source

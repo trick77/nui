@@ -21,12 +21,21 @@ type Rec = {
   ti: string;
 };
 
+// The collector refuses a whole batch when one value is over a limit
+// (backend/internal/ingest/collector.go, checkValue): every value sent is
+// held to these.
 export const LIMITS = {
   // The collector rejects a body over 32 KiB: stay below it with room.
   batchBytes: 31 * 1024,
   batchEvents: 50,
+  // Strings under the keys url, ref, src and href; every other string str.
   url: 2048,
   str: 512,
+  // Map keys, entries per map, entries per array, nesting.
+  key: 64,
+  keys: 64,
+  items: 50,
+  depth: 8,
   props: 4096,
   queue: 100,
   perPage: 300,
@@ -50,6 +59,7 @@ const STORE_SEEN = "nui.seen";
 const DOWNLOAD =
   /\.(zip|gz|tgz|tar|xz|bz2|7z|rar|pdf|csv|tsv|json|txt|xlsx?|docx?|pptx?|dmg|exe|msi|pkg|deb|rpm|apk|iso|mmdb|mrt)$/i;
 const SEARCH_NAMES = /^(q|query|search|s|term)$/i;
+const ID = /^[\da-f]{32}$/;
 
 // UTF-8 length without TextEncoder, which old browsers lack.
 export function utf8Len(s: string): number {
@@ -83,9 +93,54 @@ export function clip(v: unknown, max: number): string {
   return s.slice(0, i);
 }
 
+const URL_KEY = /^(url|ref|src|href)$/;
+
+// A URL as the collector takes it: Go's url.Parse refuses a malformed
+// escape in the path or fragment, so a stray "%" is escaped and one cut in
+// half by the clip is dropped.
+export function clipURL(v: unknown): string {
+  return clip(
+    (v == null ? "" : String(v)).replace(/%(?![\da-f]{2})/gi, "%25"),
+    LIMITS.url,
+  ).replace(/%[\da-f]?$/i, "");
+}
+
+// A copy of v within the collector's limits: strings clipped by their key,
+// maps and arrays cut, too deep a container null, anything not JSON null.
+// key is the name the value is checked under, depth where the collector
+// counts it (0 for an event's p and for each ctx value).
+export function bound(v: unknown, key: string, depth: number): unknown {
+  if (typeof v === "string")
+    return URL_KEY.test(key) ? clipURL(v) : clip(v, LIMITS.str);
+  if (typeof v === "number") return isFinite(v) ? v : null;
+  if (typeof v === "boolean") return v;
+  if (!v || typeof v !== "object" || depth >= LIMITS.depth) return null;
+  if (Array.isArray(v)) {
+    const a: unknown[] = [];
+    for (let i = 0; i < v.length && i < LIMITS.items; i++)
+      a.push(bound(v[i], key, depth + 1));
+    return a;
+  }
+  const out: Props = {};
+  let n = 0;
+  for (const k in v as Props) {
+    if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
+    if (++n > LIMITS.keys) break;
+    const c = clip(k, LIMITS.key);
+    out[c] = bound((v as Props)[k], c, depth + 1);
+  }
+  return out;
+}
+
+// An event's props within the collector's limits; over the per-event
+// budget they are dropped, not the event.
+function fit(p: unknown): Props {
+  const out = bound(p, "p", 0) as Props;
+  return utf8Len(safeJSON(out)) > LIMITS.props ? { dropped: true } : out;
+}
+
 // Shallow, flat, bounded copy of free-form props: strings clipped, numbers
-// and booleans kept, anything else stringified. Over the per-event budget
-// the props are dropped, not the event.
+// and booleans kept, anything else stringified.
 export function cleanProps(p: unknown): Props {
   const out: Props = {};
   if (!p || typeof p !== "object") return out;
@@ -94,12 +149,11 @@ export function cleanProps(p: unknown): Props {
     if (!Object.prototype.hasOwnProperty.call(p, k)) continue;
     if (++keys > 32) break;
     const v = (p as Props)[k];
-    const key = clip(k, 64);
-    if (typeof v === "number") out[key] = isFinite(v) ? v : null;
-    else if (typeof v === "boolean" || v == null) out[key] = v ?? null;
-    else out[key] = clip(typeof v === "string" ? v : safeJSON(v), LIMITS.str);
+    const key = clip(k, LIMITS.key);
+    out[key] =
+      v && typeof v === "object" ? safeJSON(bound(v, key, 1)) : (v as unknown);
   }
-  return utf8Len(safeJSON(out)) > LIMITS.props ? { dropped: true } : out;
+  return fit(out);
 }
 
 function safeJSON(v: unknown): string {
@@ -200,12 +254,18 @@ export function start(
       // blocked or full storage
     }
   };
-  let vid = get(STORE_VID) || "";
+  // The host page can write these: anything but an id of ours is replaced,
+  // or one bad value would get every batch refused.
+  const id = (k: string) => {
+    const v = get(k);
+    return v && ID.test(v) ? v : "";
+  };
+  let vid = id(STORE_VID);
   if (!vid) {
     vid = randomId(win);
     put(STORE_VID, vid);
   }
-  let sid = get(STORE_SID) || "";
+  let sid = id(STORE_SID);
 
   // ---- context, sent with every batch
   const inputs = { pointer: 0, key: 0, touch: 0, scroll: 0 };
@@ -227,7 +287,7 @@ export function start(
       uach = {
         mobile: d.mobile,
         platform: d.platform,
-        brands: (d.brands || []).map((b) => [b.brand, b.version]),
+        brands: (d.brands || []).slice(0, 8).map((b) => [b.brand, b.version]),
       };
       d.getHighEntropyValues?.([
         "platformVersion",
@@ -266,9 +326,9 @@ export function start(
         // a missing browser API leaves the key out
       }
     };
-    set("url", () => clip(loc.href, LIMITS.url));
-    set("ref", () => clip(doc.referrer, LIMITS.url));
-    set("title", () => clip(doc.title, LIMITS.str));
+    set("url", () => loc.href);
+    set("ref", () => doc.referrer);
+    set("title", () => doc.title);
     set("lang", () => nav.language);
     set("langs", () => (nav.languages || []).slice(0, 8));
     set("screen", () => [win.screen.width, win.screen.height]);
@@ -301,7 +361,8 @@ export function start(
     set("nav", () => navType || undefined);
     set("cookies", () => nav.cookieEnabled);
     set("inputs", () => ({ ...inputs }));
-    return c;
+    // Each value is checked at depth 0, like an event's p.
+    return bound(c, "", -1) as Props;
   };
 
   // ---- the queue and its guards
@@ -357,11 +418,11 @@ export function start(
     const r: Rec = {
       t,
       k,
-      p,
-      u: clip(loc.href, LIMITS.url),
+      p: fit(p),
+      u: clipURL(loc.href),
       ti: clip(doc.title, LIMITS.str),
     };
-    if (n != null) r.n = n;
+    if (n != null) r.n = clip(n, LIMITS.str);
     queue.push(r);
     if (queue.length >= LIMITS.flushAt) flush(false);
     else schedule(LIMITS.flushAfterMs);
@@ -394,7 +455,9 @@ export function start(
     queue.unshift(...batch.slice(0, room));
   };
 
-  const take = (url: string): { body: string; batch: Rec[] } | null => {
+  const take = (): { body: string; batch: Rec[] } | null => {
+    const c = ctx();
+    const url = c.url;
     const head =
       safeJSON({
         v: 1,
@@ -402,7 +465,7 @@ export function start(
         vid,
         sid,
         sent: now(),
-        ctx: ctx(),
+        ctx: c,
       }).slice(0, -1) + ',"events":[';
     let size = utf8Len(head) + 2;
     const parts: string[] = [];
@@ -524,13 +587,12 @@ export function start(
       clearTimeout(timer);
       timer = 0;
     }
-    const url = clip(loc.href, LIMITS.url);
     // One request in normal operation. A final flush sends two at most:
     // browsers cap the keepalive bodies in flight at 64 KiB together, and
     // a third batch would be refused and count as a failure.
     let rounds = final ? 2 : 1;
     while (rounds-- > 0 && queue.length && !disabled) {
-      const b = take(url);
+      const b = take();
       if (!b) return;
       deliver(b.body, b.batch, final);
       if (inFlight) break;
@@ -672,12 +734,11 @@ export function start(
     if (!a) return;
     const u = new URL(a.href, loc.href);
     if (u.protocol !== "http:" && u.protocol !== "https:") return;
-    const href = clip(u.href, LIMITS.url);
     if (a.hasAttribute("download") || DOWNLOAD.test(u.pathname)) {
-      record("download", { url: href });
+      record("download", { url: u.href });
     } else if (u.host !== loc.host) {
       record("outbound_click", {
-        url: href,
+        url: u.href,
         text: clip((a.textContent || "").trim().replace(/\s+/g, " "), 100),
       });
     }
@@ -690,7 +751,7 @@ export function start(
   const formInfo = (f: HTMLFormElement): Props => ({
     id: clip(f.id, 64),
     name: clip(f.getAttribute("name"), 64),
-    action: clip(f.getAttribute("action"), LIMITS.url),
+    action: f.getAttribute("action"),
   });
   on(
     doc,
@@ -732,7 +793,7 @@ export function start(
     if (n >= LIMITS.sameError || (!n && errorsSeen.size >= LIMITS.errorKinds))
       return;
     errorsSeen.set(key, n + 1);
-    record("js_error", { msg: clip(msg, LIMITS.str), ...extra });
+    record("js_error", { msg, ...extra });
   };
   on(
     win,
@@ -742,11 +803,11 @@ export function start(
       const t = e.target as (Element & { src?: string; href?: string }) | null;
       if (t && t !== (win as unknown) && t.tagName) {
         const u = t.src || t.href || "";
-        if (u) record("resource_error", { url: clip(u, LIMITS.url) });
+        if (u) record("resource_error", { url: u });
         return;
       }
       jsError(ev.message || "Error", {
-        src: clip(ev.filename, LIMITS.url),
+        src: ev.filename,
         line: ev.lineno || 0,
         col: ev.colno || 0,
       });
