@@ -309,7 +309,27 @@ func TestServer(t *testing.T) {
 	if rec.Code != http.StatusTeapot || c.Writer.Queued() == 0 || rec.Header().Get(PIDHeader) != strconv.Itoa(os.Getpid()) {
 		t.Errorf("wrapped: %d, queued %d", rec.Code, c.Writer.Queued())
 	}
-	// server -demo: the configured sites, the world's reference data written where there was none.
+}
+
+// server -demo: the configured sites, the world's reference data written where there was none.
+func TestDemo(t *testing.T) {
+	t.Parallel()
+	ref, err := sim.OpenReference(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := sim.DefaultKnobs().World(ref, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "nui.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if _, err := st.SyncSites(t.Context(), sites.Rows(w.SitesFile().Sites)); err != nil {
+		t.Fatal(err)
+	}
 	refDir := filepath.Join(t.TempDir(), "ref")
 	stats, err := Demo(t.Context(), st, 1, refDir, nil)
 	if err != nil || stats.Events == 0 {
