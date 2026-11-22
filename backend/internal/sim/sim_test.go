@@ -145,40 +145,49 @@ func TestRequestsIndependentOfTicks(t *testing.T) {
 	}
 }
 
-// A midnight crossed in one span or in many small ones gives the same requests, from two day plans at most: the
-// batches of visits begun the day before and sent after midnight among them, the day before's plan read only for as
-// long as they can reach. (Visits are short: the week's first midnight a visit spans at this scale.)
+// Every plan reaches past its day's end within planReach, and a midnight crossed in one span or in many small ones
+// gives the same requests, from two day plans at most: the day before's plan read only for as long as it reaches. At
+// the largest scale the API's integration runs reach minutes past midnight (at small scales seconds), so a reach too
+// short loses requests here; the midnight crossed is the week's a plan reaches furthest past.
 func TestRequestsAcrossMidnight(t *testing.T) {
-	const scale = 5
-	ow := testWorld(t, scale, "all")
+	scale := ScaleLimit.Max()
+	ow := testWorld(t, scale, "baseline")
 	var mid time.Time
-	for d := dayOf(anchor) - 7; d <= dayOf(anchor) && mid.IsZero(); d++ {
-		for _, b := range ow.plan(d - 1).batches {
-			if !b.at.Before(dayStart(d)) {
-				mid = dayStart(d)
+	var furthest time.Duration
+	spilled := 0
+	for d := dayOf(anchor) - 7; d <= dayOf(anchor); d++ {
+		p, end := ow.plan(d-1), dayStart(d)
+		n := 0
+		past := func(at time.Time) {
+			if at.Before(end) {
+				return
+			}
+			n++
+			if at.Sub(end) > furthest {
+				furthest, mid = at.Sub(end), end
 			}
 		}
-	}
-	if mid.IsZero() {
-		t.Fatal("no batch of a visit begun before midnight sent after it, all week")
-	}
-	from, to := mid.Add(-2*time.Hour), mid.Add(maxVisit+time.Hour)
-	once := ow.Requests(from, to)
-	before := map[*batch]bool{}
-	for _, b := range ow.plans[dayOf(mid)-1].batches {
-		before[b] = true
-	}
-	spilled := 0
-	for _, q := range once {
-		if before[q.batch] && !q.At.Before(mid) {
-			spilled++
+		for _, b := range p.batches {
+			past(b.at)
+		}
+		for _, rs := range p.records {
+			for _, r := range rs {
+				past(r.t)
+			}
+		}
+		if mid.Equal(end) {
+			spilled = n
 		}
 	}
-	if spilled == 0 {
-		t.Fatalf("the span %v to %v lacks the batches sent after midnight of the visits begun before", from, to)
+	t.Logf("a plan reaches %v past its day at most, %d of its items past midnight %s", furthest, spilled,
+		mid.Format(time.DateOnly))
+	if furthest > planReach || furthest < time.Minute {
+		t.Fatalf("a plan reaches %v past its day: planReach %v, the test wants minutes", furthest, planReach)
 	}
+	from, to := mid.Add(-time.Hour), mid.Add(maxVisit+time.Hour)
+	once := ow.Requests(from, to)
 	for _, tick := range []time.Duration{time.Hour, 7 * time.Minute, 13 * time.Second} {
-		w := testWorld(t, scale, "all")
+		w := testWorld(t, scale, "baseline")
 		var ticked []*Request
 		for at := from; at.Before(to); at = at.Add(tick) {
 			end := earlier(at.Add(tick), to)
@@ -196,7 +205,6 @@ func TestRequestsAcrossMidnight(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("%d requests, %d of them batches begun before midnight and sent after it", len(once), spilled)
 }
 
 // No visit runs longer than maxVisit, and no day plan reaches past its day further than planReach: every session's
