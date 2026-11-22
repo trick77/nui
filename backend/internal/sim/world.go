@@ -194,15 +194,22 @@ func (w *World) plan(d int64) *dayPlan {
 		p.records[i] = recs
 	}
 	sort.SliceStable(p.batches, func(a, b int) bool { return p.batches[a].at.Before(p.batches[b].at) })
-	// Days far behind are not asked again: a live run holds a few days, a backfill two.
+	// Days behind are not asked again: a span reads its days and the one before (visits spill past midnight).
 	for k := range w.plans {
-		if k < d-2 {
+		if k < d-maxPlans+1 {
 			delete(w.plans, k)
 		}
 	}
 	w.plans[d] = p
 	return p
 }
+
+// The day plans a world holds, and what they may take at the largest scale: a plan is the whole day's requests,
+// about 0.6 MB per unit of scale (TestPlanMemory).
+const (
+	maxPlans   = 2
+	planBudget = 256 << 20
+)
 
 // EventsPerDay is how many events the world's clients send on the day before its anchor (at least 1): what a live
 // rate is scaled by.

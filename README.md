@@ -56,7 +56,7 @@ second UI. The knobs, each falling back to its default with a warning when it do
 | Knob | Default | |
 |---|---|---|
 | `NUI_SIM_SEED` | 1 | the world: the same seed and start give the same world |
-| `NUI_SIM_SCALE` | 1 | volume; 1 is about 25 visitors a day per site |
+| `NUI_SIM_SCALE` | 1 | volume; 1 is about 25 visitors a day per site, at most 50 |
 | `NUI_SIM_SPEED` | 1 | simulated time per wall time, live |
 | `NUI_SIM_DAYS` | 30 | history before the start |
 | `NUI_SIM_START` | now | the start, RFC 3339 |
@@ -76,6 +76,8 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
   own and checks exactly that.
 - `backfill -data ./data` writes a history into a data directory (and `sites.json` and the world's reference data
   into `ref/` when missing: run the server on it with `BACKEND_REFDATA_DISABLED=true`). About 25,000 events a second.
+  The largest run is scale 50: about 110,000 events a simulated day, some 5 s of backfill each, and up to 140 MB of
+  day plans in memory (a plan holds a whole day's requests).
 - `live -target http://127.0.0.1:8080 [-rate 50] [-speed 60] [-for 10m] [-key domain=key]` sends tracker and feed
   batches to a running server, backing off on 429 as the tracker does. Each browser's address goes in
   `X-Forwarded-For`, which nui reads with one trusted hop: target the server itself, `server -sim` (it sets
