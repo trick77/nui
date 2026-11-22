@@ -1235,6 +1235,10 @@ export type FixtureOptions = {
   // Answer these paths (e.g. "/api/dash/classes") with a 500.
   fail?: string[];
   delayMs?: number;
+  // Rows a full list holds past the ones it sends: a list cut at its limit.
+  beyond?: number;
+  // true: no model configured.
+  noModel?: boolean;
 };
 
 // A fetch that answers the dashboard API from the fixtures above.
@@ -1307,6 +1311,8 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
           : json({ detail: `${site} has no server feed` }, 404);
       case "/api/dash/list": {
         const l = list(q, feed);
+        if (l && opt.beyond && Number(q.get("limit")) >= 500)
+          l.total += opt.beyond;
         return l
           ? json(l)
           : json({ detail: `${site} has no server feed` }, 404);
@@ -1325,8 +1331,11 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
         const l = log(q, feed, script);
         return l ? json(l) : json({ detail: "bad log filter or cursor" }, 400);
       }
-      case "/api/dash/domain":
-        return json(domain(site, feed, script));
+      case "/api/dash/domain": {
+        const d = domain(site, feed, script);
+        if (opt.noModel) d.rules.llm.configured = false;
+        return json(d);
+      }
     }
     return json({ detail: "no such endpoint" }, 404);
   };
