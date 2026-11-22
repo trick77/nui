@@ -99,12 +99,15 @@ export function clip(v: unknown, max: number): string {
 
 const URL_KEY = /^(url|ref|src|href)$/;
 
-// A URL as the collector takes it: Go's url.Parse refuses a malformed
-// escape in the path or fragment, so a stray "%" is escaped and one cut in
-// half by the clip is dropped.
+// A URL as it is sent. The fragment goes unless it is a client-side route
+// ("#/", "#!"): sign-in callbacks and magic links carry tokens there. Go's
+// url.Parse refuses a malformed escape in the path or fragment, so a stray
+// "%" is escaped and one cut in half by the clip is dropped.
 export function clipURL(v: unknown): string {
   return clip(
-    clip(v, LIMITS.url).replace(/%(?![\da-f]{2})/gi, "%25"),
+    clip(v, LIMITS.url)
+      .replace(/#(?![/!])[^]*$/, "")
+      .replace(/%(?![\da-f]{2})/gi, "%25"),
     LIMITS.url,
   ).replace(/%[\da-f]?$/i, "");
 }
@@ -765,10 +768,12 @@ export function start(
   on(doc, "click", linkClick, true);
   on(doc, "auxclick", linkClick, true);
 
-  // Forms: first focus and submit; a search box's term.
+  // Forms: first focus and submit; a search box's term. A form's controls
+  // shadow its properties (an input named "id" is f.id): attributes only.
+  // The only value ever read is a text or search input's, as a search term.
   const started = new WeakSet<object>();
   const formInfo = (f: HTMLFormElement): Props => ({
-    id: clip(f.id, 64),
+    id: clip(f.getAttribute("id"), 64),
     name: clip(f.getAttribute("name"), 64),
     action: f.getAttribute("action"),
   });
@@ -787,11 +792,15 @@ export function start(
     doc,
     "submit",
     (e) => {
-      const f = e.target as HTMLFormElement;
-      if (!f || f.tagName !== "FORM") return;
+      const f = e.target;
+      if (!(f instanceof win.HTMLFormElement)) return;
       let term: string | null = null;
       for (const el of Array.from(f.elements) as HTMLInputElement[]) {
-        if (el.type === "search" || (el.name && SEARCH_NAMES.test(el.name))) {
+        if (
+          el.tagName === "INPUT" &&
+          (el.type === "search" ||
+            (el.type === "text" && SEARCH_NAMES.test(el.name)))
+        ) {
           term = el.value;
           break;
         }

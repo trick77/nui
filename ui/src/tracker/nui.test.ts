@@ -525,6 +525,73 @@ describe("capture", () => {
     document.body.innerHTML = "";
   });
 
+  it("never reads a password, hidden or other non-text field", async () => {
+    const t = boot();
+    document.body.innerHTML =
+      '<form id="a"><input type="password" name="q" value="SECRET1"></form>' +
+      '<form id="b"><input type="hidden" name="s" value="SECRET2"></form>' +
+      '<form id="c"><input type="checkbox" name="term" value="SECRET3" checked></form>' +
+      '<form id="d"><textarea name="query">SECRET4</textarea></form>' +
+      '<form id="e"><input name="id" type="password" value="SECRET5">' +
+      '<input name="tagName" value="SECRET6"><input id="x" name="query" value="ok"></form>';
+    for (const id of ["a", "b", "c", "d"])
+      document
+        .getElementById(id)!
+        .dispatchEvent(new Event("submit", { bubbles: true }));
+    document
+      .getElementById("x")!
+      .dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    document
+      .querySelectorAll("form")[4]
+      .dispatchEvent(new Event("submit", { bubbles: true }));
+    const ev = await flushed(t);
+    const sent = fetchMock.mock.calls
+      .map((c) => (c[1] as RequestInit).body as string)
+      .join();
+    expect(sent).not.toMatch(/SECRET/);
+    expect(
+      ev.filter((e) => e.k === "form" && e.p.phase === "submit"),
+    ).toHaveLength(4);
+    expect(ev.filter((e) => e.k === "search").map((e) => e.p)).toEqual([
+      { term: "ok" },
+    ]);
+    expect(ev.find((e) => e.k === "form" && e.p.phase === "start")!.p.id).toBe(
+      "e",
+    );
+    document.body.innerHTML = "";
+  });
+
+  it("drops a URL's fragment unless it is a client-side route", async () => {
+    history.replaceState(null, "", "/cb?state=1#access_token=SECRET");
+    const t = boot();
+    history.pushState(null, "", "/app#/route/7");
+    history.pushState(null, "", "/bang#!/x");
+    document.body.innerHTML =
+      '<a id="o1" href="https://auth.example.org/x?y=1#token=SECRET">a</a>' +
+      '<a id="o2" href="https://other.example.org/#/r/1">b</a>' +
+      '<a id="d1" href="/f.pdf#page=SECRET">c</a>';
+    for (const id of ["o1", "o2", "d1"])
+      document
+        .getElementById(id)!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const ev = await flushed(t);
+    const bs = bodies();
+    expect(JSON.stringify(bs)).not.toMatch(/SECRET/);
+    const views = ev.filter((e) => e.k === "page_view");
+    expect(views[0].url).toBe(location.origin + "/cb?state=1");
+    expect(views[1].url).toBe(location.origin + "/app#/route/7");
+    expect(bs.at(-1)!.ctx.url).toBe(location.origin + "/bang#!/x");
+    const links = ev.filter(
+      (e) => e.k === "outbound_click" || e.k === "download",
+    );
+    expect(links.map((e) => e.p.url)).toEqual([
+      "https://auth.example.org/x?y=1",
+      "https://other.example.org/#/r/1",
+      location.origin + "/f.pdf",
+    ]);
+    document.body.innerHTML = "";
+  });
+
   it("records script errors, at most a few of the same", async () => {
     const t = boot();
     for (let i = 0; i < 6; i++)
