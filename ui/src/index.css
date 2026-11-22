@@ -412,6 +412,23 @@ body:has(.gate) {
   vertical-align: 1px;
 }
 
+/* The mark in a margin of its own (a hanging indent, the mark inline on the
+   baseline): every line of the block starts at one edge. Tailwind's pl-4
+   indents a line under it to the same edge. */
+.hang {
+  display: block;
+  padding-left: 1rem;
+}
+.hang.gen {
+  text-indent: -1rem;
+}
+.hang.gen::before {
+  display: inline-block;
+  width: 1rem;
+  margin-right: 0;
+  text-indent: 0;
+}
+
 .tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));

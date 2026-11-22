@@ -70,7 +70,9 @@ export function Noteworthy() {
             <Empty>Nothing stands out in this range.</Empty>
           ) : (
             <ul className="nw">
-              {nw.data.items.slice(0, 5).map((f) => {
+              {nw.data.items.slice(0, 5).map((f, _, shown) => {
+                // The lines share the mark's margin when one has the mark.
+                const hangItems = shown.some((x) => x.gen);
                 // A line over findings whose figures do not add up has
                 // none: it shows how many findings it covers.
                 const figure = f.figure || num(f.ids.length);
@@ -97,7 +99,7 @@ export function Noteworthy() {
                       <b>{figure}</b>
                       <small>{unit}</small>
                       <span className="say">
-                        <GenText gen={f.gen} text={f.text} />
+                        <GenText hang={hangItems} gen={f.gen} text={f.text} />
                       </span>
                       <em>→</em>
                     </button>
