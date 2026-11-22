@@ -1021,6 +1021,14 @@ describe("dashboard on a domain without a server feed", () => {
     expect(
       screen.getByText("No visitors with a known country in this range."),
     ).toBeInTheDocument();
+    // Its feed is configured but has not delivered: no server panels yet,
+    // and the footer says the feed is waiting, not missing.
+    expect(screen.queryByText("Who is asking")).toBeNull();
+    const footer = screen.getByRole("region", { name: "This domain" });
+    expect(
+      await within(footer).findByText(/configured, no events yet/),
+    ).toBeInTheDocument();
+    expect(within(footer).queryByText(/not connected/)).toBeNull();
   });
 });
 

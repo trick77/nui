@@ -223,6 +223,8 @@ export type LogRow = {
 
 export type Log = { rows: LogRow[]; total: number; next: string };
 
+export type SourceState = { state: "receiving" | "idle"; last: string };
+
 export type Domain = {
   counters: {
     accepted: number;
@@ -231,9 +233,12 @@ export type Domain = {
     dropped: number;
     unknown_domain: number;
   };
+  // null: the source never delivered (the server's: or the site has no
+  // feed, which feed tells apart).
   sources: {
-    browser: { state: string; last: string | null } | null;
-    server: { state: string; last: string | null } | null;
+    browser: SourceState | null;
+    server: SourceState | null;
+    feed: boolean;
     script: string;
     build: string;
     first: string | null;

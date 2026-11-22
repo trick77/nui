@@ -39,7 +39,7 @@ export const SITES: SiteInfo[] = [
     browser: { last: "2026-11-22T12:58:00Z" },
     server: null,
   },
-  // Nothing delivered yet.
+  // Nothing delivered yet, its server feed configured (FEEDS).
   {
     site: "blog.example.org",
     product: "Blog",
@@ -56,6 +56,10 @@ export const SITES: SiteInfo[] = [
     server: { last: "2026-11-22T13:19:00Z" },
   },
 ];
+
+// The sites with a server feed configured, delivered or not: the sites list
+// shows only the delivered ones, the domain footer says it of all.
+const FEEDS = ["lens.example.com", "blog.example.org", "api.example.com"];
 
 const N: Record<string, number> = {
   "24h": 24,
@@ -1014,7 +1018,7 @@ function log(q: URLSearchParams, feed: boolean, script: boolean): Log | null {
   };
 }
 
-function domain(feed: boolean, script: boolean): Domain {
+function domain(site: string, feed: boolean, script: boolean): Domain {
   return {
     counters: {
       accepted: 48211,
@@ -1031,6 +1035,7 @@ function domain(feed: boolean, script: boolean): Domain {
       server: feed
         ? { state: "receiving", last: "2026-11-22T13:20:00Z" }
         : null,
+      feed: FEEDS.includes(site),
       script: "/nui.js",
       build: "3f2a91c",
       first: "2026-09-03T08:00:00Z",
@@ -1190,7 +1195,7 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
         return l ? json(l) : json({ detail: "bad log filter or cursor" }, 400);
       }
       case "/api/dash/domain":
-        return json(domain(feed, script));
+        return json(domain(site, feed, script));
     }
     return json({ detail: "no such endpoint" }, 404);
   };

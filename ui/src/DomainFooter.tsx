@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { api, type Domain } from "./api";
+import { api, type Domain, type SourceState } from "./api";
 import { bytes, date, dateTime, num } from "./format";
 import { useApi } from "./hooks";
 import { scopeKey } from "./lists";
@@ -18,13 +18,7 @@ function Dl({ rows }: { rows: [string, ReactNode][] }) {
   );
 }
 
-function Source({
-  s,
-  missing,
-}: {
-  s: { state: string; last: string | null } | null;
-  missing: string;
-}) {
+function Source({ s, missing }: { s: SourceState | null; missing: string }) {
   if (!s) return <span className="text-muted">{missing}</span>;
   const ok = s.state === "receiving";
   return (
@@ -38,7 +32,7 @@ function Source({
         {s.state}
       </span>{" "}
       <span className="text-[12px] text-muted">
-        last event {s.last ? dateTime(s.last) : "–"}
+        last event {dateTime(s.last)}
       </span>
     </>
   );
@@ -120,7 +114,11 @@ export function DomainFooter() {
                       "Server",
                       <Source
                         s={x.sources.server}
-                        missing="not connected · bots without JavaScript, requests and status codes are not visible for this domain"
+                        missing={
+                          x.sources.feed
+                            ? "configured, no events yet · requests, status codes and bots without JavaScript show once the feed delivers"
+                            : "not connected · bots without JavaScript, requests and status codes are not visible for this domain"
+                        }
                       />,
                     ],
                     [
