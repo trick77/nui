@@ -318,6 +318,7 @@ function FilterBar({
   return (
     <div className="panel mb-4 flex flex-wrap items-center gap-3.5 px-4 py-3">
       <select
+        name="site"
         aria-label="Domain"
         className="select"
         value={site.site}

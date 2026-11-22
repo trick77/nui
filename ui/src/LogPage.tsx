@@ -63,6 +63,7 @@ function TextFilter({
   return (
     <input
       className="field w-[230px]"
+      name={label}
       placeholder={label}
       aria-label={label}
       value={draft}
@@ -90,6 +91,7 @@ function Pick({
   return (
     <select
       className="select !py-[5px] !text-[13px]"
+      name={label}
       aria-label={label}
       value={value}
       onChange={(e) => onChange(e.target.value)}

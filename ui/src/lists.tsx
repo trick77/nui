@@ -172,7 +172,7 @@ export function TopList({
       )}
       {all && (
         <AllRows
-          title={`${title} · ${t.label}`}
+          title={t.label === title ? title : `${title} · ${t.label}`}
           tab={t}
           cols={cols}
           label={label}
@@ -434,6 +434,7 @@ function AllRows({
               )}
               <input
                 className="field w-[230px]"
+                name="search"
                 placeholder="Search"
                 aria-label="Search"
                 value={q}

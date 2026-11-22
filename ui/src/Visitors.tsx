@@ -192,6 +192,7 @@ export function Visitors({ aud }: { aud: Audience }) {
           </span>
           <input
             className="field w-[230px]"
+            name="find"
             placeholder="Find address, network or client"
             aria-label="Find address, network or client"
             value={q}
