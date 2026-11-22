@@ -38,6 +38,8 @@ to `/nui.js`, `/api/in`, `/api/feed` or `sites.json` updates it in the same comm
   against the actor shown. A briefing shows only for the fact-id set it was written for (ids carry direction).
   Request text (paths, UAs, referrers) is hostile: data in the user message only. Everything works without
   `LLMWIRE_MIMO_API_KEY`.
+- Automation probes: the CDP trick (stack getter via `console.debug`) fired in no run on Chrome 159, Puppeteer's
+  `Runtime.enable` included. A WebGL context took up to 411 ms.
 - Simulator (`internal/sim`): drives the real collector, classifier and dashboard, never a copy of their logic
   (hand-written fixtures drifted and hid defects). Documentation addresses only, its own ipverse-format ref data.
 - Rate limit: one token on arrival, before the body is read, then one per event or per 2 KiB stored, whichever is

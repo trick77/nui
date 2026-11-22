@@ -38,6 +38,11 @@ On every page, in `<head>`:
   id, name and action only), errors (script, resource, unhandled rejection), web vitals (TTFB, FCP, LCP, INP, CLS).
   The only input value ever read is a search term: an `<input type="search">`, or a text input named `q`, `query`,
   `search`, `s` or `term`.
+- To tell people from automated browsers it also reads: globals and attributes automation tools leave in the page
+  (sent as fixed tokens, never the names), where `navigator.webdriver` is defined, window frame size, plugin count
+  and `pdfViewerEnabled`, the notification permission against the Permissions API, the WebGL renderer (an offscreen
+  canvas, once per site in each browser, only in an idle period, kept in `localStorage` as `nui.gl`; not in Safari),
+  mouse moves and presses, input events a script dispatched.
 - Local development on a host not in `sites.json` is refused (403) and the script stops: no switch needed. Including
   the tag only in production builds is fine too.
 

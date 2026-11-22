@@ -80,6 +80,31 @@ export const LIMITS = {
 const STORE_VID = "nui.vid";
 const STORE_SID = "nui.sid";
 const STORE_SEEN = "nui.seen";
+const STORE_GL = "nui.gl";
+// Globals an automation tool leaves in the page, by their exact names (a
+// page's own __pwa… or cdc_config is no tool's), one group per token sent.
+// ChromeDriver's is cdc_ or $cdc_ and 22 letters, then a kind.
+const AUTO_KEY = new RegExp(
+  "^(?:(__playwright__binding__)|(__pwInitScripts)|(\\$?cdc_[a-zA-Z0-9]{22}_[a-zA-Z]+)|" +
+    "(\\$wdc_[a-zA-Z0-9]{22}_[a-zA-Z]+)|(domAutomation|domAutomationController)|" +
+    "(_phantom|callPhantom)|(__nightmare)|" +
+    "(_Selenium_IDE_Recorder|__selenium_evaluate|__selenium_unwrapped)|" +
+    "(__webdriver_evaluate|__webdriver_script_fn|__webdriver_script_func|__webdriver_unwrapped|" +
+    "__driver_evaluate|__driver_unwrapped|__fxdriver_evaluate|__fxdriver_unwrapped)|" +
+    "(__lastWatirAlert))$",
+);
+const AUTO_TOKEN = [
+  "playwright-binding",
+  "playwright-init",
+  "chromedriver",
+  "webdriver-wdc",
+  "dom-automation",
+  "phantomjs",
+  "nightmare",
+  "selenium",
+  "webdriver-js",
+  "watir",
+];
 const DOWNLOAD =
   /\.(zip|gz|tgz|tar|xz|bz2|7z|rar|pdf|csv|tsv|json|txt|xlsx?|docx?|pptx?|dmg|exe|msi|pkg|deb|rpm|apk|iso|mmdb|mrt)$/i;
 const SEARCH_NAMES = /^(q|query|search|s|term)$/i;
@@ -339,7 +364,7 @@ export function start(
   let sid = id(STORE_SID);
 
   // ---- context, sent with every batch
-  const inputs = { pointer: 0, key: 0, touch: 0, scroll: 0 };
+  const inputs = { pointer: 0, key: 0, touch: 0, scroll: 0, move: 0, mdown: 0 };
   let uach: Props | undefined;
   const navEntry = () => {
     try {
@@ -382,6 +407,126 @@ export function start(
   } catch {
     // no client hints
   }
+
+  // ---- automation probes, read by the classifier. Only tokens of our own
+  // go out, never a name the page chose. Taken again with every context:
+  // ChromeDriver marks the document once it first runs a command.
+  const autoSeen: string[] = [];
+  const autoTake = () => {
+    const hit = (t: string) => {
+      if (autoSeen.indexOf(t) < 0 && autoSeen.length < 16) autoSeen.push(t);
+    };
+    for (const o of [win, doc] as object[])
+      for (const k of Object.getOwnPropertyNames(o)) {
+        const m = AUTO_KEY.exec(k);
+        if (m) hit(AUTO_TOKEN[m.findIndex((g, i) => i > 0 && g != null) - 1]);
+      }
+    const el = doc.documentElement;
+    for (const a of ["webdriver", "selenium", "driver"])
+      if (el && el.getAttribute(a) != null) hit("selenium-attr");
+    return autoSeen.slice();
+  };
+  // Where navigator.webdriver is defined: on the prototype as every browser
+  // has it, on the instance (patched), or nowhere (deleted).
+  const wdd = () =>
+    Object.getOwnPropertyDescriptor(nav, "webdriver")
+      ? "own"
+      : Object.getOwnPropertyDescriptor(Object.getPrototypeOf(nav), "webdriver")
+        ? "proto"
+        : "none";
+  // Notification permission against the Permissions API's answer: headless
+  // Chrome and stealth plugins disagree with themselves.
+  let perm: [string, string] | undefined;
+  // The WebGL renderer: SwiftShader and llvmpipe are no person's GPU, a
+  // renderer not in ANGLE's form on desktop Chrome a spoofed one. Kept per
+  // site in each browser; "-" marks a browser where asking threw.
+  let gl: [string, string] | undefined;
+  const kept = get(STORE_GL);
+  try {
+    const v = JSON.parse(kept || "null") as unknown;
+    if (
+      Array.isArray(v) &&
+      v.length === 2 &&
+      v.every((s) => typeof s === "string")
+    )
+      gl = [clip(v[0], 128), clip(v[1], 128)];
+  } catch {
+    // the page wrote something else there
+  }
+  const glTake = () => {
+    if (gl || disabled) return;
+    // An offscreen canvas: no element in the page's document.
+    const OC = (
+      win as { OffscreenCanvas?: new (w: number, h: number) => OffscreenCanvas }
+    ).OffscreenCanvas;
+    if (!OC) return;
+    try {
+      const g = new OC(1, 1).getContext(
+        "webgl",
+      ) as WebGLRenderingContext | null;
+      if (!g) {
+        // No context now (the GPU process restarting, too many contexts):
+        // said for this page, asked again on the next.
+        gl = ["", ""];
+        return;
+      }
+      let ven = String(g.getParameter(g.VENDOR) ?? "");
+      let ren = String(g.getParameter(g.RENDERER) ?? "");
+      // Chrome and Safari mask RENDERER; Firefox gives the real one there
+      // and warns when the debug extension is asked for.
+      if (/^WebKit/.test(ren)) {
+        const x = g.getExtension("WEBGL_debug_renderer_info");
+        if (x) {
+          ven = String(g.getParameter(x.UNMASKED_VENDOR_WEBGL) ?? "");
+          ren = String(g.getParameter(x.UNMASKED_RENDERER_WEBGL) ?? "");
+        }
+      }
+      // Released at once: the page's own contexts count against the
+      // browser's limit, the oldest lost beyond it.
+      g.getExtension("WEBGL_lose_context")?.loseContext();
+      gl = [clip(ven, 128), clip(ren, 128)];
+      put(STORE_GL, JSON.stringify(gl));
+    } catch {
+      put(STORE_GL, "-");
+    }
+  };
+  // Started with the first page view: never for a prerendered page nobody
+  // opened. Making a WebGL context took up to 411 ms (the GPU process
+  // starts): only in an idle period with most of its time left, never
+  // forced; without idle callbacks (Safari) not at all.
+  const probeStart = () => {
+    try {
+      const np = (win as { Notification?: { permission?: string } })
+        .Notification?.permission;
+      nav.permissions
+        ?.query({ name: "notifications" as PermissionName })
+        .then((s) => {
+          perm = [String(np ?? ""), s.state];
+        })
+        .catch(() => {});
+    } catch {
+      // no Permissions API
+    }
+    const w = win as {
+      requestIdleCallback?: (f: (d: IdleDeadline) => void) => number;
+      cancelIdleCallback?: (h: number) => void;
+    };
+    if (gl || kept === "-" || !w.requestIdleCallback || !w.cancelIdleCallback)
+      return;
+    let h = 0;
+    let tries = 0;
+    const run = (d: IdleDeadline) =>
+      guard(() => {
+        if (d.timeRemaining() >= 40) glTake();
+        else if (++tries < 20) h = w.requestIdleCallback!.call(win, run);
+      });
+    h = w.requestIdleCallback.call(win, run);
+    offs.push(() => w.cancelIdleCallback!.call(win, h));
+  };
+  // Input a script dispatched (isTrusted false) on the counted events:
+  // pointerdown, keydown, touchstart. Password managers type this way too,
+  // and CDP-driven input is trusted: a figure to weigh, no verdict.
+  let synth = 0;
 
   const media = (q: string): boolean | undefined => {
     try {
@@ -436,13 +581,34 @@ export function start(
     set("nav", () => navType || undefined);
     set("cookies", () => nav.cookieEnabled);
     set("inputs", () => ({ ...inputs }));
+    set("auto", autoTake);
+    set("wdd", wdd);
+    set("outer", () => [win.outerWidth, win.outerHeight]);
+    set("plg", () => [
+      nav.plugins ? nav.plugins.length : null,
+      (nav as Navigator & { pdfViewerEnabled?: boolean }).pdfViewerEnabled ??
+        null,
+    ]);
+    set("perm", () => perm);
+    set("gl", () => gl);
+    set("synth", () => synth);
     // Each value is checked at depth 0, like an event's p.
     budget = LIMITS.nodes;
     const out = bound(c, "", -1) as Props;
     // Over the context's limit only with odd client hints or an odd title:
     // the longest values go, in this order, until it fits; what is left is
-    // the browser's short figures.
-    for (const k of ["uach", "langs", "title", "lang", "tz", "conn"])
+    // the browser's short figures. The probes go last: the classifier reads
+    // them.
+    for (const k of [
+      "uach",
+      "langs",
+      "title",
+      "lang",
+      "tz",
+      "conn",
+      "gl",
+      "auto",
+    ])
       if (ctxLen(out) > LIMITS.ctxBytes) delete out[k];
     return out;
   };
@@ -857,7 +1023,7 @@ export function start(
   let maxScroll = 0;
   let pageInputs = 0;
   // The page's input counts; the context carries the document's.
-  let pageIn = { pointer: 0, key: 0, touch: 0, scroll: 0 };
+  let pageIn = { pointer: 0, key: 0, touch: 0, scroll: 0, move: 0, mdown: 0 };
   const isActive = () => {
     try {
       return doc.visibilityState === "visible" && doc.hasFocus();
@@ -899,7 +1065,7 @@ export function start(
     activeMs = 0;
     maxScroll = 0;
     pageInputs = 0;
-    pageIn = { pointer: 0, key: 0, touch: 0, scroll: 0 };
+    pageIn = { pointer: 0, key: 0, touch: 0, scroll: 0, move: 0, mdown: 0 };
   };
   // The scroll depth is measured at most once a frame, and when the
   // engagement is taken; never in the scroll handler: the page's height
@@ -915,11 +1081,19 @@ export function start(
     const d = Math.min(100, ((win.scrollY + win.innerHeight) / h) * 100);
     if (d > maxScroll) maxScroll = d;
   };
-  const count = (k: keyof typeof inputs) => () => {
-    // First: input that resumes an expired session belongs to the new one.
-    touch();
+  const bump = (k: keyof typeof inputs) => {
     if (inputs[k] < 1e6) inputs[k]++;
     if (pageIn[k] < 1e6) pageIn[k]++;
+  };
+  const count = (k: keyof typeof inputs) => (e: Event) => {
+    // First: input that resumes an expired session belongs to the new one.
+    touch();
+    bump(k);
+    if (k !== "scroll" && !e.isTrusted && synth < 1e6) synth++;
+    // A mouse press, beside every press: a person's hand travels to what it
+    // clicks, a script's mouse jumps there in one move.
+    if (k === "pointer" && (e as PointerEvent).pointerType === "mouse")
+      bump("mdown");
     pageInputs++;
     if (k === "scroll" && !scrolled) {
       scrolled = true;
@@ -934,6 +1108,16 @@ export function start(
   on(doc, "keydown", count("key"), { capture: true, passive: true });
   on(doc, "touchstart", count("touch"), { capture: true, passive: true });
   on(win, "scroll", count("scroll"), { passive: true });
+  // Mouse travel: counted only, no activity of its own (a resting hand
+  // jitters), and as cheap as a handler can be: it fires on every frame.
+  on(
+    doc,
+    "pointermove",
+    (e) => {
+      if ((e as PointerEvent).pointerType === "mouse") bump("move");
+    },
+    { capture: true, passive: true },
+  );
   on(win, "focus", tick);
   on(win, "blur", tick);
 
@@ -1242,6 +1426,7 @@ export function start(
     sendFCP();
     for (const a of pending.slice(0, LIMITS.batchEvents))
       guard(() => replay(a));
+    guard(probeStart);
   };
   if (pre()) on(doc, "prerenderingchange", begin, { once: true });
   else begin();
