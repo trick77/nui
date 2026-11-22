@@ -296,6 +296,34 @@ func TestExact_Noteworthy(t *testing.T) {
 	}
 }
 
+// The snapshots stay within their row bound and their time: the oldest go first, an expired one is gone, one too
+// large is never kept.
+func TestSnapshots(t *testing.T) {
+	var c snapshots
+	now := time.Now()
+	rows := make([]visitorRow, snapshotMaxRows/2)
+	c.put("a", rows, now)
+	c.put("b", rows, now.Add(time.Second))
+	c.put("c", rows[:10], now.Add(2*time.Second)) // over the bound: a, the oldest, goes
+	if _, ok := c.get("a", now.Add(3*time.Second)); ok {
+		t.Error("the oldest snapshot kept past the bound")
+	}
+	if _, ok := c.get("b", now.Add(3*time.Second)); !ok {
+		t.Error("b evicted")
+	}
+	if _, ok := c.get("c", now.Add(snapshotTTL+3*time.Second)); ok {
+		t.Error("an expired snapshot answered")
+	}
+	c.put("d", rows[:1], now.Add(snapshotTTL+time.Hour)) // b and c expired: dropped on the way
+	if len(c.m) != 1 {
+		t.Errorf("%d snapshots kept", len(c.m))
+	}
+	c.put("huge", make([]visitorRow, snapshotMaxRows+1), now)
+	if _, ok := c.get("huge", now); ok {
+		t.Error("a snapshot over the bound kept")
+	}
+}
+
 // Both sources' last delivery is their newest stored event, right after a restart (counters on disk only) as
 // while running (this process's record).
 func TestExact_LastSeen(t *testing.T) {
