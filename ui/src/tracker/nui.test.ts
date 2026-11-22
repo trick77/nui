@@ -440,6 +440,24 @@ describe("sending", () => {
     expect(t.state().queued).toBe(0);
   });
 
+  it("lets go of every answer's body", async () => {
+    const t = boot();
+    const cancel = vi.fn(() => Promise.resolve());
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({
+        status: 429,
+        headers: new Headers({ "Retry-After": "1" }),
+        body: { cancel },
+      }),
+    );
+    t.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    // Without a body to cancel (a 204, an old browser) nothing breaks.
+    await vi.advanceTimersByTimeAsync(LIMITS.flushAfterMs);
+    expect(t.state().queued).toBe(0);
+  });
+
   it("never switches itself off for the collector's pace", async () => {
     const t = boot();
     fetchMock.mockImplementation(() => reply(429, { "Retry-After": "1" }));

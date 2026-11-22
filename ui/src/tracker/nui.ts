@@ -727,6 +727,14 @@ export function start(
       (res) => {
         inFlight = false;
         const st = res.status;
+        // An answer's body unread holds its request's bytes against the
+        // browser's 64 KiB keepalive quota: two refused batches left so
+        // made every later send fail at once (seen with 429s in Chromium).
+        try {
+          res.body?.cancel().catch(() => {});
+        } catch {
+          // no stream to cancel
+        }
         if (st >= 200 && st < 300) {
           failures = 0;
           backoff = 0;
