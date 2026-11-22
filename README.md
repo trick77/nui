@@ -9,6 +9,8 @@ dashboard under `/dashboard`.
 - With an [llmwire](https://github.com/trick77/toolkit) model key it adds a short briefing and readings of
   automated visitors; every figure is computed without it.
 
+The name: *nui* is Hawaiian and Māori for "many", for all the data that comes in.
+
 ## Development
 
 ```sh
