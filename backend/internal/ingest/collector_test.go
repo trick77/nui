@@ -392,6 +392,37 @@ func TestFeed(t *testing.T) {
 	}
 }
 
+// The agent a Web Bot Auth client names is kept: from the script's request as a header, from the feed as sig_agent,
+// clipped there like every feed string.
+func TestSignatureAgentKept(t *testing.T) {
+	r := newRig(t, 0, true)
+	req := httptest.NewRequest(http.MethodPost, "/api/in", strings.NewReader(batch(domain, 1, "")))
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh) Safari/605.1.15")
+	req.Header.Set("Signature-Agent", `"https://agent.example.com"`)
+	req.Header.Set("X-Forwarded-For", "203.0.113.9")
+	req.Header.Set("Origin", "https://"+domain)
+	w := httptest.NewRecorder()
+	r.c.HandleBrowser(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("browser %d %s", w.Code, w.Body)
+	}
+	long := strings.Repeat("a", 400)
+	ev := `{"t":1,"ip":"192.0.2.1","method":"GET","path":"/","status":200,"sig_agent":"` + long + `"}`
+	if w := r.feed(feedBody(domain, 1, ev), feedKey); w.Code != http.StatusNoContent {
+		t.Fatalf("feed %d %s", w.Code, w.Body)
+	}
+	waitEvents(t, r.st, 2)
+	var browser, server string
+	_ = r.st.DB.QueryRow(`SELECT props FROM event WHERE source = 'browser'`).Scan(&browser)
+	_ = r.st.DB.QueryRow(`SELECT props FROM event WHERE source = 'server'`).Scan(&server)
+	if !strings.Contains(browser, `"signature-agent":"\"https://agent.example.com\""`) {
+		t.Errorf("browser props %s", browser)
+	}
+	if !strings.Contains(server, `"sig_agent":"`+long[:feedSigAgent]+`"`) || strings.Contains(server, long[:feedSigAgent+1]) {
+		t.Errorf("server props %s", server)
+	}
+}
+
 // One crafted request of the feeding product's public clients must not blind the feed: over-long fields are clipped
 // on a rune boundary, unusable events dropped and counted, the rest of the batch stored.
 func TestFeed_PoisonedBatch(t *testing.T) {

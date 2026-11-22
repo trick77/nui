@@ -58,10 +58,12 @@ const (
 )
 
 // browserHeaders are the request headers the collector keeps, lower-case: the client hints and fetch metadata a
-// browser sends. Only these: the names are the caller's to choose, any number of them.
+// browser sends, and the agent a Web Bot Auth client names. Only these: the names are the caller's to choose, any
+// number of them.
 var browserHeaders = []string{"accept-language", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
 	"sec-ch-ua-platform-version", "sec-ch-ua-model", "sec-ch-ua-arch", "sec-ch-ua-bitness",
-	"sec-ch-ua-full-version-list", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-user"}
+	"sec-ch-ua-full-version-list", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-user",
+	"signature-agent"}
 
 // The browser rate limit (contract: 60 events / min per address or /64, 600 per /48; RateRule states it). The /64
 // burst admits the largest batch; the /48 tier (an IPv4 /24) bounds a caller rotating through its block.
@@ -628,30 +630,33 @@ type feedBatch struct {
 }
 
 type feedEvent struct {
-	T       int64  `json:"t"`
-	IP      string `json:"ip"`
-	UA      string `json:"ua"`
-	Method  string `json:"method"`
-	Path    string `json:"path"`
-	Route   string `json:"route"`
-	Status  int    `json:"status"`
-	DurMS   int64  `json:"dur_ms"`
-	Bytes   int64  `json:"bytes"`
-	Ref     string `json:"ref"`
-	Lang    string `json:"lang"`
-	SFSite  string `json:"sf_site"`
-	SFMode  string `json:"sf_mode"`
-	SFDest  string `json:"sf_dest"`
-	ChUA    string `json:"ch_ua"`
-	Account string `json:"account"`
+	T      int64  `json:"t"`
+	IP     string `json:"ip"`
+	UA     string `json:"ua"`
+	Method string `json:"method"`
+	Path   string `json:"path"`
+	Route  string `json:"route"`
+	Status int    `json:"status"`
+	DurMS  int64  `json:"dur_ms"`
+	Bytes  int64  `json:"bytes"`
+	Ref    string `json:"ref"`
+	Lang   string `json:"lang"`
+	SFSite string `json:"sf_site"`
+	SFMode string `json:"sf_mode"`
+	SFDest string `json:"sf_dest"`
+	ChUA   string `json:"ch_ua"`
+	// SigAgent is the Signature-Agent header (Web Bot Auth): the agent a client says it is.
+	SigAgent string `json:"sig_agent"`
+	Account  string `json:"account"`
 }
 
 // Per-field limits of a feed event in bytes (README, "Server feed"): longer values are clipped, never refused.
 const (
-	feedMethod  = 16
-	feedRoute   = 200
-	feedSF      = 32
-	feedAccount = 128
+	feedMethod   = 16
+	feedRoute    = 200
+	feedSF       = 32
+	feedSigAgent = 256
+	feedAccount  = 128
 )
 
 // feedEvents turns a feed batch into rows: strings clipped to their limits, events without a usable address or
@@ -673,7 +678,7 @@ func (c *Collector) feedEvents(site *sites.Site, in []json.RawMessage) ([]store.
 			limit int
 		}{{&e.UA, maxString}, {&e.Method, feedMethod}, {&e.Path, maxURL}, {&e.Route, feedRoute}, {&e.Ref, maxURL},
 			{&e.Lang, maxString}, {&e.SFSite, feedSF}, {&e.SFMode, feedSF}, {&e.SFDest, feedSF},
-			{&e.ChUA, maxString}, {&e.Account, feedAccount}} {
+			{&e.ChUA, maxString}, {&e.SigAgent, feedSigAgent}, {&e.Account, feedAccount}} {
 			*f.v = truncate(*f.v, f.limit)
 		}
 		addr, ok := storedAddr(e.IP)
@@ -699,7 +704,7 @@ func (c *Collector) feedEvents(site *sites.Site, in []json.RawMessage) ([]store.
 		}
 		props := map[string]any{"bytes": e.Bytes}
 		for k, v := range map[string]string{"lang": e.Lang, "sf_site": e.SFSite, "sf_mode": e.SFMode,
-			"sf_dest": e.SFDest, "ch_ua": e.ChUA} {
+			"sf_dest": e.SFDest, "ch_ua": e.ChUA, "sig_agent": e.SigAgent} {
 			if v != "" {
 				props[k] = v
 			}
