@@ -407,18 +407,40 @@ export function start(
   };
 
   // One session per browser: the id is read back from storage for every
-  // event, so a tab follows the one another tab started.
-  const session = (t: number): boolean => {
+  // event, so a tab follows the one another tab started. It lives while
+  // anything counts as activity: an event, input, visible and focused time.
+  // liveFrom is where the current visible, focused stretch began: one that
+  // began within a live session keeps it alive up to now. A closing event
+  // (engagement, vital) never opens a session nor extends an expired one.
+  let liveFrom = 0;
+  let touched = 0;
+  const alive = (t: number): boolean => {
+    const last = Number(get(STORE_SEEN)) || 0;
+    return (
+      last > 0 &&
+      (t - last <= LIMITS.sessionMs ||
+        (liveFrom > 0 && liveFrom - last <= LIMITS.sessionMs))
+    );
+  };
+  const session = (t: number, closing: boolean): boolean => {
     sid = id(STORE_SID) || sid;
-    const last = Number(get(STORE_SEEN) || 0);
+    const live = alive(t);
     let fresh = false;
-    if (!sid || !last || t - last > LIMITS.sessionMs) {
+    if (!sid || (!live && !closing)) {
       sid = randomId(win);
       put(STORE_SID, sid);
       fresh = true;
     }
-    put(STORE_SEEN, String(t));
+    if (live || fresh) put(STORE_SEEN, String(t));
+    touched = t;
     return fresh;
+  };
+  // Input keeps the session alive; storage at most every few seconds.
+  const touch = (force?: boolean) => {
+    const t = now();
+    if (!force && t - touched < 5000) return;
+    touched = t;
+    if (sid && alive(t)) put(STORE_SEEN, String(t));
   };
 
   // Checked before any work for an event: once a cap is reached, a host page
@@ -454,7 +476,11 @@ export function start(
     if (disabled) return;
     const t = now();
     if (full(t)) return;
-    if (session(t) && k !== "session_start") record("session_start", {});
+    if (
+      session(t, k === "engagement" || k === "vital") &&
+      k !== "session_start"
+    )
+      record("session_start", {});
     if (!admit(t)) return;
     const r: Rec = {
       t,
@@ -689,8 +715,15 @@ export function start(
     const t = now();
     if (activeSince) activeMs += t - activeSince;
     activeSince = isActive() ? t : 0;
+    if (activeSince) {
+      if (!liveFrom) liveFrom = t;
+    } else if (liveFrom) {
+      // The stretch ends: the session was alive until now.
+      touch(true);
+      liveFrom = 0;
+    }
   };
-  activeSince = isActive() ? now() : 0;
+  tick();
   const engagement = (at?: [string, string]) => {
     tick();
     if (activeMs <= 0 && maxScroll <= 0 && pageInputs <= 0) return;
@@ -718,6 +751,7 @@ export function start(
   const count = (k: keyof typeof inputs) => () => {
     if (inputs[k] < 1e6) inputs[k]++;
     pageInputs++;
+    touch();
     if (k === "scroll") scrolled();
   };
   on(doc, "pointerdown", count("pointer"), { capture: true, passive: true });
@@ -776,7 +810,8 @@ export function start(
   on(win, "hashchange", () => pageView(false));
   on(win, "pageshow", (e) => {
     if ((e as PageTransitionEvent).persisted) {
-      activeSince = isActive() ? now() : 0;
+      activeSince = 0;
+      tick();
       pageView(true);
     }
   });

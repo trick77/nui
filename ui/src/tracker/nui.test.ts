@@ -143,6 +143,8 @@ describe("sending", () => {
   });
 
   it("starts a new session after 30 minutes without activity", async () => {
+    // Visible but not focused: no time that counts as engagement.
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const t = boot();
     const first = t.state().sid;
     t.flush();
@@ -157,6 +159,92 @@ describe("sending", () => {
         .at(-1)!
         .events.map((e) => e.k),
     ).toEqual(["session_start", "custom"]);
+  });
+
+  describe("session life", () => {
+    const show = (state: "visible" | "hidden") => {
+      Object.defineProperty(document, "visibilityState", {
+        value: state,
+        configurable: true,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    afterEach(() => {
+      Object.defineProperty(document, "visibilityState", {
+        value: "visible",
+        configurable: true,
+      });
+      document.body.innerHTML = "";
+    });
+    const sessions = () =>
+      bodies().flatMap((b) =>
+        b.events.map((e) => [b.sid, e.n ?? e.k] as [string, string]),
+      );
+
+    it("stays alive through a long visible read", async () => {
+      const t = boot();
+      const sid = t.state().sid;
+      vi.advanceTimersByTime(40 * 60 * 1000);
+      show("hidden");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sessions().filter(([, k]) => k === "session_start")).toHaveLength(
+        1,
+      );
+      expect(sessions().find(([, k]) => k === "engagement")).toEqual([
+        sid,
+        "engagement",
+      ]);
+      // Right after: the same session still.
+      show("visible");
+      t.event("back");
+      expect(t.state().sid).toBe(sid);
+    });
+
+    it("stays alive while the visitor scrolls an unfocused page", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      const t = boot();
+      const sid = t.state().sid;
+      for (let i = 0; i < 4; i++) {
+        vi.advanceTimersByTime(10 * 60 * 1000);
+        window.dispatchEvent(new Event("scroll"));
+      }
+      t.event("later");
+      expect(t.state().sid).toBe(sid);
+    });
+
+    it("ends after an absence, whatever happens on return", async () => {
+      const t = boot();
+      const sid = t.state().sid;
+      show("hidden");
+      vi.advanceTimersByTime(40 * 60 * 1000);
+      show("visible");
+      window.dispatchEvent(new Event("scroll"));
+      document.dispatchEvent(new Event("pointerdown"));
+      t.event("click");
+      expect(t.state().sid).not.toBe(sid);
+    });
+
+    it("never opens a session for a closing engagement or vital", async () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      const t = boot();
+      const sid = t.state().sid;
+      window.dispatchEvent(new Event("scroll"));
+      vi.advanceTimersByTime(40 * 60 * 1000);
+      show("hidden");
+      await vi.advanceTimersByTimeAsync(0);
+      const closing = sessions().filter(
+        ([, k]) => k === "engagement" || k === "vital",
+      );
+      expect(closing.length).toBeGreaterThan(0);
+      for (const [s] of closing) expect(s).toBe(sid);
+      expect(sessions().filter(([, k]) => k === "session_start")).toHaveLength(
+        1,
+      );
+      // Nor does it extend the expired one.
+      show("visible");
+      t.event("next");
+      expect(t.state().sid).not.toBe(sid);
+    });
   });
 
   it("follows the session another tab started", async () => {
