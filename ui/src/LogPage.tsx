@@ -230,7 +230,7 @@ export function LogPage({
                     <td className="font-mono text-[11.5px] text-ink-dim">
                       {r.kind}
                     </td>
-                    <td className="font-mono text-[12.5px] wrap-anywhere">
+                    <td className="min-w-[200px] font-mono text-[12.5px] wrap-anywhere">
                       {r.what}
                     </td>
                     <td className="text-[12px] text-muted">{r.client}</td>
