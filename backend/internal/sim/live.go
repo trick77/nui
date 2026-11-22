@@ -26,9 +26,9 @@ type Live struct {
 	retries reqHeap
 }
 
-// NewLive starts w live at wall time start.
+// NewLive starts w live at wall time start. A speed outside SpeedLimit is 1.
 func NewLive(w *World, start time.Time, speed float64) *Live {
-	if !(speed > 0) {
+	if SpeedLimit.Check(speed) != nil {
 		speed = 1
 	}
 	return &Live{World: w, Speed: speed, MaxGap: 2 * time.Minute, start: start, cursor: w.Anchor}

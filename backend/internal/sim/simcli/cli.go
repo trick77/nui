@@ -21,6 +21,9 @@ import (
 // exportRanges limits the export's ranges (tests); nil is every range.
 var exportRanges []string
 
+// maxRate bounds -rate, events a second: the scale it sets is bounded anyway, this keeps the arithmetic finite.
+const maxRate = 1e6
+
 // FixtureAnchor is where an export's history ends unless NUI_SIM_START says otherwise: the UI fixtures' "now".
 var FixtureAnchor = time.Date(2026, 11, 22, 13, 20, 0, 0, time.UTC)
 
@@ -63,7 +66,20 @@ func Main(ctx context.Context, args []string, getenv func(string) string, stdout
 		return 2
 	}
 	k.Seed, k.Scale, k.Days, k.Scenarios, k.Classify, k.Speed = *seed, *scale, *days, *scenarios, *classify, *speed
-	var err error
+	// The flags pass the knobs' own ranges; -rate, when given, a positive rate the scale it sets must hold.
+	rateSet := false
+	fl.Visit(func(f *flag.Flag) { rateSet = rateSet || f.Name == "rate" })
+	err := k.Validate()
+	if err == nil && rateSet && !(*rate > 0 && *rate <= maxRate) {
+		err = fmt.Errorf("rate %v: not a number above 0 and at most %v", *rate, maxRate)
+	}
+	if err == nil && *dur < 0 {
+		err = fmt.Errorf("for %v: below 0", *dur)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "sim:", err)
+		return 2
+	}
 	switch args[0] {
 	case "scenarios":
 		err = listScenarios(stdout)
@@ -212,6 +228,9 @@ func liveCmd(ctx context.Context, k sim.Knobs, target string, rate float64, dur 
 			return err
 		}
 		k.Scale = rate * 86400 / (w.EventsPerDay() * k.Speed)
+		if err := sim.ScaleLimit.Check(k.Scale); err != nil {
+			return fmt.Errorf("-rate %v at speed %v needs scale %.3g: %w (change -speed)", rate, k.Speed, k.Scale, err)
+		}
 	}
 	w, err := k.World(ref, time.Now())
 	if err != nil {

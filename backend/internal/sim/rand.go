@@ -41,9 +41,10 @@ func (r rng) fill(b []byte) {
 	}
 }
 
-// poisson draws a count with mean m (Knuth; the means here are small).
+// poisson draws a count with mean m (Knuth; the means here are small). A mean that is no positive number (NaN, an
+// infinity, ≤ 0) draws 0: Knuth's loop never ends on NaN.
 func (r rng) poisson(m float64) int {
-	if m <= 0 {
+	if !(m > 0) || math.IsInf(m, 1) {
 		return 0
 	}
 	if m > 30 {
