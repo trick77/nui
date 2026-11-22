@@ -1,7 +1,11 @@
 package store
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -149,6 +153,89 @@ func TestStatsAndLLM(t *testing.T) {
 	}
 }
 
+// The cap deletes the oldest events by time, whatever their ids, over every site, and the freed pages go back.
+func TestPrune_Cap(t *testing.T) {
+	st := open(t)
+	sites, err := st.SyncSites(t.Context(), []Site{{Domain: "a.example.com", Kind: "site", PathRules: "[]"},
+		{Domain: "b.example.com", Kind: "site", PathRules: "[]"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := sites["a.example.com"].ID, sites["b.example.com"].ID
+	const n = 12000
+	base := time.Now().Add(-time.Hour).UnixMilli()
+	// Written newest first: a higher id is an older event. The sites alternate.
+	var evs []Event
+	for i := range n {
+		site := a
+		if i%2 == 1 {
+			site = b
+		}
+		evs = append(evs, Event{SiteID: site, TS: base + int64(n-i), Source: "browser", Kind: "page_view",
+			IP: "192.0.2.1", IPKey: "192.0.2.1", Props: `{"pad":"` + strings.Repeat("x", 200) + `"}`})
+	}
+	if err := st.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	used, err := st.UsedBytes(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := st.Prune(t.Context(), time.Now().AddDate(0, -25, 0), used/2)
+	if err != nil || deleted == 0 {
+		t.Fatalf("capped prune %d, %v", deleted, err)
+	}
+	if after, _ := st.UsedBytes(t.Context()); after > used/2*9/10 {
+		t.Errorf("after cap %d > %d", after, used/2*9/10)
+	}
+	// Exactly the newest events are left: their times are the top of the range, without a gap.
+	var left, minTS, maxTS int64
+	if err := st.DB.QueryRow(`SELECT COUNT(*), MIN(ts), MAX(ts) FROM event`).Scan(&left, &minTS, &maxTS); err != nil {
+		t.Fatal(err)
+	}
+	if left != n-deleted || maxTS != base+n || minTS != base+n-left+1 {
+		t.Errorf("left %d events from %d to %d, want the newest %d", left, minTS, maxTS, n-deleted)
+	}
+	var free int64
+	if err := st.DB.QueryRow(`SELECT freelist_count FROM pragma_freelist_count()`).Scan(&free); err != nil || free != 0 {
+		t.Errorf("free pages %d %v after the stepwise vacuum", free, err)
+	}
+}
+
+// The cap is enforced on the retention loop's short cadence, not once a day.
+func TestRunRetention_Cap(t *testing.T) {
+	st := open(t)
+	id := seed(t, st)
+	var evs []Event
+	for i := range 6000 {
+		evs = append(evs, Event{SiteID: id, TS: time.Now().UnixMilli() - int64(i), Source: "browser",
+			Kind: "page_view", IP: "192.0.2.1", IPKey: "192.0.2.1", Props: `{"pad":"` + strings.Repeat("x", 200) + `"}`})
+	}
+	if err := st.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	used, _ := st.UsedBytes(t.Context())
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		st.RunRetention(ctx, RetentionOptions{Months: 25, MaxBytes: used / 2, CapEvery: 20 * time.Millisecond,
+			Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		close(done)
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if u, _ := st.UsedBytes(t.Context()); u <= used/2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cap not enforced")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+}
+
 func TestPrune(t *testing.T) {
 	st := open(t)
 	id := seed(t, st)
@@ -173,14 +260,6 @@ func TestPrune(t *testing.T) {
 	used, err := st.UsedBytes(t.Context())
 	if err != nil || used <= 0 {
 		t.Fatalf("used %d %v", used, err)
-	}
-	// A cap below what is left deletes the oldest rows until the rest fits.
-	n, err = st.Prune(t.Context(), now.AddDate(0, -25, 0), used/4)
-	if err != nil || n == 0 {
-		t.Fatalf("capped prune %d, %v", n, err)
-	}
-	if after, _ := st.UsedBytes(t.Context()); after > used/4 {
-		t.Errorf("after cap %d > %d", after, used/4)
 	}
 	if err := st.Ping(t.Context()); err != nil {
 		t.Fatal(err)

@@ -155,7 +155,9 @@ func serve(cfg app.Config) error {
 		}
 	})
 	start(model.Run)
-	start(func(c context.Context) { prune(c, st, cfg) })
+	start(func(c context.Context) {
+		st.RunRetention(c, store.RetentionOptions{Months: cfg.RetentionMonths, MaxBytes: int64(cfg.MaxDBMB) << 20})
+	})
 	if cfg.OIDCConfigured() && !cfg.AuthDisabled {
 		start(func(c context.Context) {
 			a.Discover(c, auth.OIDCConfig{Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID,
@@ -233,20 +235,6 @@ func flushCounters(ctx context.Context, c *ingest.Counters, st *store.Store) {
 		if err := c.Flush(ctx, st); err != nil {
 			slog.Warn("counter flush failed, kept for the next one", logging.Err(err))
 		}
-	}
-}
-
-// prune runs retention a minute after start and then daily.
-func prune(ctx context.Context, st *store.Store, cfg app.Config) {
-	wait := time.Minute
-	for run.Sleep(ctx, wait) {
-		wait = 24 * time.Hour
-		n, err := st.Prune(ctx, time.Now().AddDate(0, -cfg.RetentionMonths, 0), int64(cfg.MaxDBMB)<<20)
-		if err != nil {
-			slog.Warn("retention failed", logging.Err(err))
-			continue
-		}
-		slog.Info("retention done", "deleted", n)
 	}
 }
 
