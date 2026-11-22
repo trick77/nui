@@ -41,12 +41,20 @@ export const LIMITS = {
   // Values visited per walk of a host page's props.
   nodes: 200,
   props: 4096,
-  // The context without URL and referrer, encoded: the collector takes
-  // 4 KiB, its encoder writes some characters longer.
-  ctx: 3072,
-  // What a batch's rows store: 64 KiB at the collector. Every row repeats
-  // the page's URL (with its path and template); the estimate is generous.
-  stored: 56 * 1024,
+  // The context without URL and referrer, as the collector encodes it.
+  ctx: 4096,
+  // What the collector stores (store.Event.Size), held as an upper bound:
+  // a batch's rows at most `stored`, an event's own row at most `row`.
+  // Every row repeats the page's URL with its path; the first one also
+  // holds the context and the request's headers (at most `headers`).
+  stored: 64 * 1024,
+  row: 16 * 1024,
+  headers: 2048,
+  // A row's fixed part: overhead, source, visitor and session ids, an IPv6
+  // address and its /64 key twice, a template, a country.
+  rowFixed: 96 + 7 + 32 + 32 + 39 + 2 * 24 + 200 + 2,
+  // An event name the collector derives (a host, a message, a URL).
+  name: 200,
   queue: 100,
   perPage: 300,
   perDocument: 1000,
@@ -70,6 +78,9 @@ const STORE_SEEN = "nui.seen";
 const DOWNLOAD =
   /\.(zip|gz|tgz|tar|xz|bz2|7z|rar|pdf|csv|tsv|json|txt|xlsx?|docx?|pptx?|dmg|exe|msi|pkg|deb|rpm|apk|iso|mmdb|mrt)$/i;
 const SEARCH_NAMES = /^(q|query|search|s|term)$/i;
+// Kinds the collector names by a host, a message or a URL (LIMITS.name);
+// every other kind but custom by at most 16 bytes, or not at all.
+const NAMED = /^(outbound_click|download|js_error|resource_error)$/;
 const ID = /^[\da-f]{32}$/;
 
 // UTF-8 length without TextEncoder, which old browsers lack.
@@ -83,6 +94,18 @@ export function utf8Len(s: string): number {
       n += 4;
       i++;
     } else n += 3;
+  }
+  return n;
+}
+
+// A JSON text's length once the collector has decoded and encoded it again:
+// its UTF-8 length, but U+2028 and U+2029, which JSON.stringify leaves as
+// they are, escaped (six bytes, not three). Never less than utf8Len.
+export function goLen(json: string): number {
+  let n = utf8Len(json);
+  for (let i = 0; i < json.length; i++) {
+    const c = json.charCodeAt(i);
+    if (c === 0x2028 || c === 0x2029) n += 3;
   }
   return n;
 }
@@ -111,12 +134,15 @@ const URL_KEY = /^(url|ref|src|href)$/;
 // A URL as it is sent. The fragment goes unless it is a client-side route
 // ("#/", "#!"): sign-in callbacks and magic links carry tokens there. Go's
 // url.Parse refuses a malformed escape in the path or fragment, so a stray
-// "%" is escaped and one cut in half by the clip is dropped.
+// "%" is escaped and one cut in half by the clip is dropped. A browser
+// leaves "|" and "^" in a path as they are; Go then escapes the whole path
+// again, up to three times as long as sent: they go escaped.
 export function clipURL(v: unknown): string {
   return clip(
     clip(v, LIMITS.url)
       .replace(/#(?![/!])[^]*$/, "")
-      .replace(/%(?![\da-f]{2})/gi, "%25"),
+      .replace(/%(?![\da-f]{2})/gi, "%25")
+      .replace(/[|^]/g, (c) => (c === "|" ? "%7C" : "%5E")),
     LIMITS.url,
   ).replace(/%[\da-f]?$/i, "");
 }
@@ -160,7 +186,8 @@ export function bound(v: unknown, key: string, depth: number): unknown {
 function fit(p: unknown): Props {
   budget = LIMITS.nodes;
   const out = bound(p, "p", 0) as Props;
-  return utf8Len(safeJSON(out)) > LIMITS.props ? { dropped: true } : out;
+  // As sent and as stored: the collector takes 4 KiB of both.
+  return goLen(safeJSON(out)) > LIMITS.props ? { dropped: true } : out;
 }
 
 // Shallow, flat, bounded copy of free-form props: strings clipped, numbers
@@ -400,19 +427,20 @@ export function start(
     // Each value is checked at depth 0, like an event's p.
     budget = LIMITS.nodes;
     const out = bound(c, "", -1) as Props;
-    // Over the context's limit only with odd client hints: they go first.
-    if (ctxLen(out) > LIMITS.ctx) {
-      delete out.uach;
-      delete out.langs;
-    }
+    // Over the context's limit only with odd client hints or an odd title:
+    // the longest values go, in this order, until it fits; what is left is
+    // the browser's short figures.
+    for (const k of ["uach", "langs", "title", "lang", "tz", "conn"])
+      if (ctxLen(out) > LIMITS.ctx) delete out[k];
     return out;
   };
-  // The context as the collector stores it: without URL and referrer.
+  // The context as the collector stores it: without URL and referrer, a
+  // comma counted for every key.
   const ctxLen = (c: Props) => {
     let n = 2;
     for (const k in c)
       if (k !== "url" && k !== "ref")
-        n += utf8Len(k) + 4 + utf8Len(safeJSON(c[k]));
+        n += utf8Len(k) + 4 + goLen(safeJSON(c[k]));
     return n;
   };
 
@@ -565,11 +593,14 @@ export function start(
         ctx: c,
       }).slice(0, -1) + ',"events":[';
     let size = utf8Len(head) + 2;
-    // What the rows will store: the context and the request headers once,
-    // then per row the URL with its path and template, the user agent, the
-    // ids and addresses, the event, and the referrer on page views.
-    let stored = ctxLen(c) + 1536;
-    const row = 400 + utf8Len(clip(nav.userAgent, LIMITS.str));
+    // What the rows will store, as store.Event.Size counts it: the first
+    // row's props hold the context and the headers ("ctx":…,"hdr":…,), then
+    // every row its fixed part, kind, name, user agent (the header is
+    // navigator.userAgent), URL and its path (never longer: see clipURL),
+    // props ({"p":…,"title":…}) and, on page views and session starts, the
+    // referrer and its host.
+    let stored = 14 + ctxLen(c) + LIMITS.headers;
+    const fixed = LIMITS.rowFixed + utf8Len(clip(nav.userAgent, LIMITS.str));
     const refLen = 2 * utf8Len(String(c.ref || ""));
     const parts: string[] = [];
     const batch: Rec[] = [];
@@ -589,12 +620,26 @@ export function start(
       const j = safeJSON(e);
       const w = utf8Len(j) + (parts.length ? 1 : 0);
       const cost =
-        row +
-        3 * utf8Len(r.u) +
-        w +
+        fixed +
+        r.k.length +
+        (r.k === "custom"
+          ? utf8Len(r.n || "")
+          : NAMED.test(r.k)
+            ? LIMITS.name
+            : 16) +
+        2 * utf8Len(r.u) +
+        6 +
+        goLen(safeJSON(r.p)) +
+        (e.title ? 9 + goLen(safeJSON(e.title)) : 0) +
         (r.k === "page_view" || r.k === "session_start" ? refLen : 0);
-      if (size + w > LIMITS.batchBytes || stored + cost > LIMITS.stored) {
-        if (!parts.length) {
+      // An own row over its bound cannot happen with the bounds above (the
+      // largest is about 12.5 KiB); should one of them grow, it is dropped.
+      if (
+        size + w > LIMITS.batchBytes ||
+        stored + cost > LIMITS.stored ||
+        cost > LIMITS.row
+      ) {
+        if (!parts.length || cost > LIMITS.row) {
           // Cannot fit even alone: drop it rather than block the queue.
           queue.shift();
           dropped++;
@@ -673,7 +718,8 @@ export function start(
           requeue(batch);
           fail(ra);
         } else {
-          // 400, 413: this batch will never pass; do not resend it.
+          // 400, 413: this batch will never pass; do not resend it. The
+          // tracker never builds one over a limit (see take).
           dropped += batch.length;
           fail(0);
         }

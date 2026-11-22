@@ -1038,39 +1038,82 @@ function batchProblems(raw: string): string[] {
   const ctx = Object.fromEntries(
     Object.entries(b.ctx).filter(([k]) => k !== "url" && k !== "ref"),
   );
-  if (bytes(JSON.stringify(ctx)) > 4096) out.push("ctx size");
-  // What the rows store (store.Event.Size): every row repeats the page URL,
-  // its path and template; page views and session starts the referrer; the
-  // first row the context and the headers (taken as 1.5 KiB). The name is
-  // taken at its 200-byte bound, the address at an IPv6 one.
-  let stored = 0;
-  b.events.forEach((e, i) => {
+  if (goBytes(ctx) > 4096) out.push("ctx size");
+  // What the rows store (store.Event.Size): an event's own row at most
+  // 16 KiB, the batch at most 64 KiB with the context and the headers (at
+  // their 2 KiB bound) on its first row. The address is taken at an IPv6
+  // one, the template at its 200-byte bound.
+  let stored = 2 + 14 + goBytes(ctx) + 2048;
+  for (const e of b.events) {
     const u = e.url ?? String(b.ctx.url);
+    // Go keeps a path as sent only when every character may stand
+    // unescaped; else it escapes it all again.
     const path = new URL(u).pathname;
+    if (/[^\w\-.~!$&'()*+,;=:@[\]%/]/.test(path)) out.push(e.k + " path");
     const ref =
       e.k === "page_view" || e.k === "session_start"
         ? String(b.ctx.ref ?? "")
         : "";
-    const props = {
-      p: e.p,
-      title: (e as { title?: string }).title,
-      ...(i === 0 ? { ctx, hdr: "h".repeat(1536) } : {}),
-    };
-    const size =
+    const props: Record<string, unknown> = { p: e.p };
+    if (e.title) props.title = e.title;
+    const own =
       96 +
-      bytes(navigator.userAgent) +
-      3 * 39 +
+      "browser".length +
+      e.k.length +
+      bytes(nameOf(e)) +
       2 * 32 +
+      39 +
+      2 * 24 +
+      bytes(navigator.userAgent) +
+      bytes(path) +
       200 +
-      2 * bytes(path) +
       bytes(u) +
       2 * bytes(ref) +
-      bytes(JSON.stringify(props));
-    if (size > 16 * 1024) out.push(e.k + " stored");
-    stored += size;
-  });
+      goBytes(props);
+    if (own > 16 * 1024) out.push(e.k + " stored");
+    stored += own;
+  }
   if (stored > 64 * 1024) out.push("batch stored");
   return out;
+}
+// U+2028 and U+2029, kept out of the source as characters: they end a line.
+const LS = String.fromCharCode(0x2028);
+const SEPARATORS = new RegExp(
+  "[" + LS + String.fromCharCode(0x2029) + "]",
+  "g",
+);
+// A value's length as Go encodes it: U+2028 and U+2029 escaped, a lone
+// surrogate the three bytes of U+FFFD.
+const goBytes = (v: unknown) =>
+  bytes(
+    JSON.stringify(v)
+      .replace(/\\ud[89a-f][\da-f]{2}/g, "uuu")
+      .replace(SEPARATORS, "\\u2028"),
+  );
+// The name the collector gives an event (eventName).
+function nameOf(e: Body["events"][number]): string {
+  const s = (k: string) => String(e.p[k] ?? "");
+  const cut = (x: string) => clip(x, 200);
+  switch (e.k) {
+    case "custom":
+      return e.n ?? "";
+    case "outbound_click":
+    case "download":
+      try {
+        return cut(new URL(s("url")).hostname) || cut(s("url"));
+      } catch {
+        return cut(s("url"));
+      }
+    case "js_error":
+      return cut(s("msg"));
+    case "resource_error":
+      return cut(s("url").replace(/[?#][^]*$/, ""));
+    case "vital":
+      return s("name").slice(0, 16);
+    case "form":
+      return s("phase").slice(0, 16);
+  }
+  return "";
 }
 
 describe("collector limits", () => {
@@ -1092,6 +1135,62 @@ describe("collector limits", () => {
     );
     expect(raws.length).toBeGreaterThan(0);
     for (const r of raws) expect(batchProblems(r)).toEqual([]);
+  });
+
+  it("never builds a batch the collector refuses for size", async () => {
+    // Everything at its bound: a 2 KiB URL whose path Go would escape again,
+    // a referrer as long, a title of control characters and line separators
+    // (escaped six-fold and two-fold), the largest custom props, 50 events.
+    const odd = ("\u0001" + LS).repeat(200);
+    history.replaceState(null, "", "/" + "a|^".repeat(700) + "?q=1");
+    Object.defineProperty(document, "referrer", {
+      configurable: true,
+      value: "https://ref.example.org/" + "r".repeat(2100),
+    });
+    document.title = odd;
+    const t = boot();
+    fetchMock.mockImplementation(() => new Promise(() => {}));
+    // Props just within 4 KiB: as sent, and as Go stores them.
+    const big: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) big["k" + i] = LS.repeat(150);
+    const huge: Record<string, string> = {};
+    for (let i = 0; i < 8; i++) huge["k" + i] = "x".repeat(500);
+    for (let i = 0; i < 25; i++) {
+      t.event("n".repeat(200), i % 2 ? big : huge);
+      window.dispatchEvent(
+        new ErrorEvent("error", { message: "E" + i + odd, filename: "/x" }),
+      );
+    }
+    // A page left under its own long URL and odd title.
+    history.pushState(null, "", "/" + "b|".repeat(1000));
+    for (let i = 0; i < 40; i++) {
+      t.flush(true);
+      await vi.advanceTimersByTimeAsync(LIMITS.flushAfterMs);
+    }
+    const raws = fetchMock.mock.calls.map(
+      (c) => (c[1] as RequestInit).body as string,
+    );
+    const sent = raws.flatMap((r) => JSON.parse(r).events as Body["events"]);
+    expect(sent.length).toBeGreaterThan(45);
+    expect(t.state().dropped).toBe(0);
+    expect(t.state().queued).toBe(0);
+    for (const r of raws) expect(batchProblems(r)).toEqual([]);
+    // The props went whole, not dropped as too big.
+    expect(sent.filter((e) => e.p.k0 === big.k0)).toHaveLength(12);
+    delete (document as { referrer?: string }).referrer;
+  });
+
+  it("holds an event's own row within the collector's bound", () => {
+    // Every part at its bound: the largest name, user agent, URL with its
+    // path, props, a title escaped six-fold, and a referrer with its host.
+    const common =
+      LIMITS.rowFixed + LIMITS.str + 2 * LIMITS.url + 9 + 6 * LIMITS.str + 2;
+    // An error or a custom event: a name, the largest props.
+    const named =
+      common + "resource_error".length + LIMITS.name + 6 + LIMITS.props;
+    // A page view: empty props, the referrer and its host.
+    const view = common + "page_view".length + 16 + 6 + 2 + 2 * LIMITS.url;
+    expect(Math.max(named, view)).toBeLessThanOrEqual(LIMITS.row);
   });
 
   it("keeps the context within the collector's limit", async () => {
