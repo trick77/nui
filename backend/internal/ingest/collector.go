@@ -93,13 +93,13 @@ func FeedLimiter(now func() time.Time) *ratelimit.Limiter {
 
 // RateRule is the browser limit as the dashboard's footer states it.
 func RateRule() string {
-	return fmt.Sprintf("%d events / min per address or /64 · %d per /48 · %d KiB stored counts as an event",
-		int(BrowserRate*60), int(BrowserWideRate*60), StoreUnit>>10)
+	return fmt.Sprintf("%d events / min per address or /64"+apix.Sep+"%d per /48"+apix.Sep+
+		"%d KiB stored counts as an event", int(BrowserRate*60), int(BrowserWideRate*60), StoreUnit>>10)
 }
 
 // BatchRule is the browser batch limit as the footer states it.
 func BatchRule() string {
-	return fmt.Sprintf("%d KiB · %d events", MaxBrowserBody>>10, MaxBrowserEvents)
+	return fmt.Sprintf("%d KiB"+apix.Sep+"%d events", MaxBrowserBody>>10, MaxBrowserEvents)
 }
 
 // Collector serves the two ingest endpoints.

@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/trick77/nui/backend/internal/apix"
 )
 
 func looksLikeBrowser(ua string) bool {
@@ -23,7 +25,7 @@ func Client(ua string) string {
 	}
 	if looksLikeBrowser(ua) && !automationUA.MatchString(ua) {
 		b, o, _ := ParseUA(ua)
-		return b + " · " + o
+		return b + apix.Sep + o
 	}
 	// A tool behind the Mozilla/5.0 compatibility prefix (Mozilla/5.0 zgrab/0.x, HeadlessChrome, Googlebot): the
 	// token naming the tool, not the prefix.

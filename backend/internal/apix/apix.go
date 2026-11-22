@@ -13,6 +13,13 @@ import (
 	"github.com/trick77/ship/kit/logging"
 )
 
+// Sep separates two pieces of text the dashboard shows verbatim: a middle dot with an en space each side, plain
+// spaces read cramped in the family's fonts. The UI's is SEP in format.ts.
+const Sep = ensp + "·" + ensp
+
+// ensp is U+2002 by its code point: the raw character is invisible in review.
+const ensp = string(rune(0x2002))
+
 // JSON writes v with status, uncached.
 func JSON(w http.ResponseWriter, status int, v any) { httpx.WriteJSON(w, status, v) }
 
