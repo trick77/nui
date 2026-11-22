@@ -302,6 +302,9 @@ func TestSessionSecretFile(t *testing.T) {
 		!strings.Contains(err.Error(), "BACKEND_DATA_DIR") {
 		t.Errorf("missing directory: %v", err)
 	}
+	if os.Geteuid() == 0 {
+		return // root writes into a read-only directory regardless
+	}
 	ro := t.TempDir()
 	if err := os.Chmod(ro, 0o500); err != nil {
 		t.Fatal(err)
