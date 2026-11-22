@@ -248,9 +248,8 @@ func (w *World) visit(p *dayPlan, s *Site, per *person, start time.Time, ref, en
 
 // maxVisit bounds a visit, its first page to its last event, and so how far a day's plan reaches past midnight. A
 // person's visit is eight pages at most, each left within twenty minutes (well inside the product's thirty-minute
-// session timeout), at most 2 h 40 min however it is drawn; the automation's runs take minutes, the renderer's
-// seconds.
-// minDwell is the shortest a page is shown.
+// session timeout) and the next shown within a second: under 2 h 40 min 7 s however it is drawn. The automation's
+// runs take minutes, the renderer's seconds. minDwell is the shortest a page is shown.
 const (
 	maxVisit = 3 * time.Hour
 	minDwell = 3 * time.Second

@@ -219,7 +219,7 @@ func (w *World) keep(first, last int64) {
 
 // The day plans a world holds, and what they may take at the largest scale: a plan is the whole day's requests, two
 // are held only in the hours past midnight a visit begun the day before can last. At scale 50 the referrer wave's
-// day and the one before it took 205 MB together, the most of a week (TestPlanMemory).
+// day and the one before it took 205 MB together, the most over a week on each side of the anchor (TestPlanMemory).
 const (
 	maxPlans   = 2
 	planBudget = 256 << 20

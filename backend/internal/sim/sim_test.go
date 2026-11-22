@@ -364,8 +364,8 @@ func TestPlansHeld(t *testing.T) {
 }
 
 // The day plans a world holds fit the budget at the largest scale: a world of the default scenarios asked for a week
-// of spans, the referrer wave's day (the largest plan) and every midnight among them, its heap read whenever the plans
-// it holds change (some 9 s under the race detector).
+// of spans on each side of the anchor, the referrer wave's day (the largest plan) and every midnight among them, its
+// heap read whenever the plans it holds change (some 9 s under the race detector).
 func TestPlanMemory(t *testing.T) {
 	w := testWorld(t, ScaleLimit.Max(), DefaultScenarios)
 	heap := func() float64 {
