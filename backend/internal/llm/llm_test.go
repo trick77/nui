@@ -447,6 +447,16 @@ func TestHelpers(t *testing.T) {
 		clip("abcdefghijklmnop", 5) != "abcd…" {
 		t.Errorf("clip %q %q", clip(strings.Repeat("word ", 30), 20), clip("abcdefghijklmnop", 5))
 	}
+	// A separating dot the model quotes reads as the dashboard writes it, en spaces each side; a cut never leaves
+	// half of one.
+	sep := "\xe2\x80\x82·\xe2\x80\x82"
+	if got := clip("A person on Chrome  ·\tmacOS, then Firefox"+sep+"Linux", 100); got !=
+		"A person on Chrome"+sep+"macOS, then Firefox"+sep+"Linux" {
+		t.Errorf("clip respaced %q", got)
+	}
+	if got := clip("A person reading on Chrome · macOS late", 28); got != "A person reading on Chrome…" {
+		t.Errorf("clip cut at a separator %q", got)
+	}
 	// Never past the limit, the ellipsis included.
 	for _, s := range []string{strings.Repeat("x", 200), strings.Repeat("ab ", 70), strings.Repeat("é", 100)} {
 		for _, n := range []int{maxLabel, maxLine, maxSummary} {

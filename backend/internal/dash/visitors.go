@@ -1021,13 +1021,10 @@ func slug(s string) string {
 	}), "-")
 }
 
-// oldSep is the separator before apix.Sep: past days' stored reasons still hold it.
-const oldSep = " · "
-
 // respace spells a stored reason's separators as apix.Sep: a day classified before it keeps its row.
 func respace(reasons []string) []string {
 	for i, r := range reasons {
-		reasons[i] = strings.ReplaceAll(r, oldSep, apix.Sep)
+		reasons[i] = apix.Respace(r)
 	}
 	return reasons
 }
