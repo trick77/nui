@@ -70,34 +70,40 @@ export function Noteworthy() {
             <Empty>Nothing stands out in this range.</Empty>
           ) : (
             <ul className="nw">
-              {nw.data.items.slice(0, 5).map((f) => (
-                <li key={f.id}>
-                  <button
-                    type="button"
-                    style={{ ["--c" as string]: KIND[f.kind]?.color }}
-                    aria-label={`${f.figure} ${f.unit}: ${f.gen ?? f.text}`}
-                    onClick={() => {
-                      hide();
-                      goPanel(f.target.panel, f.target.filter);
-                    }}
-                    onMouseMove={(e) =>
-                      show(
-                        e,
-                        f.gen ? f.text : `${f.figure} ${f.unit}`,
-                        f.detail.map((d) => [d, ""] as [string, string]),
-                      )
-                    }
-                    onMouseLeave={hide}
-                  >
-                    <b>{f.figure}</b>
-                    <small>{f.unit}</small>
-                    <span className="say">
-                      <GenText gen={f.gen} text={f.text} />
-                    </span>
-                    <em>→</em>
-                  </button>
-                </li>
-              ))}
+              {nw.data.items.slice(0, 5).map((f) => {
+                // A line over findings whose figures do not add up has
+                // none: it shows how many findings it covers.
+                const figure = f.figure || num(f.ids.length);
+                const unit = f.figure ? f.unit : "findings";
+                return (
+                  <li key={f.id}>
+                    <button
+                      type="button"
+                      style={{ ["--c" as string]: KIND[f.kind]?.color }}
+                      aria-label={`${figure} ${unit}: ${f.gen ?? f.text}`}
+                      onClick={() => {
+                        hide();
+                        goPanel(f.target.panel, f.target.filter);
+                      }}
+                      onMouseMove={(e) =>
+                        show(
+                          e,
+                          f.gen ? f.text : `${figure} ${unit}`,
+                          f.detail.map((d) => [d, ""] as [string, string]),
+                        )
+                      }
+                      onMouseLeave={hide}
+                    >
+                      <b>{figure}</b>
+                      <small>{unit}</small>
+                      <span className="say">
+                        <GenText gen={f.gen} text={f.text} />
+                      </span>
+                      <em>→</em>
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           )}
           <div className="mt-2.5 flex gap-4 px-1 text-[12px] text-muted">

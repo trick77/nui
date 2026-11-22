@@ -66,8 +66,12 @@ export type FindingKind = "problem" | "automation" | "people";
 export type Panel =
   "errors" | "visitors" | "referrers" | "probed" | "events" | "domain" | "log";
 
+// A briefing line may cover several findings of one kind (ids): its text
+// is then "<lead text>, and N related", detail names each finding with its
+// own figure, and figure and unit are their sum or both empty.
 export type Finding = {
   id: string;
+  ids: string[];
   kind: FindingKind;
   figure: string;
   unit: string;

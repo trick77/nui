@@ -369,10 +369,32 @@ describe("dashboard on a domain with a server feed", () => {
     start();
     const nw = await screen.findByRole("region", { name: "Noteworthy" });
     const rows = await within(nw).findAllByRole("button");
-    expect(rows.length).toBeLessThanOrEqual(5);
-    expect(
-      within(nw).getByText("New referrer: news.ycombinator.com"),
-    ).not.toHaveClass("gen");
+    expect(rows).toHaveLength(5);
+    expect(within(nw).getByText("1 more")).toBeInTheDocument();
+    // The computed text where the model wrote none.
+    expect(within(nw).getByText("AS64510 Example Cloud")).not.toHaveClass(
+      "gen",
+    );
+    // A line over findings that add up shows their sum, one over findings
+    // that do not how many it covers; the detail names each.
+    expect(rows[2]).toHaveAccessibleName(
+      "283 probes of: Scanners look for secrets and logins",
+    );
+    expect(rows[3]).toHaveAccessibleName(
+      "2 findings: Hacker News brought a wave of new people",
+    );
+    expect(rows[3].querySelector("b")).toHaveTextContent("2");
+    fireEvent.mouseMove(rows[3], { clientX: 10, clientY: 10 });
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "New referrer: news.ycombinator.com, and 1 related",
+    );
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "749 visitors from New referrer",
+    );
+    fireEvent.mouseLeave(rows[3]);
+    fireEvent.mouseMove(rows[4], { clientX: 10, clientY: 10 });
+    expect(screen.getByRole("tooltip")).toHaveTextContent("2340 requests from");
+    fireEvent.mouseLeave(rows[4]);
     fireEvent.mouseMove(rows[1], { clientX: 10, clientY: 10 });
     expect(screen.getByRole("tooltip")).toHaveTextContent(
       "88.4 % of all requests",
@@ -383,11 +405,18 @@ describe("dashboard on a domain with a server feed", () => {
     expect(
       await within(detail).findByText("Scraping attempt"),
     ).toBeInTheDocument();
-    fireEvent.click(rows[3]);
+    // A network spike opens the log on that network's requests.
+    fireEvent.click(rows[4]);
     await waitFor(() =>
       expect(window.location.pathname).toBe("/dashboard/log"),
     );
-    expect(window.location.search).toContain("class=unknown");
+    const q = new URLSearchParams(window.location.search);
+    expect([q.get("asn"), q.get("kind")]).toEqual(["64510", "request"]);
+    const log = await screen.findByRole("region", { name: "Log" });
+    expect(within(log).getByText(/Network AS64510/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(lastCall("/api/dash/log").get("asn")).toBe("64510"),
+    );
   });
 
   it("lists visitors with sorts, filter, search, show all and the detail", async () => {

@@ -237,20 +237,24 @@ function overview(
 function noteworthy(site: string): Noteworthy {
   const feed = SITES.find((s) => s.site === site)?.server != null;
   // The backend's ids, units and texts; the briefing's lines (gen) first,
-  // the computed facts after them.
+  // the computed facts after them. A line over several findings of one
+  // kind lists them in ids and detail ("<figure> <unit> <text>" each), its
+  // figure their sum where they count the same thing, else empty.
   const items: Noteworthy["items"] = [
     {
       id: 'err:TypeError: cannot read "prefixes"',
+      ids: ['err:TypeError: cannot read "prefixes"'],
       kind: "problem",
       figure: "14",
       unit: "times",
       gen: "Safari breaks on AS pages since the deploy",
       text: 'New error: TypeError: cannot read "prefixes"',
-      detail: ['TypeError: cannot read "prefixes"'],
+      detail: [],
       target: { panel: "errors", filter: {} },
     },
     {
       id: "spike:addr:198.51.100.7",
+      ids: ["spike:addr:198.51.100.7"],
       kind: "automation",
       figure: "2338",
       unit: "requests from",
@@ -261,48 +265,72 @@ function noteworthy(site: string): Noteworthy {
     },
     {
       id: "probe:GET /.env",
+      ids: ["probe:GET /.env", "probe:GET /wp-login.php"],
       kind: "automation",
-      figure: "212",
+      figure: "283",
       unit: "probes of",
-      gen: "Scanners look for secrets",
-      text: "New probed path: GET /.env",
-      detail: [],
+      gen: "Scanners look for secrets and logins",
+      text: "New probed path: GET /.env, and 1 related",
+      detail: [
+        "212 probes of New probed path: GET /.env",
+        "71 probes of New probed path: GET /wp-login.php",
+      ],
       target: { panel: "probed", filter: {} },
     },
     {
-      id: "trend:auto_share:up",
-      kind: "automation",
-      figure: "18.6 %",
-      unit: "unknown automated",
-      gen: "Scripts take a bigger share of the traffic",
-      text: "Unknown automated share up by 4.2 pp",
-      detail: [],
-      target: { panel: "log", filter: { class: "unknown" } },
+      id: "ref:news.ycombinator.com",
+      ids: ["ref:news.ycombinator.com", "trend:visitors:up"],
+      kind: "people",
+      figure: "",
+      unit: "",
+      gen: "Hacker News brought a wave of new people",
+      text: "New referrer: news.ycombinator.com, and 1 related",
+      detail: [
+        "749 visitors from New referrer: news.ycombinator.com",
+        "+24 % visitors Visitors up against the prior 7 d (2841, was 2291)",
+      ],
+      target: { panel: "referrers", filter: {} },
     },
     {
-      id: "ref:news.ycombinator.com",
+      id: "spike:net:64510",
+      ids: ["spike:net:64510"],
+      kind: "automation",
+      figure: "2340",
+      unit: "requests from",
+      gen: null,
+      text: "AS64510 Example Cloud",
+      detail: ["88.5 % of all requests, 0 in the prior 7 d"],
+      target: { panel: "log", filter: { kind: "request", asn: "64510" } },
+    },
+    {
+      id: "ref:reddit.com",
+      ids: ["ref:reddit.com"],
       kind: "people",
-      figure: "749",
+      figure: "12",
       unit: "visitors from",
       gen: null,
-      text: "New referrer: news.ycombinator.com",
+      text: "New referrer: reddit.com",
       detail: [],
       target: { panel: "referrers", filter: {} },
     },
-  ].filter(
-    (f) => feed || f.id.startsWith("err:") || f.id.startsWith("ref:"),
-  ) as Noteworthy["items"];
+  ];
+  const shown = items
+    .filter(
+      (f) => feed || f.id.startsWith("err:") || f.id.startsWith("ref:reddit"),
+    )
+    // Without a model: computed texts only.
+    .map((f) => (feed ? f : { ...f, gen: null }));
   return {
     headline: feed
       ? {
           gen: "Good week for people, busy one for scripts.",
-          text: "6 findings against the prior 7 d",
+          text: "9 findings against the prior 7 d",
         }
       : { gen: null, text: "2 findings against the prior 7 d" },
     // The range's closed end: 7 d in Europe/Zurich.
     as_of: "2026-11-21T23:00:00Z",
-    items,
-    more: feed ? 1 : 0,
+    items: shown.slice(0, 5),
+    more: Math.max(0, shown.length - 5),
   };
 }
 
