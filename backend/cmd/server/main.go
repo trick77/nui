@@ -68,8 +68,13 @@ func main() {
 	if *healthcheckFlag {
 		os.Exit(httpx.Healthcheck(httpx.LocalURL(cfg.Addr, "/readyz")))
 	}
+	mode, err := startMode(cfg, *simFlag, *demoFlag)
+	if err != nil {
+		slog.Error("flags", logging.Err(err))
+		os.Exit(1)
+	}
 	var simulated *simcli.Server
-	if *simFlag {
+	if mode == simRun {
 		k := sim.ReadKnobs(os.Getenv, func(s string) { slog.Warn(s) })
 		if simulated, err = simcli.NewServer(k, time.Now()); err == nil {
 			err = simulated.Configure(&cfg)
@@ -82,7 +87,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	err = serve(cfg, simulated)
+	err = serve(cfg, mode, simulated)
 	if simulated != nil {
 		simulated.Close()
 	}
@@ -92,6 +97,32 @@ func main() {
 	}
 }
 
+// runMode is how the server was started: a normal run, or one of the simulator's development modes.
+type runMode int
+
+const (
+	normalRun runMode = iota
+	simRun            // -sim: a world of its own in a temporary data directory
+	demoRun           // -demo: simulated history in the configured data directory
+)
+
+// startMode reads the flags against the configuration. The simulator's modes are development only: refused
+// together (both would backfill, one world on the other) and where a public host is configured.
+func startMode(cfg app.Config, simulate bool, demoDays int) (runMode, error) {
+	switch {
+	case simulate && demoDays != 0:
+		return normalRun, errors.New("-sim and -demo together: -sim serves a world of its own, -demo fills the " +
+			"configured data directory; choose one")
+	case demoDays < 0:
+		return normalRun, fmt.Errorf("-demo %d: days below 0", demoDays)
+	case simulate:
+		return simRun, simcli.RefusePublic(cfg.PublicFQDN, "server -sim")
+	case demoDays > 0:
+		return demoRun, simcli.RefusePublic(cfg.PublicFQDN, "server -demo")
+	}
+	return normalRun, nil
+}
+
 func newFeedKey() (key, hash string) {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)
@@ -99,7 +130,7 @@ func newFeedKey() (key, hash string) {
 	return key, sites.HashKey(key)
 }
 
-func serve(cfg app.Config, simulated *simcli.Server) error {
+func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	if _, err := logging.Setup(logging.Options{Level: cfg.LogLevel, LevelVar: "BACKEND_LOG_LEVEL"}); err != nil {
 		return err
 	}
@@ -117,7 +148,7 @@ func serve(cfg app.Config, simulated *simcli.Server) error {
 	if err != nil {
 		return err
 	}
-	if *demoFlag > 0 {
+	if mode == demoRun {
 		if err := seedDemo(ctx, st, cfg, *demoFlag); err != nil {
 			return err
 		}
