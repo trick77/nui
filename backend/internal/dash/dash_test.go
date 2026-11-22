@@ -508,8 +508,9 @@ func TestVisitorsAndDetail(t *testing.T) {
 	if g := listRows(body)[0]["does"].(map[string]any)["gen"]; g != nil {
 		t.Errorf("unresolvable reading shown: %v", g)
 	}
-	if _, d := r.get(t, "visitor", p(feedSite, "key", scanner, "range", "24h")); d["reading"] != nil {
-		t.Errorf("unresolvable reading in the detail: %v", d["reading"])
+	if _, d := r.get(t, "visitor", p(feedSite, "key", scanner, "range", "24h")); d["reading"] != nil ||
+		d["does"].(map[string]any)["gen"] != nil || d["does"].(map[string]any)["text"] == "" {
+		t.Errorf("unresolvable reading in the detail: %v %v", d["reading"], d["does"])
 	}
 	// Detail: a cached reading for the scanner, evidence resolved to the actor's own figures and span.
 	model.readings[scanner] = insight.Reading{Verdict: "Scraping attempt", Summary: "Walks the lookup API.",
@@ -523,6 +524,11 @@ func TestVisitorsAndDetail(t *testing.T) {
 		t.Fatalf("visitor %d %v", code, d)
 	}
 	noNullLists(t, "visitor", d)
+	// "What it does" reads as in the table, both sentences.
+	tableDoes := listRows(body)[0]["does"].(map[string]any)
+	if dd := d["does"].(map[string]any); dd["gen"] != "Walks the lookup API." || dd["text"] != tableDoes["text"] {
+		t.Errorf("detail does %v, table %v", dd, tableDoes)
+	}
 	// The client reads as in the table.
 	if d["client_gen"] != "Python scraping script" || d["client"] != "python-requests/2.32.3" {
 		t.Errorf("detail client %v / %v", d["client_gen"], d["client"])

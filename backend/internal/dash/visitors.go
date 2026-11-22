@@ -874,10 +874,17 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		s.fail(w, r, err)
 		return
 	}
+	counts, err := s.actions(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()])
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	// "What it does" as the table's row has it: the computed sentence, the model's when its reading resolves.
+	row.Does.Text = doesText(row, counts)
 	resp := map[string]any{"key": key, "class": row.Class, "network": row.Network, "network_kind": row.NetworkKind,
 		"country": row.Country, "client": row.Client, "signals": row.Signals, "requests": row.Requests,
 		"addresses": addrs, "hours": hours, "trail": tr.lines, "trail_next": tr.next, "reading": nil,
-		"client_gen": nil}
+		"client_gen": nil, "does": &row.Does}
 	if s.Model != nil && s.Model.Configured() {
 		one := []visitorRow{row}
 		s.labelClients(ctx, q.site.ID, one)
@@ -890,16 +897,15 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 				return
 			}
 		}
-		counts, err := s.actions(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()])
-		if err != nil {
-			s.fail(w, r, err)
-			return
-		}
 		in, shown := s.readingInput(q.site.ID, row, counts, latest)
 		in.Queue = true // the user opened this actor
 		if rd, ok := s.Model.Readings(ctx, []insight.ReadingInput{in}, true)[key]; ok {
 			// Shown only when every fact it cites exists for this actor, with this actor's figures and span.
 			if evidence, ok := resolve(rd, shown); ok {
+				if rd.Summary != "" {
+					sum := rd.Summary
+					row.Does.Gen = &sum
+				}
 				related, err := s.related(ctx, q, key, row.Class)
 				if err != nil {
 					s.fail(w, r, err)
