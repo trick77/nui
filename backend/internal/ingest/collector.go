@@ -257,7 +257,9 @@ func (c *Collector) HandleBrowser(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			c.count(site.ID, func(s *store.IngestStat) { s.RateLimited += int64(len(evs)) })
-			apix.TooMany(w, wait)
+			// The wait is for the rest of the charge; the batch sent again pays its token on arrival first, so
+			// it needs one token more, or every retry is refused once more.
+			apix.TooMany(w, wait+time.Duration(float64(time.Second)/BrowserRate))
 			return
 		}
 	}

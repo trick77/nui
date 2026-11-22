@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -635,6 +636,32 @@ func TestBrowser_FirstRowBounds(t *testing.T) {
 	// The row holds more than an event's bound: its own part stays within it.
 	if own := sizes[0] - len(stored.Ctx) - len(hdr); sizes[0] <= maxEventBytes || own > maxEventBytes {
 		t.Errorf("first row %d bytes, its own %d", sizes[0], own)
+	}
+}
+
+// A batch refused for the rest of its charge passes when sent again once its Retry-After has passed: the wait
+// covers the token the retry pays on arrival too.
+func TestBrowser_RetryAfterCoversTheRetry(t *testing.T) {
+	r := newRig(t, 0, true)
+	long := `,"url":"https://` + domain + `/` + strings.Repeat("u", 1900) + `"`
+	body := `{"v":1,"site":"` + domain + `","events":[` +
+		strings.TrimSuffix(strings.Repeat(`{"k":"engagement"`+long+`},`, 12), ",") + `]}`
+	var w *httptest.ResponseRecorder
+	for range 3 {
+		if w = r.browser(body, "198.51.100.50", ""); w.Code == http.StatusTooManyRequests {
+			break
+		}
+	}
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("no 429: %d", w.Code)
+	}
+	ra, err := strconv.Atoi(w.Header().Get("Retry-After"))
+	if err != nil || ra < 1 {
+		t.Fatalf("Retry-After %q", w.Header().Get("Retry-After"))
+	}
+	r.advance(time.Duration(ra) * time.Second)
+	if w := r.browser(body, "198.51.100.50", ""); w.Code != http.StatusNoContent {
+		t.Errorf("sent again after %d s: %d", ra, w.Code)
 	}
 }
 
