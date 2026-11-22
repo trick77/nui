@@ -52,6 +52,7 @@ export function DomainFooter() {
   const d = useApi<Domain>(
     scopeKey("domain", { site: site.site, range }),
     (s) => api.domain(scope, s),
+    site.site,
   );
   const x = d.data;
   const counters: [string, number | undefined, boolean][] = x
@@ -76,7 +77,7 @@ export function DomainFooter() {
         title="This domain"
         lead="How it is connected, what nui accepted and refused, and what is stored."
       />
-      <Panel label="This domain">
+      <Panel label="This domain" busy={d.loading}>
         {d.error ? (
           <div className="p-4">
             <ErrorBox error={d.error} />

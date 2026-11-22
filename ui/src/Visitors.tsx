@@ -61,9 +61,16 @@ export function Visitors({ aud }: { aud: Audience }) {
   const [all, setAll] = useState(false);
   const params = { sort, class: cls, q: dq, limit: all ? PAGE : TOP };
   const key = scopeKey("visitors", { scope, ...params });
-  const page = useApi<VisitorsPage>(key, (s) => api.visitors(scope, params, s));
+  const page = useApi<VisitorsPage>(
+    key,
+    (s) => api.visitors(scope, params, s),
+    scope.site,
+  );
   const more = useMore<VisitorRow>(key);
   const rows = [...(page.data?.rows ?? []), ...more.items];
+  // While the first page of a new query loads, the rows and the cursor
+  // shown are the previous query's: no paging from them.
+  const fresh = !page.loading;
   const next = more.next ?? page.data?.next ?? "";
   // A pick from a finding or a related address may lie outside the table.
   const selected = visitor ?? rows[0]?.key ?? null;
@@ -76,7 +83,7 @@ export function Visitors({ aud }: { aud: Audience }) {
         lead="Who is doing what. Click a row for the full trail."
         sources={["browser", "server"]}
       />
-      <Panel label="Visitors by address" className="card">
+      <Panel label="Visitors by address" className="card" busy={!fresh}>
         <CardHead
           title="By address"
           right={
@@ -202,7 +209,12 @@ export function Visitors({ aud }: { aud: Audience }) {
             onChange={(e) => setQ(e.target.value)}
           />
           {!all && page.data && page.data.total > rows.length && (
-            <button type="button" className="link" onClick={() => setAll(true)}>
+            <button
+              type="button"
+              className="link"
+              disabled={!fresh}
+              onClick={() => setAll(true)}
+            >
               Show all →
             </button>
           )}
@@ -210,8 +222,9 @@ export function Visitors({ aud }: { aud: Audience }) {
             <button
               type="button"
               className="link"
-              disabled={more.busy}
+              disabled={more.busy || !fresh}
               onClick={() =>
+                fresh &&
                 more.load(() =>
                   api
                     .visitors(scope, { ...params, cursor: next })
@@ -267,16 +280,23 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
   const { scope, feed, selectVisitor } = useDash();
   const { site, range } = scope;
   const key = scopeKey("visitor", { site, range, vkey });
-  const d = useApi<Visitor>(key, (s) => api.visitor(scope, vkey, undefined, s));
+  const d = useApi<Visitor>(
+    key,
+    (s) => api.visitor(scope, vkey, undefined, s),
+    site,
+  );
   const more = useMore<TrailItem>(key);
   const v = d.data;
   const trail = [...(v?.trail ?? []), ...more.items];
+  // The previous visitor's trail and cursor while this one loads.
+  const fresh = !d.loading;
   const next = more.next ?? v?.trail_next ?? "";
   return (
     <Panel
       id="visitor-detail"
       label="Visitor"
       className="mt-3 grid grid-cols-1 min-[1000px]:grid-cols-[320px_1fr]"
+      busy={!fresh}
     >
       {d.error instanceof ApiError && d.error.status === 404 ? (
         // A picked address with no events in this range (another range or
@@ -411,8 +431,9 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
               <button
                 type="button"
                 className="link mt-3"
-                disabled={more.busy}
+                disabled={more.busy || !fresh}
                 onClick={() =>
+                  fresh &&
                   more.load(() =>
                     api
                       .visitor(scope, vkey, next)

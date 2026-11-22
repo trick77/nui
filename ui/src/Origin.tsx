@@ -44,8 +44,10 @@ function shareParts(rows: ShareRow[]) {
 export function Origin({ aud }: { aud: Audience }) {
   const { scope } = useDash();
   const countries = useList("countries", "volume", { limit: MAP_LIMIT });
-  const cl = useApi<Clients>(scopeKey("clients", scope), (s) =>
-    api.clients(scope, s),
+  const cl = useApi<Clients>(
+    scopeKey("clients", scope),
+    (s) => api.clients(scope, s),
+    scope.site,
   );
   const rows = countries.data?.rows ?? [];
   const metric = aud === "bots" ? "Addresses" : "Visitors";
@@ -58,7 +60,7 @@ export function Origin({ aud }: { aud: Audience }) {
         sources={["browser"]}
       />
       <div className="grid grid-cols-1 gap-3 min-[1000px]:grid-cols-2">
-        <Panel label={MAP_TITLE[aud]} className="card">
+        <Panel label={MAP_TITLE[aud]} className="card" busy={countries.loading}>
           <CardHead
             title={MAP_TITLE[aud]}
             right={
@@ -108,7 +110,7 @@ export function Origin({ aud }: { aud: Audience }) {
             </>
           )}
         </Panel>
-        <Panel label="Clients" className="card">
+        <Panel label="Clients" className="card" busy={cl.loading}>
           <CardHead title="Clients" />
           {cl.error ? (
             <ErrorBox error={cl.error} />

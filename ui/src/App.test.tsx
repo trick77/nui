@@ -24,6 +24,36 @@ function start(url = "/dashboard/", opt: FixtureOptions = {}) {
   return render(<App />);
 }
 
+// Answers to requests matching hold.match wait until released.
+const hold = {
+  match: null as ((u: string) => boolean) | null,
+  waiting: [] as { u: string; go: () => void }[],
+  // Releases the held answers whose URL matches, in the order given.
+  release(pick: (u: string) => boolean = () => true) {
+    const go = this.waiting.filter((w) => pick(w.u));
+    this.waiting = this.waiting.filter((w) => !pick(w.u));
+    return act(async () => {
+      for (const w of go) w.go();
+    });
+  },
+};
+
+function startHeld(url: string) {
+  window.history.replaceState(null, "", url);
+  calls = [];
+  hold.match = null;
+  hold.waiting = [];
+  const fx = fixtureFetch();
+  setFetcher((u, i) => {
+    calls.push(u);
+    if (!hold.match?.(u)) return fx(u, i);
+    return new Promise<Response>((res, rej) =>
+      hold.waiting.push({ u, go: () => fx(u, i).then(res, rej) }),
+    );
+  });
+  return render(<App />);
+}
+
 const panel = (name: string) => screen.getByRole("region", { name });
 const lastCall = (path: string) =>
   new URL(calls.filter((c) => c.startsWith(path)).at(-1)!, "http://x")
@@ -262,6 +292,11 @@ describe("dashboard on a domain with a server feed", () => {
     fireEvent.change(within(v).getByRole("textbox"), { target: { value: "" } });
     await within(v).findByText("198.51.100.7", {}, { timeout: 2000 });
     fireEvent.click(within(v).getByRole("button", { name: "Most requests" }));
+    // Paging waits for the new order's answer.
+    expect(
+      within(v).getByRole("button", { name: "Show all →" }),
+    ).toBeDisabled();
+    await waitFor(() => expect(v).not.toHaveAttribute("aria-busy"));
     fireEvent.click(within(v).getByRole("button", { name: "Show all →" }));
     await waitFor(() =>
       expect(lastCall("/api/dash/visitors").get("limit")).toBe("50"),
@@ -556,6 +591,141 @@ describe("dashboard on a domain with a server feed", () => {
     await waitFor(() => expect(reload).toHaveBeenCalled());
     expect(calls).toContain("/api/auth/logout");
     vi.unstubAllGlobals();
+  });
+});
+
+describe("while an answer is on its way", () => {
+  it("never shows another domain's data under the new one's name", async () => {
+    startHeld("/dashboard/?site=console.example.com");
+    await screen.findByText("2 findings against the prior 7 d");
+    const v = panel("Visitors by address");
+    await waitFor(() =>
+      expect(within(v).queryAllByRole("row").length).toBeGreaterThan(1),
+    );
+    expect(document.querySelector(".topbar")).toHaveTextContent("online");
+    hold.match = (u) => u.includes("site=lens.example.com");
+    fireEvent.change(screen.getByRole("combobox", { name: "Domain" }), {
+      target: { value: "lens.example.com" },
+    });
+    expect(screen.queryByText("2 findings against the prior 7 d")).toBeNull();
+    expect(document.querySelector(".topbar")).not.toHaveTextContent("online");
+    expect(screen.queryByText(/one point per/)).toBeNull();
+    expect(
+      within(panel("Visitors by address")).queryAllByRole("row"),
+    ).toHaveLength(0);
+    expect(
+      within(panel("Overview")).getByLabelText("Loading the overview"),
+    ).toHaveAttribute("aria-busy", "true");
+    for (const name of ["Pages", "Clients", "This domain"])
+      expect(within(panel(name)).queryByRole("table")).toBeNull();
+    await hold.release();
+    expect(
+      await screen.findByText("Good week for people, busy one for scripts."),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the same domain's answer dimmed, without paging from it", async () => {
+    startHeld("/dashboard/");
+    const ov = await screen.findByRole("region", { name: "Overview" });
+    await within(ov).findByText("Visitors per day · all");
+    const v = panel("Visitors by address");
+    await within(v).findByText("198.51.100.7");
+    const mainChart = () => within(ov).getByTestId("chart-hit").closest("svg");
+    const chart = mainChart();
+    expect(chart).not.toBeNull();
+    hold.match = (u) => u.includes("range=30d");
+    fireEvent.click(screen.getByRole("button", { name: "30d" }));
+    expect(ov).toHaveAttribute("aria-busy", "true");
+    expect(v).toHaveAttribute("aria-busy", "true");
+    expect(within(v).getByText("198.51.100.7")).toBeInTheDocument();
+    expect(
+      within(v).getByRole("button", { name: "Show all →" }),
+    ).toBeDisabled();
+    expect(panel("Pages")).toHaveAttribute("aria-busy", "true");
+    await hold.release();
+    await waitFor(() => expect(ov).not.toHaveAttribute("aria-busy"));
+    expect(v).not.toHaveAttribute("aria-busy");
+    // The same chart, redrawn in place: its entrance does not run again.
+    expect(mainChart()).toBe(chart);
+  });
+
+  it("never pages the log with another filter's cursor", async () => {
+    startHeld("/dashboard/log?site=lens.example.com");
+    const log = await screen.findByRole("region", { name: "Log" });
+    await within(log).findByText("25 of 70 events in this range");
+    fireEvent.click(
+      within(log).getByRole("button", { name: "Load earlier →" }),
+    );
+    await within(log).findByText("50 of 70 events in this range");
+    hold.match = (u) => u.startsWith("/api/dash/log");
+    fireEvent.change(within(log).getByRole("combobox", { name: "Kind" }), {
+      target: { value: "request" },
+    });
+    expect(log).toHaveAttribute("aria-busy", "true");
+    const earlier = within(log).getByRole("button", { name: /Load earlier/ });
+    expect(earlier).toBeDisabled();
+    fireEvent.click(earlier);
+    await hold.release();
+    await waitFor(() => expect(log).not.toHaveAttribute("aria-busy"));
+    expect(
+      calls.filter((c) => c.includes("kind=request") && c.includes("cursor=")),
+    ).toEqual([]);
+  });
+
+  it("drops a page that arrives for a query already left", async () => {
+    startHeld("/dashboard/log?site=lens.example.com");
+    const log = await screen.findByRole("region", { name: "Log" });
+    await within(log).findByText("25 of 70 events in this range");
+    hold.match = (u) => u.startsWith("/api/dash/log");
+    // The 7 d query's second page is asked for, then the range changes.
+    fireEvent.click(
+      within(log).getByRole("button", { name: "Load earlier →" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "30d" }));
+    const old = (u: string) => u.includes("range=7d");
+    await hold.release((u) => !old(u));
+    await within(log).findByText("25 of 70 events in this range");
+    expect(log).not.toHaveAttribute("aria-busy");
+    // Its own paging is not stuck behind the old request.
+    const earlier = within(log).getByRole("button", { name: "Load earlier →" });
+    expect(earlier).toBeEnabled();
+    fireEvent.click(earlier);
+    await hold.release((u) => !old(u));
+    await within(log).findByText("50 of 70 events in this range");
+    // The old query's page lands last and changes nothing.
+    await hold.release();
+    expect(
+      within(log).getByText("50 of 70 events in this range"),
+    ).toBeInTheDocument();
+    expect(within(log).getAllByRole("row")).toHaveLength(51);
+  });
+
+  it("never pages a visitor's trail with another visitor's cursor", async () => {
+    startHeld("/dashboard/");
+    const v = await screen.findByRole("region", {
+      name: "Visitors by address",
+    });
+    fireEvent.click(await within(v).findByText("203.0.113.42"));
+    const d = panel("Visitor");
+    await within(d).findByText("Ordinary use");
+    expect(
+      within(d).getByRole("button", { name: "Load earlier →" }),
+    ).toBeEnabled();
+    hold.match = (u) => u.startsWith("/api/dash/visitor?");
+    fireEvent.click(within(v).getByText("198.51.100.7"));
+    expect(d).toHaveAttribute("aria-busy", "true");
+    const earlier = within(d).getByRole("button", { name: "Load earlier →" });
+    expect(earlier).toBeDisabled();
+    fireEvent.click(earlier);
+    await hold.release();
+    expect(
+      calls.filter(
+        (c) =>
+          c.startsWith("/api/dash/visitor?") &&
+          c.includes("198.51.100.7") &&
+          c.includes("cursor="),
+      ),
+    ).toEqual([]);
   });
 });
 

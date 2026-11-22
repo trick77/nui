@@ -22,7 +22,7 @@ import {
 export function WhoIsAsking({ classes }: { classes: Loaded<Classes> }) {
   const c = classes.data;
   return (
-    <Panel label="Who is asking" className="card">
+    <Panel label="Who is asking" className="card" busy={classes.loading}>
       <CardHead
         title="Who is asking"
         sources={["server"]}
@@ -166,8 +166,10 @@ function TrafficPanels({
   open: boolean;
 }) {
   const { scope, openLog } = useDash();
-  const st = useApi<Status>(scopeKey("status", scope), (s) =>
-    api.status(scope, s),
+  const st = useApi<Status>(
+    scopeKey("status", scope),
+    (s) => api.status(scope, s),
+    scope.site,
   );
   const c = classes.data;
   return (
@@ -179,7 +181,11 @@ function TrafficPanels({
         sources={["server"]}
       />
       <div className="grid grid-cols-1 gap-3 min-[1000px]:grid-cols-2">
-        <Panel label="Requests by class" className="card">
+        <Panel
+          label="Requests by class"
+          className="card"
+          busy={classes.loading}
+        >
           <CardHead
             title="Requests by class"
             right={
@@ -227,6 +233,7 @@ function TrafficPanels({
           title="Refused requests by address"
           head={<span>not answered 2xx or 3xx</span>}
           tabs={[{ key: "refused", label: "Refused", dim: "refused" }]}
+          busy={st.loading}
           above={
             st.error ? (
               <ErrorBox error={st.error} />

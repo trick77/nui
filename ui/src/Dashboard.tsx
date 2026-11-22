@@ -112,6 +112,7 @@ export default function Dashboard({ me }: { me: Me }) {
   const ov = useApi<Overview>(
     scope ? `overview|${JSON.stringify(scope)}` : null,
     (s) => api.overview(scope!, s),
+    scope?.site,
   );
   // Who is asking and Traffic share one answer; it ignores the audience.
   const classes = useApi<Classes>(
@@ -119,6 +120,7 @@ export default function Dashboard({ me }: { me: Me }) {
       ? `classes|${scope.site}|${scope.range}|${scope.cmp}`
       : null,
     (s) => api.classes(scope!, s),
+    scope?.site,
   );
 
   const openLog = useCallback(
@@ -257,6 +259,7 @@ export default function Dashboard({ me }: { me: Me }) {
               sites={list ?? []}
               view={view}
               overview={ov.data}
+              busy={ov.loading}
               onSite={(s) => set({ site: s })}
               onRange={(r) => set({ range: r })}
               onAud={(a) => {
@@ -272,6 +275,7 @@ export default function Dashboard({ me }: { me: Me }) {
                 <OverviewSection
                   data={ov.data}
                   error={ov.error}
+                  busy={ov.loading}
                   aud={view.aud}
                 />
                 <div className="mt-3 grid grid-cols-1 gap-3 min-[1000px]:grid-cols-2">
@@ -301,6 +305,7 @@ function FilterBar({
   sites,
   view,
   overview,
+  busy,
   onSite,
   onRange,
   onAud,
@@ -309,6 +314,7 @@ function FilterBar({
   sites: SiteInfo[];
   view: View;
   overview: Overview | null;
+  busy: boolean;
   onSite: (s: string) => void;
   onRange: (r: Range) => void;
   onAud: (a: Audience) => void;
@@ -358,7 +364,10 @@ function FilterBar({
         />
       )}
       {p && dash && (
-        <span className="text-[12.5px] text-muted">
+        <span
+          className={`text-[12.5px] text-muted ${busy ? "busy" : ""}`}
+          aria-busy={busy || undefined}
+        >
           one point per <span className="text-ink-dim">{p.bucket}</span>
           {view.cmp === "off" ? (
             " · no comparison"

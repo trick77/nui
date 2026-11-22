@@ -46,6 +46,7 @@ export function useList(
   return useApi<List>(
     enabled ? scopeKey("list", { scope, dim, sort, ...opts }) : null,
     (s) => api.list(scope, { dim, sort, ...opts }, s),
+    scope.site,
   );
 }
 
@@ -60,9 +61,12 @@ export function TopList({
   onRow,
   expand,
   above,
+  busy = false,
   empty,
   className = "",
 }: {
+  // Something above the list (busy) is loading too.
+  busy?: boolean;
   id?: string;
   title: string;
   sources?: ("browser" | "server")[];
@@ -86,7 +90,12 @@ export function TopList({
   const l = useList(t.dim, sort, { sub: t.sub });
   const compare = scope.cmp !== "off";
   return (
-    <Panel id={id} label={title} className={`card ${className}`}>
+    <Panel
+      id={id}
+      label={title}
+      className={`card ${className}`}
+      busy={busy || l.loading}
+    >
       <CardHead
         title={title}
         sources={sources}
@@ -164,6 +173,7 @@ export function TopList({
             <button
               type="button"
               className="link mt-2 ml-2.5"
+              disabled={l.loading}
               onClick={() => setAll(true)}
             >
               Show all {num(l.data.total)} →
@@ -330,7 +340,8 @@ function Within({
         </td>
       </tr>
     );
-  if (!l.data)
+  // Rows of another template or scope are never shown under this one.
+  if (!l.data || l.loading)
     return (
       <tr>
         <td colSpan={cols.length}>
@@ -460,7 +471,10 @@ function AllRows({
         ) : !l.data.rows.length ? (
           <Empty>Nothing matches “{dq}”.</Empty>
         ) : (
-          <>
+          <div
+            className={l.loading ? "busy" : ""}
+            aria-busy={l.loading || undefined}
+          >
             <RowsTable
               list={l.data}
               cols={tableCols}
@@ -472,7 +486,7 @@ function AllRows({
               {l.data.total > l.data.rows.length &&
                 ` · the first ${num(ALL_LIMIT)} are shown, search to narrow`}
             </p>
-          </>
+          </div>
         )}
       </div>
     </div>

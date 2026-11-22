@@ -78,21 +78,26 @@ export function ClassPill({ cls }: { cls: ClassKey }) {
   );
 }
 
+// busy: a newer answer is on its way and what shows is the previous one,
+// dimmed; the content stays mounted, so nothing re-animates.
 export function Panel({
   children,
   className = "",
   id,
   label,
+  busy = false,
 }: {
   children: ReactNode;
   className?: string;
   id?: string;
   label?: string;
+  busy?: boolean;
 }) {
   return (
     <section
       id={id}
       aria-label={label}
+      aria-busy={busy || undefined}
       className={`panel scroll-mt-[70px] ${className}`}
     >
       {children}

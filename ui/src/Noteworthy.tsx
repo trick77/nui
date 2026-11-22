@@ -26,12 +26,19 @@ const KIND: Record<FindingKind, { label: string; color: string }> = {
 export function Noteworthy() {
   const { scope, goPanel } = useDash();
   const { site, range, cmp } = scope;
-  const nw = useApi<NW>(scopeKey("noteworthy", { site, range, cmp }), (s) =>
-    api.noteworthy(scope, s),
+  const nw = useApi<NW>(
+    scopeKey("noteworthy", { site, range, cmp }),
+    (s) => api.noteworthy(scope, s),
+    site,
   );
   const { tip, show, hide } = useTip();
   return (
-    <Panel id="noteworthy" label="Noteworthy" className="card">
+    <Panel
+      id="noteworthy"
+      label="Noteworthy"
+      className="card"
+      busy={nw.loading}
+    >
       <CardHead
         title="Noteworthy"
         right={

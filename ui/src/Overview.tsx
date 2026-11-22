@@ -41,10 +41,12 @@ function prevText(t: Tile, prevLabel: string): string {
 export function OverviewSection({
   data,
   error,
+  busy,
   aud,
 }: {
   data: Overview | null;
   error: Error | null;
+  busy: boolean;
   aud: Audience;
 }) {
   const [metric, setMetric] = useState<TileKey>("visitors");
@@ -60,7 +62,7 @@ export function OverviewSection({
         lead={AUD_NOTE[aud]}
         sources={["browser", "server"]}
       />
-      <Panel className="hero" label="Overview">
+      <Panel className="hero" label="Overview" busy={busy}>
         {error ? (
           <div className="p-4">
             <ErrorBox error={error} />

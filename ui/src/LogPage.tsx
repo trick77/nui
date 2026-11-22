@@ -121,9 +121,16 @@ export function LogPage({
   const { scope, feed, both } = useDash();
   const { site, range } = scope;
   const key = scopeKey("log", { site, range, filter });
-  const page = useApi<Log>(key, (s) => api.log(scope, filter, undefined, s));
+  const page = useApi<Log>(
+    key,
+    (s) => api.log(scope, filter, undefined, s),
+    site,
+  );
   const more = useMore<LogRow>(key);
   const rows = [...(page.data?.rows ?? []), ...more.items];
+  // While a new filter's first page loads, the rows and the cursor shown
+  // are the previous filter's: no paging from them.
+  const fresh = !page.loading;
   const next = more.next ?? page.data?.next ?? "";
   // Clearing starts the text fields afresh, dropping what is still pending.
   const [cleared, setCleared] = useState(0);
@@ -147,7 +154,7 @@ export function LogPage({
         lead="Single events, newest first. A busy site fills this in seconds, so it is meant to be filtered."
         sources={["browser", "server"]}
       />
-      <Panel label="Log" className="card">
+      <Panel label="Log" className="card" busy={!fresh}>
         <CardHead title="Events">
           <div className="flex flex-wrap items-center gap-2.5">
             <TextFilter
@@ -271,8 +278,9 @@ export function LogPage({
             <button
               type="button"
               className="link"
-              disabled={more.busy}
+              disabled={more.busy || !fresh}
               onClick={() =>
+                fresh &&
                 more.load(() =>
                   api
                     .log(scope, filter, next)

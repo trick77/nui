@@ -825,6 +825,14 @@ table.t tbody tr.click:focus-within {
   animation: chart-fade 700ms ease-out 350ms both;
 }
 
+/* A panel showing its previous answer while the next one loads. The full
+   list's overlay sits inside its panel and keeps its own state. */
+.panel[aria-busy="true"] > :not(.overlay),
+.busy {
+  opacity: 0.5;
+  transition: opacity 150ms;
+}
+
 @keyframes skeleton-fade {
   50% {
     opacity: 0.45;
