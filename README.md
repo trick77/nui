@@ -21,7 +21,7 @@ crawlers and uptime probes to scanners and scripts walking your API.
 - **One container.** A single image behind your reverse proxy, with its database inside and sign-in by OIDC or an
   admin token: `docker compose up -d`.
 
-![Visitors by address, each with what it does, and one opened: a script probing a login for credentials](docs/img/visitor.png)
+![Visitors by address, each with what it does, and one opened: a scanner probing for exposed files](docs/img/visitor.png)
 
 Both screenshots show simulated traffic.
 
