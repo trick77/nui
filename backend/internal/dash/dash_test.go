@@ -596,9 +596,24 @@ func TestReadingValueVariety(t *testing.T) {
 		}
 		return ids
 	}
-	walk, same := evidence("192.0.2.60"), evidence("192.0.2.61")
+	// A person's browser: engagements on varying pages, its top action no request. No value statement.
+	var person []store.Event
+	for i := range 10 {
+		person = append(person, store.Event{SiteID: site.ID, TS: r.end.UnixMilli() - int64(i)*1000, Source: "browser",
+			Kind: "engagement", IP: "192.0.2.62", IPKey: "192.0.2.62", UA: "Mozilla/5.0", Template: "/AS:n",
+			Path: fmt.Sprintf("/AS%d", i)})
+	}
+	if err := r.s.DB.InsertEvents(t.Context(), person); err != nil {
+		t.Fatal(err)
+	}
+	walk, same, browser := evidence("192.0.2.60"), evidence("192.0.2.61"), evidence("192.0.2.62")
 	if !slices.Contains(walk, "values:walk") || !slices.Contains(same, "values:same") {
 		t.Errorf("walker %v, repeater %v", walk, same)
+	}
+	for _, id := range browser {
+		if strings.HasPrefix(id, "values:") {
+			t.Errorf("a browser's engagements got %s", id)
+		}
 	}
 	if model.readIns[0].Signature == "" {
 		t.Error("no signature")

@@ -558,7 +558,7 @@ func resolve(rd insight.Reading, facts map[string]string) ([]string, bool) {
 const actorSpan = 31 * 24 * time.Hour
 
 // actions counts an actor's events per action ("GET /x → 401", "view /a") over the whole span, and names each
-// action's template.
+// server request action's template.
 func (s *Server) actions(ctx context.Context, site int64, key string, from, to time.Time) (map[string]int64, map[string]string, error) {
 	out, tmpls := map[string]int64{}, map[string]string{}
 	for _, win := range windows(ms(from), ms(to), actorSpan) {
@@ -578,7 +578,9 @@ func (s *Server) actions(ctx context.Context, site int64, key string, from, to t
 			}
 			what, _ := describe(source, kind, name, tmpl, status)
 			out[what] += n
-			tmpls[what] = tmpl
+			if source == "server" { // a request's action is its template and status: one template each
+				tmpls[what] = tmpl
+			}
 		}
 		_ = rows.Close()
 		if err := rows.Err(); err != nil {
@@ -595,7 +597,8 @@ const valuesSample = 500
 // script repeats a request or walks a range is not in the template the model sees. Zero when there is none.
 type valueFact struct{ id, text string }
 
-// variety weighs the raw paths behind the actor's most frequent action within the span (its newest valuesSample):
+// variety weighs the raw paths behind the actor's most frequent action, when that is a server request, within the
+// span (its newest valuesSample):
 // all one value, mostly distinct and in sequence (a range walked), mostly distinct in no order, a few repeated, or a
 // mix. A template without a variable part, or too few requests, says nothing.
 func (s *Server) variety(ctx context.Context, site int64, key string, from, to time.Time, counts map[string]int64,
@@ -604,12 +607,16 @@ func (s *Server) variety(ctx context.Context, site int64, key string, from, to t
 	if len(whats) == 0 || counts[whats[0]] < 3 {
 		return valueFact{}, nil
 	}
-	tmpl := tmpls[whats[0]]
+	tmpl, ok := tmpls[whats[0]]
+	if !ok {
+		return valueFact{}, nil // the top action is no server request: no requested values to weigh
+	}
 	if span := to.Add(-actorSpan); span.After(from) {
 		from = span // the newest month at most: one statement on the actor index
 	}
 	rows, err := s.query(ctx, `SELECT path FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?
-		AND template = ? ORDER BY ts DESC LIMIT `+strconv.Itoa(valuesSample), site, key, ms(from), ms(to), tmpl)
+		AND source = 'server' AND template = ? ORDER BY ts DESC LIMIT `+strconv.Itoa(valuesSample), site, key,
+		ms(from), ms(to), tmpl)
 	if err != nil {
 		return valueFact{}, err
 	}
