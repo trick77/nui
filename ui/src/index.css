@@ -166,3 +166,666 @@ body {
     background-color: #4b4b4a;
   }
 }
+
+/* ---- The dashboard's furniture, after the approved mock (v3). ---- */
+
+/* Usable from a 768px window: its scrollbar takes some of that. */
+body {
+  min-width: 740px;
+  background:
+    radial-gradient(
+      1100px 520px at 12% -8%,
+      rgba(198, 97, 63, 0.11),
+      transparent 62%
+    ),
+    radial-gradient(
+      900px 500px at 96% 0%,
+      rgba(57, 135, 229, 0.07),
+      transparent 60%
+    ),
+    var(--color-bg);
+  background-attachment: fixed;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 56px;
+  padding: 0 24px;
+  @media (max-width: 1099px) {
+    gap: 10px;
+    padding: 0 16px;
+  }
+  background: rgba(27, 27, 26, 0.82);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--color-border);
+}
+/* Centred on the x-height band of the menu labels, not on the line box:
+   with line-height 1 the serif's lowercase sits half a pixel low against
+   the 13.5px sans labels beside it (measured in the mock). */
+.wordmark {
+  position: relative;
+  top: -0.5px;
+  font: 500 21px/1 var(--font-serif);
+  color: var(--color-wordmark);
+  letter-spacing: 0.01em;
+}
+.topbar nav {
+  display: flex;
+  gap: 2px;
+}
+.topbar nav a {
+  color: var(--color-muted);
+  text-decoration: none;
+  font-size: 13.5px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  white-space: nowrap;
+  @media (max-width: 1099px) {
+    padding: 5px 7px;
+  }
+}
+.topbar nav a:hover,
+.topbar nav a[aria-current="page"] {
+  background: var(--color-active);
+  color: var(--color-ink);
+}
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-online);
+  display: inline-block;
+  box-shadow: 0 0 0 0 rgba(90, 160, 106, 0.6);
+  animation: pulse 2s ease-out infinite;
+}
+@keyframes pulse {
+  to {
+    box-shadow: 0 0 0 9px rgba(90, 160, 106, 0);
+  }
+}
+
+.panel {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #20201e 0, var(--color-panel) 110px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    0 24px 60px -30px rgba(0, 0, 0, 0.7);
+}
+.card {
+  padding: 16px 18px 14px;
+}
+.hero {
+  overflow: hidden;
+  background:
+    radial-gradient(
+      820px 300px at 0 0,
+      rgba(57, 135, 229, 0.1),
+      transparent 70%
+    ),
+    linear-gradient(180deg, #20201e 0, var(--color-panel) 140px);
+}
+
+.seg {
+  display: inline-flex;
+  background: var(--color-bg);
+  border-radius: 8px;
+  padding: 2px;
+}
+.seg button {
+  all: unset;
+  cursor: pointer;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.seg button:hover {
+  color: var(--color-ink);
+}
+.seg button:focus-visible,
+.tabs button:focus-visible,
+.tile:focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 1px;
+}
+.seg button[aria-pressed="true"] {
+  background: var(--color-active);
+  color: var(--color-ink);
+  box-shadow: inset 0 0 0 1px var(--color-elevated-border);
+}
+.select,
+.field {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font: 14px var(--font-sans);
+}
+.field {
+  padding: 5px 10px;
+  font-size: 13px;
+}
+
+.tabs {
+  display: flex;
+  gap: 14px;
+  font-size: 12.5px;
+  color: var(--color-muted);
+}
+.tabs button {
+  all: unset;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tabs button:hover {
+  color: var(--color-ink);
+}
+.tabs button[aria-pressed="true"] {
+  color: var(--color-ink);
+  box-shadow: 0 2px 0 var(--color-accent);
+}
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+.src {
+  font: 10px var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 99px;
+  border: 1px solid var(--color-border);
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+.src.srv {
+  border-color: rgba(214, 161, 90, 0.45);
+  color: var(--color-ochre);
+}
+
+/* Text a model wrote: marked with a small glyph, never a number. */
+.gen::before {
+  content: "✦";
+  color: var(--color-accent-strong);
+  font-size: 0.8em;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  border-bottom: 1px solid var(--color-border);
+}
+.tile {
+  all: unset;
+  cursor: pointer;
+  display: block;
+  padding: 16px 18px 14px;
+  box-shadow: inset -1px 0 0 var(--color-border-soft);
+}
+.tile:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+.tile[aria-pressed="true"] {
+  background: linear-gradient(
+    180deg,
+    rgba(57, 135, 229, 0.16),
+    rgba(57, 135, 229, 0) 85%
+  );
+  box-shadow:
+    inset 0 2px 0 var(--color-s1),
+    inset -1px 0 0 var(--color-border-soft);
+}
+.tile-value {
+  font: 500 30px var(--font-serif);
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  margin-top: 4px;
+}
+
+.delta {
+  font: 500 13px var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.delta.good {
+  color: var(--color-online);
+}
+.delta.bad {
+  color: var(--color-danger-ink);
+}
+.delta.flat {
+  color: var(--color-muted);
+}
+.delta.new {
+  color: var(--color-ochre);
+}
+
+.sw {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+.sw.line {
+  height: 2px;
+  width: 14px;
+  border-radius: 0;
+  vertical-align: 3px;
+}
+.sw.dash {
+  height: 0;
+  width: 14px;
+  border-top: 2px dashed var(--color-ink-dim);
+  border-radius: 0;
+  vertical-align: 3px;
+}
+
+svg text {
+  font: 10.5px var(--font-mono);
+  fill: var(--color-muted);
+}
+
+table.t {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+table.t th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+table.t td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border-soft);
+  vertical-align: top;
+}
+table.t tr:last-child td {
+  border-bottom: 0;
+}
+table.t .n {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+table.t tbody tr.click {
+  cursor: pointer;
+}
+table.t tbody tr.click:hover,
+table.t tbody tr.sel {
+  background: var(--color-active);
+}
+table.t th button {
+  all: unset;
+  cursor: pointer;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 1px 9px;
+  border-radius: 99px;
+  border: 1px solid var(--color-border);
+  color: var(--color-ink-dim);
+  white-space: nowrap;
+}
+.pill.suspicious {
+  border-color: rgba(236, 126, 126, 0.5);
+}
+.pill i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* Ranked rows with a bar behind the label. */
+.bl {
+  display: grid;
+  gap: 4px;
+}
+.bl .r {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  overflow: hidden;
+  font-size: 13.5px;
+}
+.bl .r.click {
+  cursor: pointer;
+}
+.bl .r.click:hover {
+  background: var(--color-active);
+}
+.bl .r > i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 7px;
+  transform-origin: left;
+  animation: grow-x 560ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.bl .r > span {
+  position: relative;
+  min-width: 0;
+}
+.bl .r .val {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-ink);
+}
+.bl .r .val small {
+  color: var(--color-muted);
+  font-size: 12px;
+  margin-left: 6px;
+}
+.bl .r .val b {
+  position: relative;
+  display: inline-block;
+  min-width: 66px;
+  margin-left: 8px;
+  text-align: right;
+}
+@keyframes grow-x {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+.strip {
+  display: flex;
+  gap: 2px;
+  height: 16px;
+  margin: 2px 0 10px;
+}
+.strip i {
+  display: block;
+  min-width: 2px;
+  border-radius: 3px;
+  transform-origin: left;
+  animation: grow-x 600ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.strip i:first-child {
+  border-radius: 8px 3px 3px 8px;
+}
+.strip i:last-child {
+  border-radius: 3px 8px 8px 3px;
+}
+.strip i:only-child {
+  border-radius: 8px;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12.5px;
+  color: var(--color-ink-dim);
+}
+.legend b {
+  font-weight: 500;
+  color: var(--color-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.hours {
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  gap: 2px;
+  margin-top: 6px;
+}
+.hours i {
+  height: 16px;
+  border-radius: 2px;
+  animation: chart-fade 500ms ease-out both;
+}
+
+.trail {
+  position: relative;
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+  font-size: 13.5px;
+}
+.trail::before {
+  content: "";
+  position: absolute;
+  left: 3.5px;
+  top: 9px;
+  bottom: 9px;
+  width: 1px;
+  background: var(--color-border);
+}
+.trail li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 84px 120px 1fr;
+  gap: 12px;
+  align-items: baseline;
+  padding-left: 20px;
+}
+.trail li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--kc, var(--color-other));
+  box-shadow: 0 0 0 3px var(--color-panel);
+}
+
+/* Noteworthy: one line per finding, the kind as the coloured edge. */
+.nw {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.nw li button {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 84px 84px 1fr 18px;
+  align-items: baseline;
+  gap: 10px;
+  padding: 11px 14px 11px 16px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.028);
+  box-shadow: inset 3px 0 0 var(--c);
+}
+.nw li button:hover,
+.nw li button:focus-visible {
+  background: var(--color-active);
+}
+.nw b {
+  font: 500 22px/1 var(--font-serif);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--color-ink);
+  white-space: nowrap;
+}
+.nw small {
+  font-size: 12px;
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nw .say {
+  font-size: 14.5px;
+  color: var(--color-ink-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nw em {
+  font-style: normal;
+  color: var(--color-faint);
+}
+.brief {
+  margin: 2px 0 14px;
+  font: 500 21px/1.3 var(--font-serif);
+  color: var(--color-ink);
+}
+
+.tip {
+  position: fixed;
+  z-index: 30;
+  pointer-events: none;
+  background: var(--color-elevated);
+  border: 1px solid var(--color-elevated-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-menu);
+  padding: 8px 11px;
+  font-size: 12.5px;
+  min-width: 150px;
+  max-width: 360px;
+}
+.tip h4 {
+  margin: 0 0 4px;
+  font: 500 12.5px var(--font-sans);
+  color: var(--color-elevated-ink);
+}
+.tip .tr {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  color: var(--color-muted);
+}
+.tip .tr b {
+  font: 12px var(--font-mono);
+  color: var(--color-elevated-ink);
+  font-weight: 400;
+}
+
+/* In the components layer, so a utility on a link (font-mono) wins. */
+@layer components {
+  .link {
+    all: unset;
+    cursor: pointer;
+    font-size: 12.5px;
+    color: var(--color-accent-strong);
+    white-space: nowrap;
+  }
+  .link:hover,
+  .link:focus-visible {
+    text-decoration: underline;
+  }
+  .link:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+}
+
+.map path {
+  stroke: var(--color-panel);
+  stroke-width: 0.6;
+}
+.map path:hover {
+  stroke: var(--color-ink-dim);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 60px 24px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+/* Chart entrance, as in ../noergler: bars grow from the floor, lines draw
+   left to right, fills fade in after. CSS on mount only: a refetch keeps
+   the elements (stable keys) and changes their attributes, so nothing
+   replays on a filter click. */
+@keyframes chart-grow {
+  from {
+    transform: scaleY(0);
+  }
+}
+@keyframes chart-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+@keyframes chart-fade {
+  from {
+    opacity: 0;
+  }
+}
+.chart-bar {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: chart-grow 520ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+/* Dash 1, gap 2 on a pathLength of 1: at offset 1 the whole line is gap. */
+.chart-line {
+  stroke-dasharray: 1 2;
+  animation: chart-draw 800ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+.chart-fill {
+  animation: chart-fade 700ms ease-out 350ms both;
+}
+
+@keyframes skeleton-fade {
+  50% {
+    opacity: 0.45;
+  }
+}
+.skeleton {
+  background: var(--color-active);
+  border-radius: 10px;
+  animation: skeleton-fade 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-bar,
+  .chart-line,
+  .chart-fill,
+  .bl .r > i,
+  .strip i,
+  .hours i,
+  .live-dot,
+  .skeleton {
+    animation: none;
+  }
+}

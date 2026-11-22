@@ -67,6 +67,51 @@ export function useWidth(
   return w;
 }
 
+// Pages after the first, appended by "Load more" or "Load earlier"; they
+// belong to one query (key) and are dropped when it changes.
+export function useMore<T>(key: string) {
+  const [more, setMore] = useState<{ key: string; items: T[]; next: string }>({
+    key: "",
+    items: [],
+    next: "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<{ key: string; e: Error } | null>(null);
+  // Forget the pages when the query changes, also on a way back to it.
+  const [seen, setSeen] = useState(key);
+  if (seen !== key) {
+    setSeen(key);
+    setMore({ key: "", items: [], next: "" });
+  }
+  const mine = more.key === key;
+  const load = (fetchPage: () => Promise<{ items: T[]; next: string }>) => {
+    setBusy(true);
+    setError(null);
+    fetchPage().then(
+      (p) => {
+        setMore((m) => ({
+          key,
+          items: [...(m.key === key ? m.items : []), ...p.items],
+          next: p.next,
+        }));
+        setBusy(false);
+      },
+      (e: Error) => {
+        setError({ key, e });
+        setBusy(false);
+      },
+    );
+  };
+  return {
+    items: mine ? more.items : [],
+    // null: nothing loaded beyond the first page, its own next stands.
+    next: mine ? more.next : null,
+    busy,
+    error: error?.key === key ? error.e : null,
+    load,
+  };
+}
+
 // A value that follows its input after a pause, for search boxes.
 export function useDebounced<T>(v: T, ms: number): T {
   const [d, setD] = useState(v);
