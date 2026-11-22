@@ -587,6 +587,57 @@ func TestBrowser_StoredBytesPerToken(t *testing.T) {
 	}
 }
 
+// The largest event the tracker sends may come first in its batch, under the largest context and every header a
+// browser could send: the event's own bound leaves out what the batch stores once, and the headers have a bound of
+// their own, so the tracker can budget a batch it cannot see all of.
+func TestBrowser_FirstRowBounds(t *testing.T) {
+	r := newRig(t, 0, true)
+	var langs []string
+	for range 7 {
+		langs = append(langs, `"`+strings.Repeat("l", 500)+`"`)
+	}
+	var p []string
+	for i := range 7 {
+		p = append(p, fmt.Sprintf(`"k%d":"%s"`, i, strings.Repeat(" ", 170)))
+	}
+	page := `https://` + domain + `/` + strings.Repeat("p", 2000)
+	body := `{"v":1,"site":"` + domain + `","vid":"` + strings.Repeat("a", 32) + `","sid":"` + strings.Repeat("b", 32) +
+		`","ctx":{"url":"` + page + `","title":"t","langs":[` + strings.Join(langs, ",") + `]},"events":[` +
+		`{"k":"custom","n":"` + strings.Repeat("n", 128) + `","url":"` + page + `x","title":"` +
+		strings.Repeat(`\u0001`, 500) + `","p":{` + strings.Join(p, ",") + `}},{"k":"engagement","p":{}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/in", strings.NewReader(body))
+	req.Header.Set("X-Forwarded-For", "198.51.100.40")
+	req.Header.Set("User-Agent", strings.Repeat("u", 600))
+	for _, name := range browserHeaders {
+		req.Header.Set(name, strings.Repeat(`"`, 300))
+	}
+	w := httptest.NewRecorder()
+	r.c.HandleBrowser(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("largest first event: %d", w.Code)
+	}
+	waitEvents(t, r.st, 2)
+	sizes, props := storedRows(t, r.st)
+	var stored struct {
+		Ctx json.RawMessage   `json:"ctx"`
+		Hdr map[string]string `json:"hdr"`
+	}
+	if err := json.Unmarshal([]byte(props[0]), &stored); err != nil {
+		t.Fatal(err)
+	}
+	hdr := encodeJSON(stored.Hdr)
+	if len(hdr) > maxHeaders || len(stored.Hdr) == 0 || len(stored.Hdr) == len(browserHeaders) {
+		t.Errorf("headers stored %d bytes, %d of them", len(hdr), len(stored.Hdr))
+	}
+	if _, ok := stored.Hdr["accept-language"]; !ok {
+		t.Error("the first header in the list is kept first")
+	}
+	// The row holds more than an event's bound: its own part stays within it.
+	if own := sizes[0] - len(stored.Ctx) - len(hdr); sizes[0] <= maxEventBytes || own > maxEventBytes {
+		t.Errorf("first row %d bytes, its own %d", sizes[0], own)
+	}
+}
+
 // readFlag is a body that records whether anyone read it.
 type readFlag struct {
 	r    io.Reader
@@ -849,6 +900,11 @@ func TestEventTimeAndNames(t *testing.T) {
 	}
 	if eventName(browserEvent{K: "outbound_click"}, map[string]any{"url": "mailto"}) != "mailto" {
 		t.Error("hostless outbound")
+	}
+	// A name is at most 200 bytes, whatever host a link names: the tracker budgets a row by it.
+	long := map[string]any{"url": "https://" + strings.Repeat("h", 1000) + ".example.org/"}
+	if n := eventName(browserEvent{K: "outbound_click"}, long); len(n) != 200 {
+		t.Errorf("long host: %d bytes", len(n))
 	}
 	if hostOf("%zz") != "" || truncate("abc", 2) != "ab" {
 		t.Error("helpers")

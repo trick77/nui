@@ -38,11 +38,15 @@ const (
 	// maxClientSkew is how far the client's own clock may place an event before the batch was received: a batch is
 	// sent within seconds of its events, a hidden tab's flush within minutes.
 	maxClientSkew = 30 * time.Minute
-	// maxCtx bounds the context as stored (encoded), maxHeader each stored browser header.
-	maxCtx    = 4 << 10
-	maxHeader = 256
+	// maxCtx bounds the context as stored (encoded), maxHeader each stored browser header, maxHeaders all of them
+	// (encoded): the tracker budgets a batch by these, a header it cannot see included.
+	maxCtx     = 4 << 10
+	maxHeader  = 256
+	maxHeaders = 2 << 10
 	// maxEventBytes and maxBatchBytes bound what one event and one batch store (store.Event.Size), whatever the
-	// body: the page URL, user agent and ids repeat on every event, so a small body can name a large write.
+	// body: the page URL, user agent and ids repeat on every event, so a small body can name a large write. An
+	// event's bound leaves out the context and headers its batch stores once, on the first row: they have bounds
+	// of their own, and the first row would otherwise take less of an event than every other.
 	maxEventBytes = 16 << 10
 	maxBatchBytes = 2 * MaxBrowserBody
 	// StoreUnit is the stored bytes one token pays for: a batch costs an event per event, or per StoreUnit stored
@@ -351,9 +355,15 @@ func (c *Collector) browserEvents(site *sites.Site, b *browserBatch, r *http.Req
 		visitor = anonVisitor(ipKey, ua)
 	}
 	hdr := map[string]string{}
+	hdrLen := len("{}")
 	for _, name := range browserHeaders {
 		if vals := r.Header.Values(name); len(vals) > 0 {
-			hdr[name] = truncate(strings.Join(vals, ", "), maxHeader)
+			v := truncate(strings.Join(vals, ", "), maxHeader)
+			// Kept in the list's order while the encoded whole stays within its bound.
+			if n := len(encodeJSON(name)) + len(encodeJSON(v)) + len(":,"); hdrLen+n <= maxHeaders {
+				hdr[name] = v
+				hdrLen += n
+			}
 		}
 	}
 	refHost := hostOf(ref)
@@ -409,13 +419,6 @@ func (c *Collector) browserEvents(site *sites.Site, b *browserBatch, r *http.Req
 		if e.Title != "" {
 			props["title"] = e.Title
 		}
-		// The context and the browser headers once per batch: they are the same for every event in it.
-		if i == 0 {
-			props["ctx"] = json.RawMessage(ctxJSON)
-			if len(hdr) > 0 {
-				props["hdr"] = hdr
-			}
-		}
 		ev := store.Event{
 			SiteID: site.ID, TS: eventTime(recv, b.Sent, e.T), Source: "browser", Kind: e.K, Name: eventName(e, p),
 			Visitor: visitor, SID: b.SID, IP: addr.Unmap().String(), IPKey: ipKey, UA: ua, Path: path,
@@ -426,9 +429,19 @@ func (c *Collector) browserEvents(site *sites.Site, b *browserBatch, r *http.Req
 			// paths are not, since an API query string can carry a key.
 			ev.Ref, ev.RefHost = ref, refHost
 		}
-		size := ev.Size()
-		stored += size
-		if size > maxEventBytes || stored > maxBatchBytes {
+		if ev.Size() > maxEventBytes {
+			return nil, 0, errTooLarge
+		}
+		// The context and the browser headers once per batch: they are the same for every event in it.
+		if i == 0 {
+			props["ctx"] = json.RawMessage(ctxJSON)
+			if len(hdr) > 0 {
+				props["hdr"] = hdr
+			}
+			ev.Props = encodeJSON(props)
+		}
+		stored += ev.Size()
+		if stored > maxBatchBytes {
 			return nil, 0, errTooLarge
 		}
 		out = append(out, ev)
@@ -455,7 +468,7 @@ func eventName(e browserEvent, p map[string]any) string {
 		return e.N
 	case "outbound_click", "download":
 		if h := hostOf(str("url")); h != "" {
-			return h
+			return truncate(h, 200)
 		}
 		return truncate(str("url"), 200)
 	case "js_error":
