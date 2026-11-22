@@ -228,7 +228,7 @@ func (s *Server) handleVisitors(w http.ResponseWriter, r *http.Request, q *query
 		span.From, span.To = after.From, after.To
 	}
 	ctx := r.Context()
-	needle := strings.ToLower(strings.TrimSpace(v.Get("q")))
+	needle := foldSpaces(strings.ToLower(v.Get("q")))
 	snapKey := fmt.Sprintf("%d|%s|%s|%s|%s|%d|%d", q.site.ID, q.aud, sortBy, class, needle, span.From, span.To)
 	rows, ok := s.snaps.get(snapKey, s.now())
 	if !ok {
@@ -284,8 +284,8 @@ func (s *Server) visitorRows(ctx context.Context, q *query, span visitorCursor, 
 		}
 		// The search covers what the row shows: the model's client label too (labelClients shows it on unknown
 		// automated rows).
-		if needle != "" && !strings.Contains(strings.ToLower(row.Key+" "+row.Network+" "+row.Client+" "+row.Country),
-			needle) && (row.Class != "unknown" || !labelled[row.ua]) {
+		hay := foldSpaces(strings.ToLower(row.Key + " " + row.Network + " " + row.Client + " " + row.Country))
+		if needle != "" && !strings.Contains(hay, needle) && (row.Class != "unknown" || !labelled[row.ua]) {
 			continue
 		}
 		rows = append(rows, row)
@@ -300,12 +300,14 @@ func (s *Server) visitorRows(ctx context.Context, q *query, span visitorCursor, 
 }
 
 // labelMatches is the user agents whose stored model label holds needle, nil without a needle or a model (the
-// table shows no label then).
+// table shows no label then). A label's en spaces (apix.Sep) match a plain one, as in foldSpaces; the model's text
+// holds no other space but the plain one (llm's clip).
 func (s *Server) labelMatches(ctx context.Context, needle string) (map[string]bool, error) {
 	if needle == "" || s.Model == nil || !s.Model.Configured() {
 		return nil, nil
 	}
-	rows, err := s.query(ctx, `SELECT value FROM llm_label WHERE kind = 'ua' AND instr(lower(label), ?) > 0`, needle)
+	rows, err := s.query(ctx, `SELECT value FROM llm_label WHERE kind = 'ua'
+		AND instr(replace(lower(label), char(8194), ' '), ?) > 0`, needle)
 	if err != nil {
 		return nil, err
 	}
@@ -1028,6 +1030,12 @@ func respace(reasons []string) []string {
 		reasons[i] = strings.ReplaceAll(r, oldSep, apix.Sep)
 	}
 	return reasons
+}
+
+// foldSpaces writes every run of Unicode space as one plain space: a person types "Safari · macOS" with ordinary
+// spaces, the dashboard shows it with apix.Sep's en spaces.
+func foldSpaces(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // browserJoin joins a browser's two parts in its client family. classify.Client writes any other name as a product
