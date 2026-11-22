@@ -697,7 +697,7 @@ const VISITORS: VisitorRow[] = [
   {
     key: "192.0.2.120",
     display: "192.0.2.120",
-    network: "AS46475 Example Monitoring",
+    network: "AS64512 Example Monitoring",
     network_kind: "hosting",
     country: "US",
     class: "monitor",
