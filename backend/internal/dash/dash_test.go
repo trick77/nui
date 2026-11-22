@@ -754,6 +754,14 @@ func TestNetworkSpikeOpensItsLog(t *testing.T) {
 	if target == nil || target["panel"] != "log" {
 		t.Fatalf("no network spike to the log: %v", body["items"])
 	}
+	// findings=all answers the same items, none held back here; anything else is refused.
+	if code, all := r.get(t, "noteworthy", p(feedSite, "range", "24h", "findings", "all")); code != http.StatusOK ||
+		len(all["items"].([]any)) != len(body["items"].([]any))+int(body["more"].(float64)) || all["more"] != 0.0 {
+		t.Errorf("findings=all: %d %v", code, all)
+	}
+	if code, _ := r.get(t, "noteworthy", p(feedSite, "range", "24h", "findings", "some")); code != http.StatusBadRequest {
+		t.Errorf("findings=some: %d", code)
+	}
 	params := p(feedSite, "range", "24h")
 	for k, v := range target["filter"].(map[string]any) {
 		params[k] = v.(string)
@@ -1206,11 +1214,18 @@ func TestNoteItemsMerge(t *testing.T) {
 		}
 		return out
 	}
+	// Five shown, the rest counted; all of them when asked.
+	if shown, more := noteItems(facts, nil, maxItems); len(shown) != maxItems || more != len(facts)-maxItems {
+		t.Errorf("capped: %d items, %d more", len(shown), more)
+	}
+	if all, more := noteItems(facts, nil, -1); len(all) != len(facts) || more != 0 {
+		t.Errorf("all: %d items, %d more", len(all), more)
+	}
 	items, _ := noteItems(facts, &insight.Briefing{Lines: []insight.BriefLine{
 		{IDs: ids(facts[:5]...), Text: "Someone hunts for leaked config"},
 		{IDs: append(ids(facts[5:7]...), facts[0].ID), Text: "Two new referrers"}, // a used id is not taken twice
 		{IDs: []string{facts[7].ID, facts[5].ID}, Text: "One busy script"},        // another kind stays apart
-	}})
+	}}, maxItems)
 	probes, refs, spike := items[0], items[1], items[2]
 	if probes.Figure != "60" || probes.Unit != "probes of" || len(probes.IDs) != 5 || len(probes.Detail) != 5 ||
 		probes.Detail[4] != "14 probes of New probed path: GET /phpinfo.php" ||
