@@ -63,8 +63,8 @@ var browserHeaders = []string{"accept-language", "sec-ch-ua", "sec-ch-ua-mobile"
 	"sec-ch-ua-platform-version", "sec-ch-ua-model", "sec-ch-ua-arch", "sec-ch-ua-bitness",
 	"sec-ch-ua-full-version-list", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-user"}
 
-// The browser rate limit (contract: "60 events / min per address or /64 · 600 per /48"). The /64 burst admits the
-// largest batch; the /48 tier (an IPv4 /24) bounds a caller rotating through its block.
+// The browser rate limit (contract: 60 events / min per address or /64, 600 per /48; RateRule states it). The /64
+// burst admits the largest batch; the /48 tier (an IPv4 /24) bounds a caller rotating through its block.
 const (
 	BrowserRate      = 1.0 // events a second per address or /64
 	BrowserBurst     = 60
