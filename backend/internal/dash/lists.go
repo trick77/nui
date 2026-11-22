@@ -61,7 +61,22 @@ var dims = map[string]dimSpec{
 	"errors": {where: "(kind = 'js_error' OR (source = 'server' AND status >= 500))",
 		key: "CASE WHEN kind = 'js_error' THEN name ELSE template END",
 		sub: "CASE WHEN kind = 'js_error' THEN 'js' ELSE 'server ' || status END", a: "COUNT(*)", b: "0",
-		distinct: "visitor", upBad: true, value: countA, second: countD},
+		distinct: "actor", upBad: true, value: countA, second: countD},
+}
+
+// distinctExpr is the SQL a list's distinct count runs on. "visitor" is who the Visitors tile counts: a browser's
+// own id, never the hash a server request carries (one person loading one page would count twice), and for the
+// bots audience the address key. "actor" also counts a server row, by its address: a server error has no browser.
+func distinctExpr(distinct, aud string) string {
+	switch {
+	case distinct != "visitor" && distinct != "actor":
+		return distinct
+	case aud == "bots":
+		return "ip_key"
+	case distinct == "actor":
+		return "CASE WHEN source = 'browser' THEN visitor ELSE ip_key END"
+	}
+	return "CASE WHEN source = 'browser' THEN visitor ELSE '' END"
 }
 
 // agg is one key's sums.
@@ -91,7 +106,8 @@ func (s *Server) scanDim(ctx context.Context, q *query, d dimSpec, extra string,
 	}
 	dist, group := "''", d.key
 	if d.distinct != "" {
-		dist, group = d.distinct, d.key+", "+d.distinct
+		dist = distinctExpr(d.distinct, q.aud)
+		group = d.key + ", " + dist
 	}
 	stmt := `SELECT ` + d.key + `, ` + sub + `, ` + d.a + `, ` + d.b + `, ` + dist + ` FROM event
 		WHERE site_id = ? AND ts >= ? AND ts < ? AND ` + d.where + ` AND ` + audWhere(q.aud) + extra +
@@ -466,16 +482,17 @@ type shareRow struct {
 }
 
 func (s *Server) handleClients(w http.ResponseWriter, r *http.Request, q *query) {
-	// One user agent and address per visitor (the last seen), each visitor counted once per list.
+	// One user agent and address per visitor, its latest event's, each visitor counted once per list.
 	id, where := "visitor", "source = 'browser'"
 	if q.aud == "bots" {
 		id, where = "ip_key", "1"
 	}
 	type client struct{ ua, ip string }
 	seen := map[string]client{}
-	// Oldest piece first, so a later piece's client replaces an earlier one's.
+	// Oldest piece first, so a later piece's client replaces an earlier one's. Within a piece the one MAX makes
+	// SQLite take ua and ip from the visitor's latest row.
 	for _, pc := range pieces(q.p.From(), q.p.Bounds[q.p.n()]) {
-		rows, err := s.query(r.Context(), `SELECT `+id+`, MAX(ua), MAX(ip) FROM event
+		rows, err := s.query(r.Context(), `SELECT `+id+`, MAX(ts), ua, ip FROM event
 			WHERE site_id = ? AND ts >= ? AND ts < ? AND `+where+` AND `+audWhere(q.aud)+` GROUP BY `+id,
 			q.site.ID, ms(pc[0]), ms(pc[1]))
 		if err != nil {
@@ -484,8 +501,9 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request, q *query)
 		}
 		for rows.Next() {
 			var k string
+			var ts int64
 			var c client
-			if err := rows.Scan(&k, &c.ua, &c.ip); err != nil {
+			if err := rows.Scan(&k, &ts, &c.ua, &c.ip); err != nil {
 				_ = rows.Close()
 				s.fail(w, r, err)
 				return
@@ -620,10 +638,22 @@ func (s *Server) handleClasses(w http.ResponseWriter, r *http.Request, q *query)
 		row := classRow{Class: c, Requests: g.a, Addresses: int64(len(g.d)),
 			Share: round1(pct(float64(g.a), float64(total)))}
 		row.Change = sumChange(float64(closed.get(c).a), float64(prev.get(c).a), q.p.Prev != nil)
-		row.Verdict = verdict(row.Change, c != "human")
+		row.Verdict = classVerdict(c, row.Change)
 		rows = append(rows, row)
 	}
 	apix.JSON(w, http.StatusOK, map[string]any{"labels": q.p.labels, "series": series, "rows": rows})
+}
+
+// classVerdict judges a class's change: more people is good, more unknown automation bad; known bots and uptime
+// probes are neutral, their volume is the services' business.
+func classVerdict(class string, c change) string {
+	switch class {
+	case "human":
+		return verdict(c, false)
+	case "unknown":
+		return verdict(c, true)
+	}
+	return "flat"
 }
 
 func merge(into, g *agg) {

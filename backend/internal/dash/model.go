@@ -28,7 +28,7 @@ type actor struct {
 	key                     string
 	visits, views, requests int64
 	refused, events         int64
-	last                    int64
+	first, last             int64 // first is only read for one actor (the visitor detail)
 	ua                      string
 	asn                     int64
 	country                 string

@@ -32,10 +32,12 @@ func (s *Server) actors(ctx context.Context, q *query) (map[string]*actor, error
 		if err := s.actorSessions(ctx, q, pc[0], pc[1], sessions, out); err != nil {
 			return nil, err
 		}
+		// One MAX only: SQLite then takes the bare columns (ua, asn, country, cls) from the row holding it, the
+		// key's latest event. A second MIN or MAX would make that row arbitrary.
 		rows, err := s.query(ctx, `SELECT ip_key,
 			SUM(kind = 'page_view'), SUM(source = 'server'), SUM(source = 'server' AND status >= 400),
-			SUM(source = 'browser' AND `+eventKinds+`), MAX(ts), MAX(ua), MAX(asn), MAX(country), MAX(cls),
-			MAX(source = 'browser')
+			SUM(source = 'browser' AND `+eventKinds+`), MAX(ts), ua, asn, country, cls,
+			SUM(source = 'browser') > 0
 			FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND `+audWhere(q.aud)+` GROUP BY ip_key`,
 			q.site.ID, ms(pc[0]), ms(pc[1]))
 		if err != nil {
@@ -54,14 +56,15 @@ func (s *Server) actors(ctx context.Context, q *query) (map[string]*actor, error
 			g.refused += a.refused
 			g.events += a.events
 			g.browser = g.browser || a.browser
+			// The latest event's client, network and country, as the visitor detail shows them.
 			if a.last >= g.last {
 				g.last, g.ua, g.cls = a.last, a.ua, a.cls
-			}
-			if a.asn != 0 {
-				g.asn = a.asn
-			}
-			if a.country != "" {
-				g.country = a.country
+				if a.asn != 0 {
+					g.asn = a.asn
+				}
+				if a.country != "" {
+					g.country = a.country
+				}
 			}
 		}
 		_ = rows.Close()
@@ -588,25 +591,22 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 // actorOne sums one key over the range (nil when it has no events there).
 func (s *Server) actorOne(ctx context.Context, q *query, key string) (*actor, error) {
 	var a actor
-	var last *int64
-	var asn *int64
-	var ua, country *string
-	var cls *int
-	var browser *bool
+	var first, last *int64
 	err := s.row(ctx, `SELECT COUNT(DISTINCT CASE WHEN sid != '' THEN sid END),
 		COALESCE(SUM(kind = 'page_view'), 0), COALESCE(SUM(source = 'server'), 0),
 		COALESCE(SUM(source = 'server' AND status >= 400), 0), COALESCE(SUM(source = 'browser' AND `+eventKinds+`), 0),
-		MAX(ts), MAX(asn), MAX(country), MAX(cls), MAX(source = 'browser')
+		MIN(ts), MAX(ts), COALESCE(SUM(source = 'browser'), 0) > 0
 		FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?`,
 		q.site.ID, key, ms(q.p.From()), ms(q.p.Bounds[q.p.n()])).Scan(&a.visits, &a.views, &a.requests, &a.refused,
-		&a.events, &last, &asn, &country, &cls, &browser)
+		&a.events, &first, &last, &a.browser)
 	if err != nil || last == nil {
 		return nil, err
 	}
-	a.key, a.last, a.asn, a.country, a.cls, a.browser = key, *last, *asn, *country, *cls, *browser
-	if err := s.row(ctx, `SELECT ua FROM event WHERE site_id = ? AND ip_key = ? AND ts <= ?
-		ORDER BY ts DESC LIMIT 1`, q.site.ID, key, a.last).Scan(&ua); err == nil {
-		a.ua = *ua
+	a.key, a.first, a.last = key, *first, *last
+	// The latest event's client, network, country and class, as the table's row shows them.
+	if err := s.row(ctx, `SELECT ua, asn, country, cls FROM event WHERE site_id = ? AND ip_key = ? AND ts <= ?
+		ORDER BY ts DESC LIMIT 1`, q.site.ID, key, a.last).Scan(&a.ua, &a.asn, &a.country, &a.cls); err != nil {
+		return nil, err
 	}
 	return &a, nil
 }
