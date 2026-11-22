@@ -12,8 +12,15 @@ const PRIMARY =
 // What a refused token attempt says. The submitted value is never echoed.
 function refusal(res: Response): string {
   switch (res.status) {
+    case 400:
+      return "The server could not read the sign-in form. Reload the page and try again.";
     case 401:
       return "That is not the admin token.";
+    // The CSRF guard: the post did not come from this site's own page.
+    case 403:
+      return "The server refused a sign-in sent from another site. Open the dashboard at its own address and try again.";
+    case 404:
+      return "Sign-in with the admin token is not enabled on this server.";
     case 413:
       return "That value is too long to be the admin token.";
     case 429: {
@@ -28,7 +35,15 @@ function refusal(res: Response): string {
 
 // The sign-in card's body: the methods this server offers, the single
 // sign-on link first, the admin token as the fallback.
-export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
+export function SignIn({
+  onSignedIn,
+  lost = false,
+}: {
+  onSignedIn: () => void;
+  // A token sign-in was accepted, yet the session check after it found no
+  // session: the browser did not keep the cookie. Said once, never retried.
+  lost?: boolean;
+}) {
   const [methods, setMethods] = useState<Methods>({ state: "loading" });
   useEffect(() => {
     const ctl = new AbortController();
@@ -63,6 +78,12 @@ export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
     );
   return (
     <>
+      {lost && (
+        <p role="alert" className="m-0 mb-3 text-[13px] text-danger-ink">
+          The token was accepted, but this browser did not keep the session.
+          Allow cookies for this site and open it over HTTPS.
+        </p>
+      )}
       {oidc && (
         <a href="/api/auth/login" className={PRIMARY}>
           Sign in

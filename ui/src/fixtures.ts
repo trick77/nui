@@ -1179,7 +1179,10 @@ export type FixtureOptions = {
   // What /api/auth/methods offers; both by default.
   methods?: { oidc: boolean; token: boolean };
   // The answer to a token sign-in; 204 signs in ("fixture-token" only).
-  token?: 204 | 401 | 413 | 429 | 500;
+  token?: 204 | 400 | 401 | 403 | 404 | 413 | 429 | 500;
+  // false: a 204 whose session the browser does not keep (/api/me stays
+  // 401).
+  keep?: boolean;
   // Answer these paths (e.g. "/api/dash/classes") with a 500.
   fail?: string[];
   delayMs?: number;
@@ -1214,7 +1217,7 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
         return json({ detail: "not a form post" }, 400);
       const st = opt.token ?? 401;
       if (st === 204 && body.get("token") === "fixture-token") {
-        me = 200;
+        if (opt.keep !== false) me = 200;
         return new Response(null, { status: 204 });
       }
       if (st === 429)

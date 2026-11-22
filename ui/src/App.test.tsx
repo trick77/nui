@@ -137,7 +137,10 @@ describe("sign-in", () => {
 
   it("says why a token was refused, never echoing it", async () => {
     for (const [status, text] of [
+      [400, "could not read the sign-in form"],
       [401, "That is not the admin token."],
+      [403, "refused a sign-in sent from another site"],
+      [404, "not enabled on this server"],
       [413, "That value is too long to be the admin token."],
       [429, "Too many attempts. Wait 30 s and try again."],
       [500, "The server could not process the sign-in. Try again."],
@@ -153,6 +156,10 @@ describe("sign-in", () => {
       fireEvent.click(screen.getByRole("button", { name: "Log in" }));
       expect(await screen.findByRole("alert")).toHaveTextContent(text);
       expect(tokenBox()).toHaveValue("");
+      // A refusal is no lost session: the card stays, nothing is retried
+      // (a 403 here is the CSRF guard's, not the session's).
+      expect(calls.filter((c) => c === "/api/me")).toHaveLength(1);
+      expect(calls.filter((c) => c === "/api/auth/token")).toHaveLength(1);
       expect(document.body.textContent).not.toContain("s3cret-value");
       expect(localStorage.length).toBe(0);
       unmount();
@@ -172,6 +179,27 @@ describe("sign-in", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could not reach the server.",
     );
+  });
+
+  it("says so when the browser did not keep an accepted session", async () => {
+    start("/dashboard/", {
+      me: 401,
+      methods: { oidc: false, token: true },
+      token: 204,
+      keep: false,
+    });
+    fireEvent.change(await screen.findByLabelText("Admin token"), {
+      target: { value: "fixture-token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Log in" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "did not keep the session",
+    );
+    // Asked once more, then the card: no loop.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls.filter((c) => c === "/api/me")).toHaveLength(2);
+    expect(calls.filter((c) => c === "/api/auth/token")).toHaveLength(1);
+    expect(screen.getByLabelText("Admin token")).toBeInTheDocument();
   });
 
   it("says so on 403", async () => {

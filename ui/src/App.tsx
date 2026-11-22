@@ -17,12 +17,15 @@ type Auth =
 export default function App() {
   const [auth, setAuth] = useState<Auth>({ state: "checking" });
   const [round, setRound] = useState(0);
+  // The session check after an accepted token found no session.
+  const [lost, setLost] = useState(false);
   useEffect(() => {
     const ctl = new AbortController();
     api.me(ctl.signal).then(
       (me) => setAuth({ state: "in", me }),
       (e: Error) => {
         if (ctl.signal.aborted) return;
+        setLost(round > 0 && e instanceof ApiError && e.status === 401);
         if (e instanceof ApiError && e.status === 401)
           setAuth({ state: "out" });
         else if (e instanceof ApiError && e.status === 403)
@@ -77,6 +80,7 @@ export default function App() {
               Usage analytics for your own web products.
             </p>
             <SignIn
+              lost={lost}
               onSignedIn={() => {
                 setAuth({ state: "checking" });
                 setRound((r) => r + 1);
