@@ -999,6 +999,15 @@ const CLIENT_NAME: Record<string, string> = {
   "2001:db8:4f2:1a00::7c": "Firefox · Windows",
 };
 
+// Each address's AS number, for the log's asn filter.
+const LOG_ASN: Record<string, number> = {
+  "192.0.2.120": 64512,
+  "198.51.100.7": 64510,
+  "192.0.2.66": 15169,
+  "203.0.113.42": 64500,
+  "2001:db8:4f2:1a00::7c": 64501,
+};
+
 // The backend's log page and keyset cursor ("<ms>.<row id>").
 const LOG_PAGE = 100;
 const LOG_ROWS = 250;
@@ -1023,6 +1032,13 @@ function log(q: URLSearchParams, feed: boolean, script: boolean): Log | null {
   if (addr && /\/(?!64$)/.test(addr)) return null;
   if (addr)
     rows = rows.filter((r) => r.addr.startsWith(addr.replace(/:?:?\/64$/, "")));
+  // An AS number, with or without its "AS"; anything else is refused.
+  const asn = q.get("asn");
+  if (asn) {
+    const n = /^(?:AS)?(\d+)$/i.exec(asn.trim());
+    if (!n) return null;
+    rows = rows.filter((r) => LOG_ASN[r.addr] === Number(n[1]));
+  }
   const path = q.get("path");
   if (path) rows = rows.filter((r) => r.what.includes(path));
   const cls = q.get("class");

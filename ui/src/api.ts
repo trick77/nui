@@ -438,6 +438,8 @@ export const api = {
 
 export type LogFilter = {
   addr?: string;
+  // An AS number, "64500" or "AS64500": a network spike opens the log on it.
+  asn?: string;
   path?: string;
   class?: string;
   kind?: string;

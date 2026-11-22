@@ -165,6 +165,21 @@ export function LogPage({
               value={filter.addr ?? ""}
               onChange={(v) => set("addr", v)}
             />
+            {filter.asn && (
+              // Set by a link (a network spike), not typed: shown so it
+              // can be seen and dropped on its own.
+              <span className="pill">
+                Network AS{filter.asn.replace(/^as/i, "")}
+                <button
+                  type="button"
+                  className="link ml-1.5 !text-[13px]"
+                  aria-label="Clear the network filter"
+                  onClick={() => set("asn", "")}
+                >
+                  ×
+                </button>
+              </span>
+            )}
             <TextFilter
               key={`path${cleared}`}
               label="Path or event name"

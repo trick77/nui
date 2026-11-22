@@ -8,7 +8,14 @@ import type { Audience, Compare, LogFilter, Range } from "./api";
 export const RANGES: Range[] = ["24h", "7d", "30d", "90d", "12mo"];
 export const AUDIENCES: Audience[] = ["all", "humans", "bots"];
 export const COMPARES: Compare[] = ["prev", "yoy", "off"];
-export const LOG_KEYS = ["addr", "path", "class", "kind", "status"] as const;
+export const LOG_KEYS = [
+  "addr",
+  "asn",
+  "path",
+  "class",
+  "kind",
+  "status",
+] as const;
 
 export type Page = "dash" | "log";
 

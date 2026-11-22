@@ -1112,6 +1112,35 @@ describe("log page", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows a network filter set by a link and drops it on its own", async () => {
+    const first = start(
+      "/dashboard/log?site=lens.example.com&asn=AS64510&kind=request",
+    );
+    const log = await screen.findByRole("region", { name: "Log" });
+    await within(log).findByText("36 of 36 events in this range");
+    expect(lastCall("/api/dash/log").get("asn")).toBe("AS64510");
+    expect(within(log).getByText(/Network AS64510/)).toBeInTheDocument();
+    expect(
+      within(log).getAllByRole("button", { name: "198.51.100.7" }),
+    ).toHaveLength(36);
+    fireEvent.click(
+      within(log).getByRole("button", { name: "Clear the network filter" }),
+    );
+    await within(log).findByText("72 of 72 events in this range");
+    expect(lastCall("/api/dash/log").get("asn")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("kind")).toBe(
+      "request",
+    );
+    expect(within(log).queryByText(/Network AS/)).toBeNull();
+    first.unmount();
+    // A malformed one is the backend's 400, shown as such.
+    start("/dashboard/log?site=lens.example.com&asn=cloud");
+    const bad = await screen.findByRole("region", { name: "Log" });
+    expect(await within(bad).findByRole("alert")).toHaveTextContent(
+      "bad log filter",
+    );
+  });
+
   it("goes back to a dashboard section from the menu", async () => {
     start("/dashboard/log?site=lens.example.com");
     await screen.findByRole("region", { name: "Log" });
