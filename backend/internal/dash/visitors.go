@@ -623,6 +623,10 @@ type trailLine struct {
 	// IntervalS is the run's median time between its events: what the run itself did, never an average over the
 	// days a run may span.
 	IntervalS float64 `json:"interval_s"`
+	// A page ends at an event bound, maybe inside a run: Continues marks a run whose older events are on the next
+	// page, Continued one whose newer events were on the previous page. Count, span and interval are this page's part.
+	Continues bool `json:"continues"`
+	Continued bool `json:"continued"`
 
 	fromMS, toMS int64
 	gaps         []float64
@@ -649,9 +653,11 @@ func (s *Server) trail(ctx context.Context, site int64, key string, from, to tim
 	if before.ts > 0 {
 		cond, args = " AND (ts < ? OR (ts = ? AND id < ?))", append(args, before.ts, before.ts, before.id)
 	}
+	// One event past the bound: whether more follow, and whether the last run goes on into them.
+	limit := maxTrailEvents * pages
 	rows, err := s.query(ctx, `SELECT id, ts, source, kind, name, template, status FROM event
 		WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?`+cond+` ORDER BY ts DESC, id DESC LIMIT `+
-		strconv.Itoa(maxTrailEvents*pages), args...)
+		strconv.Itoa(limit+1), args...)
 	if err != nil {
 		return tr, err
 	}
@@ -668,6 +674,13 @@ func (s *Server) trail(ctx context.Context, site int64, key string, from, to tim
 			return tr, err
 		}
 		what, k := describe(source, kind, name, tmpl, status)
+		if read > limit {
+			if n := len(tr.lines); n > 0 && tr.lines[n-1].What == what {
+				tr.lines[n-1].Continues = true
+			}
+			tr.next = last.String()
+			break
+		}
 		if prevTS != 0 {
 			tr.gaps = append(tr.gaps, float64(prevTS-ts)/1000)
 		}
@@ -689,11 +702,25 @@ func (s *Server) trail(ctx context.Context, site int64, key string, from, to tim
 		tr.lines = append(tr.lines, trailLine{T: t, Kind: k, What: what, Count: 1, From: t, To: t, fromMS: ts, toMS: ts})
 		last = cursor{ts, id}
 	}
-	// The read stopped at its event bound with lines to spare: more may follow.
-	if tr.next == "" && read == maxTrailEvents*pages {
-		tr.next = last.String()
+	if err := rows.Err(); err != nil {
+		return tr, err
 	}
-	return tr, rows.Err()
+	_ = rows.Close()
+	// A later page: its first run may go on from the previous page's last event, the cursor's.
+	if before.id > 0 && len(tr.lines) > 0 {
+		var source, kind, name, tmpl string
+		var status int
+		err := s.row(ctx, `SELECT source, kind, name, template, status FROM event WHERE id = ? AND site_id = ?
+			AND ip_key = ?`, before.id, site, key).Scan(&source, &kind, &name, &tmpl, &status)
+		switch {
+		case err == nil:
+			what, _ := describe(source, kind, name, tmpl, status)
+			tr.lines[0].Continued = what == tr.lines[0].What
+		case !errors.Is(err, sql.ErrNoRows):
+			return tr, err
+		}
+	}
+	return tr, nil
 }
 
 // cursor is a keyset position: the last row's time and id, "ts.id" on the wire.

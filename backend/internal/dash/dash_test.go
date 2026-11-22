@@ -560,6 +560,40 @@ func TestVisitorsAndDetail(t *testing.T) {
 	}
 }
 
+// A run longer than a page's event bound is split across pages: each part says so, so no part reads as the whole.
+func TestTrailRunAcrossPages(t *testing.T) {
+	r := newRig(t, 0, 0, nil)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	insert := func(key string, n int) {
+		evs := make([]store.Event, n)
+		for i := range evs {
+			evs[i] = store.Event{SiteID: site.ID, TS: r.end.UnixMilli() - int64(i)*10, Source: "server",
+				Kind: "request", IP: key, IPKey: key, Template: "GET /a", Status: 200}
+		}
+		if err := r.s.DB.InsertEvents(t.Context(), evs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	line := func(d map[string]any, i int) map[string]any { return d["trail"].([]any)[i].(map[string]any) }
+	insert("192.0.2.7", maxTrailEvents+100)
+	_, d := r.get(t, "visitor", p(feedSite, "key", "192.0.2.7", "range", "24h"))
+	if l := line(d, 0); len(d["trail"].([]any)) != 1 || l["count"].(float64) != maxTrailEvents ||
+		l["continues"] != true || l["continued"] != false || d["trail_next"] == "" {
+		t.Fatalf("page 1: %v next %v", l, d["trail_next"])
+	}
+	_, d2 := r.get(t, "visitor", p(feedSite, "key", "192.0.2.7", "range", "24h", "cursor", d["trail_next"].(string)))
+	if l := line(d2, 0); len(d2["trail"].([]any)) != 1 || l["count"].(float64) != 100 || l["continued"] != true ||
+		l["continues"] != false || d2["trail_next"] != "" {
+		t.Errorf("page 2: %v next %v", l, d2["trail_next"])
+	}
+	// Exactly a page of events: one whole run, no next page.
+	insert("192.0.2.8", maxTrailEvents)
+	_, d = r.get(t, "visitor", p(feedSite, "key", "192.0.2.8", "range", "24h"))
+	if l := line(d, 0); l["count"].(float64) != maxTrailEvents || l["continues"] != false || d["trail_next"] != "" {
+		t.Errorf("a full page: %v next %v", l, d["trail_next"])
+	}
+}
+
 // Opening one visitor reads only its own class rows: never the site's whole range of them.
 func TestVisitorReadsOwnClass(t *testing.T) {
 	r := newRig(t, 3, 8, nil)
