@@ -269,7 +269,9 @@ export function LogPage({
                     <td className="min-w-[200px] font-mono text-[12.5px] wrap-anywhere">
                       {r.what}
                     </td>
-                    <td className="text-[12px] text-muted">{r.client}</td>
+                    <td className="text-[12px] whitespace-nowrap text-muted">
+                      {r.client}
+                    </td>
                     {both && (
                       <td>
                         <span
