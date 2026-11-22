@@ -1,0 +1,18 @@
+{
+  "sites": [
+    {
+      "domain": "lens.ipverse.net",
+      "product": "ipverse Lens",
+      "kind": "site",
+      "feed_key_sha256": "",
+      "path_rules": [
+        {"pattern": "/", "template": "/"},
+        {"pattern": "/{ipv4}", "template": "/:ipv4"},
+        {"pattern": "/{ipv6}", "template": "/:ipv6"},
+        {"pattern": "/{cidr}", "template": "/:cidr"},
+        {"pattern": "/AS{int}", "template": "/AS:n"},
+        {"pattern": "/{any}", "template": "/:text"}
+      ]
+    }
+  ]
+}
