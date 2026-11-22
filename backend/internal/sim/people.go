@@ -72,6 +72,8 @@ type person struct {
 	vid     string
 	blocked bool    // the tracker is blocked: only the feed sees the visits
 	rate    float64 // visits a day, for one who comes back
+	// scripted: a headless browser a program drives, reporting as chrome-headless-shell does, with no input.
+	scripted bool
 }
 
 // sharedPool is how many addresses a carrier's NAT or an office gives all its people: they share them.
@@ -357,12 +359,13 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 		evs = append(evs, queued{e: event{t: t, k: k, n: n, p: props}, page: i})
 	}
 	errorProb := 1.0 / 60
+	scripted := per.scripted
 	for i, pg := range pages {
 		if i == 0 {
 			add(i, pg.at, "session_start", "", nil)
 		} else {
 			// The engagement of the page being left, then the new view (an in-page navigation).
-			add(i-1, pg.at, "engagement", "", engagement(r, pages[i-1]))
+			add(i-1, pg.at, "engagement", "", engagement(r, pages[i-1], per.prof, scripted))
 		}
 		add(i, pg.at, "page_view", "", nil)
 		if i == 0 {
@@ -397,7 +400,7 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 		}
 	}
 	last := pages[len(pages)-1]
-	add(len(pages)-1, last.leave, "engagement", "", engagement(r, last))
+	add(len(pages)-1, last.leave, "engagement", "", engagement(r, last, per.prof, scripted))
 	add(len(pages)-1, last.leave, "vital", "", map[string]any{"name": "LCP", "value": float64(500 + r.IntN(3500))})
 	if r.chance(0.6) {
 		add(len(pages)-1, last.leave, "vital", "", map[string]any{"name": "INP", "value": float64(40 + r.IntN(360))})
@@ -412,7 +415,7 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 	}
 	cl := &client{addr: per.addr, ua: per.prof.ua, hdr: browserHeaders(per.prof, per.loc)}
 	sid := r.hex32()
-	inputs := map[string]int{"pointer": 0, "key": 0, "touch": 0, "scroll": 0}
+	inputs := map[string]int{"pointer": 0, "key": 0, "touch": 0, "scroll": 0, "move": 0, "mdown": 0}
 	current := func(t time.Time) int {
 		c := 0
 		for i, pg := range pages {
@@ -432,7 +435,8 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 			}
 		}
 		ctx := w.context(per, cur, ref, inputs, webdriver)
-		b := &batch{at: at, site: s.idx, client: cl, vid: per.vid, sid: sid, ctx: ctx, actor: actor}
+		b := &batch{at: at, site: s.idx, client: cl, vid: per.vid, sid: sid, ctx: ctx, prof: per.prof,
+			scripted: per.scripted, actor: actor}
 		for _, x := range q {
 			e := x.e
 			if pg := pages[x.page]; pg.url != cur.url {
@@ -466,11 +470,63 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 // DeployError is the script error the deploy-error scenario's release throws on lookup pages.
 const DeployError = "TypeError: Cannot read properties of undefined (reading 'asn')"
 
-// engagement is the props of a page's engagement: time visible, scroll depth, input counts.
-func engagement(r rng, pg page) map[string]any {
+// engagement is the props of a page's engagement: time visible, scroll depth, input counts. A mouse travels to
+// what it presses, dozens of moves a press; on a touch screen presses are no mouse's. scripted: no input at all.
+// The same draws either way: one scenario never shifts another's randomness.
+func engagement(r rng, pg page, pr *uaProfile, scripted bool) map[string]any {
 	ms := pg.leave.Sub(pg.at).Milliseconds() * int64(60+r.IntN(40)) / 100
-	in := map[string]int{"pointer": r.IntN(12), "key": r.IntN(6), "touch": 0, "scroll": r.IntN(30)}
+	pointer, key, scroll := r.IntN(12), r.IntN(6), r.IntN(30)
+	if scripted {
+		pointer, key, scroll = 0, 0, 0
+	}
+	in := map[string]int{"pointer": pointer, "key": key, "touch": 0, "scroll": scroll, "move": 0, "mdown": 0}
+	if pr.touch == 0 {
+		in["mdown"] = pointer
+		in["move"] = pointer*23 + scroll
+	}
 	return map[string]any{"ms": ms, "scroll": 20 + r.IntN(81), "inputs": in}
+}
+
+// gpu is the WebGL vendor and renderer a profile's browser reports (the script's gl); scripted: headless, no GPU.
+func (pr *uaProfile) gpu(scripted bool) [2]string {
+	switch {
+	case scripted:
+		return [2]string{"Google Inc. (Google)",
+			"ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)"}
+	case pr.chromium && pr.platform == "macOS":
+		return [2]string{"Google Inc. (Apple)", "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"}
+	case pr.chromium && pr.platform == "Windows":
+		return [2]string{"Google Inc. (NVIDIA)",
+			"ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002504) Direct3D11 vs_5_0 ps_5_0, D3D11)"}
+	case pr.chromium && pr.platform == "Android":
+		return [2]string{"Qualcomm", "Adreno (TM) 740"}
+	case pr.chromium:
+		return [2]string{"Google Inc. (Intel)", "ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)"}
+	case strings.Contains(pr.ua, "Firefox"):
+		return [2]string{"Mozilla", "Intel(R) HD Graphics, or similar"}
+	}
+	return [2]string{"Apple Inc.", "Apple GPU"}
+}
+
+// probes are the automation probes of a profile's script context: a person's browser, or headless Chrome as
+// chrome-headless-shell reports itself (no plugins, a window frame the viewport's size, the notification
+// permission denied where the Permissions API says prompt).
+func (pr *uaProfile) probes(scripted bool) map[string]any {
+	c := map[string]any{"auto": []string{}, "wdd": "proto", "synth": 0, "gl": pr.gpu(scripted)}
+	switch {
+	case scripted:
+		c["outer"] = pr.viewport[:]
+		c["plg"] = []any{0, false}
+		c["perm"] = []string{"denied", "prompt"}
+	case pr.mobile || pr.touch > 0:
+		c["outer"] = pr.viewport[:]
+		c["plg"] = []any{0, false}
+	default:
+		c["outer"] = []int{pr.viewport[0], pr.viewport[1] + 87}
+		c["plg"] = []any{5, true}
+		c["perm"] = []string{"default", "prompt"}
+	}
+	return c
 }
 
 // context is the tracker's ctx for a batch sent from page cur.
@@ -481,7 +537,7 @@ func (w *World) context(per *person, cur page, ref string, inputs map[string]int
 		"touch": pr.touch, "hc": pr.hc, "dark": strHash(per.vid)%3 == 0, "reduced_motion": false,
 		"webdriver": webdriver, "vis": "visible", "nav": "navigate", "cookies": true,
 		"inputs": map[string]int{"pointer": inputs["pointer"], "key": inputs["key"], "touch": inputs["touch"],
-			"scroll": inputs["scroll"]}}
+			"scroll": inputs["scroll"], "move": inputs["move"], "mdown": inputs["mdown"]}}
 	if ref != "" {
 		c["ref"] = ref
 	}

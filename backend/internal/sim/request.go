@@ -3,6 +3,7 @@ package sim
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/netip"
 	"time"
@@ -42,6 +43,9 @@ type batch struct {
 	client   *client
 	vid, sid string
 	ctx      map[string]any
+	// prof: the browser whose automation probes join ctx when the body is made, not held in every planned batch.
+	prof     *uaProfile
+	scripted bool
 	events   []event
 	actor    string
 	// hammer: the sender ignores 429 and sends on.
@@ -128,8 +132,13 @@ func (q *Request) Body(clock Clock) []byte {
 			}
 			evs = append(evs, m)
 		}
+		ctx := b.ctx
+		if b.prof != nil {
+			ctx = b.prof.probes(b.scripted)
+			maps.Copy(ctx, b.ctx)
+		}
 		v = map[string]any{"v": 1, "site": q.Site.Domain, "vid": b.vid, "sid": b.sid, "sent": clock(q.At),
-			"ctx": b.ctx, "events": evs}
+			"ctx": ctx, "events": evs}
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
