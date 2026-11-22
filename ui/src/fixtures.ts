@@ -326,7 +326,8 @@ function noteworthy(site: string): Noteworthy {
     headline: feed
       ? {
           gen: "Good week for people, busy one for scripts.",
-          text: "9 findings against the prior 7 d",
+          // One per finding: the items' ids.
+          text: "8 findings against the prior 7 d",
         }
       : { gen: null, text: "2 findings against the prior 7 d" },
     // The range's closed end: 7 d in Europe/Zurich.
