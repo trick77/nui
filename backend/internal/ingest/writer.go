@@ -1,0 +1,235 @@
+// Package ingest is the collector: POST /api/in (the browser script's batches) and POST /api/feed (a product
+// backend's request records). Both validate, answer at once and hand the events to a bounded queue; one writer
+// goroutine enriches them and inserts them in batches. A full queue drops and counts, never blocks a request: the
+// collector must not slow a host page down, nor be made to hold memory by a flood.
+package ingest
+
+import (
+	"context"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/trick77/ship/kit/logging"
+
+	"github.com/trick77/nui/backend/internal/store"
+)
+
+// Writer limits.
+const (
+	// DefaultQueueEvents bounds the events waiting for the writer, about 20 MB at worst-case row sizes.
+	DefaultQueueEvents = 20_000
+	// writeBatch is the most events one insert transaction takes; the writer also commits every flushEvery.
+	writeBatch = 1000
+	flushEvery = 250 * time.Millisecond
+)
+
+// Writer is the bounded queue and its one writer goroutine.
+type Writer struct {
+	st       *store.Store
+	ch       chan []store.Event
+	queued   atomic.Int64
+	max      int64
+	enrich   func(*store.Event)
+	counters *Counters
+	log      *slog.Logger
+	done     chan struct{}
+}
+
+// NewWriter returns a writer for st holding at most maxEvents queued (DefaultQueueEvents when 0). enrich, when not
+// nil, runs on every event in the writer goroutine (network, country, first class), never in the request.
+func NewWriter(st *store.Store, counters *Counters, maxEvents int, enrich func(*store.Event), log *slog.Logger) *Writer {
+	if maxEvents <= 0 {
+		maxEvents = DefaultQueueEvents
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Writer{st: st, ch: make(chan []store.Event, maxEvents), max: int64(maxEvents), enrich: enrich,
+		counters: counters, log: log, done: make(chan struct{})}
+}
+
+// Enqueue hands a batch to the writer, or reports false when the queue holds no room for all of it: the caller
+// counts the events as dropped.
+func (w *Writer) Enqueue(evs []store.Event) bool {
+	n := int64(len(evs))
+	if n == 0 {
+		return true
+	}
+	if w.queued.Add(n) > w.max {
+		w.queued.Add(-n)
+		return false
+	}
+	select {
+	case w.ch <- evs:
+		return true
+	default:
+		w.queued.Add(-n)
+		return false
+	}
+}
+
+// Queued is the number of events waiting.
+func (w *Writer) Queued() int64 { return w.queued.Load() }
+
+// Run writes until ctx ends, then drains what is queued (bounded by a few seconds) and returns.
+func (w *Writer) Run(ctx context.Context) {
+	defer close(w.done)
+	tick := time.NewTicker(flushEvery)
+	defer tick.Stop()
+	var pending []store.Event
+	flush := func(fctx context.Context) {
+		if len(pending) == 0 {
+			return
+		}
+		w.write(fctx, pending)
+		pending = pending[:0]
+	}
+	for {
+		select {
+		case evs := <-w.ch:
+			pending = append(pending, evs...)
+			if len(pending) >= writeBatch {
+				flush(ctx)
+			}
+		case <-tick.C:
+			flush(ctx)
+		case <-ctx.Done():
+			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		drain:
+			for {
+				select {
+				case evs := <-w.ch:
+					pending = append(pending, evs...)
+				default:
+					break drain
+				}
+			}
+			flush(dctx)
+			cancel()
+			return
+		}
+	}
+}
+
+// Done is closed once Run has drained and returned.
+func (w *Writer) Done() <-chan struct{} { return w.done }
+
+func (w *Writer) write(ctx context.Context, evs []store.Event) {
+	defer w.queued.Add(-int64(len(evs)))
+	if w.enrich != nil {
+		for i := range evs {
+			w.enrich(&evs[i])
+		}
+	}
+	for start := 0; start < len(evs); start += writeBatch {
+		chunk := evs[start:min(start+writeBatch, len(evs))]
+		if err := w.st.InsertEvents(ctx, chunk); err != nil {
+			w.log.Error("Event batch write failed, events dropped", "events", len(chunk), logging.Err(err))
+			bySite := map[int64]int64{}
+			for _, e := range chunk {
+				bySite[e.SiteID]++
+			}
+			for site, n := range bySite {
+				w.counters.Add(site, func(s *store.IngestStat) { s.Dropped += n; s.Accepted -= n })
+			}
+		}
+	}
+}
+
+// Counters are the collector's counters per site and hour, flushed to ingest_stat periodically, plus when each
+// site's sources last delivered (since start; the dashboard falls back to the hourly rows for older times).
+type Counters struct {
+	mu   sync.Mutex
+	m    map[[2]int64]*store.IngestStat
+	last map[lastKey]time.Time
+	now  func() time.Time
+}
+
+type lastKey struct {
+	site   int64
+	source string
+}
+
+// NewCounters returns empty counters on now (time.Now when nil).
+func NewCounters(now func() time.Time) *Counters {
+	if now == nil {
+		now = time.Now
+	}
+	return &Counters{m: map[[2]int64]*store.IngestStat{}, last: map[lastKey]time.Time{}, now: now}
+}
+
+// Add applies f to site's counters for the current hour.
+func (c *Counters) Add(site int64, f func(*store.IngestStat)) {
+	hour := c.now().Unix() / 3600
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	k := [2]int64{site, hour}
+	s, ok := c.m[k]
+	if !ok {
+		s = &store.IngestStat{SiteID: site, Hour: hour}
+		c.m[k] = s
+	}
+	f(s)
+}
+
+// Seen records that site's source delivered now.
+func (c *Counters) Seen(site int64, source string) {
+	now := c.now()
+	c.mu.Lock()
+	c.last[lastKey{site, source}] = now
+	c.mu.Unlock()
+}
+
+// Last is when site's source last delivered since start, zero when it has not.
+func (c *Counters) Last(site int64, source string) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.last[lastKey{site, source}]
+}
+
+// Pending is a copy of the counters not yet flushed, for the dashboard's current hour.
+func (c *Counters) Pending() []store.IngestStat {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]store.IngestStat, 0, len(c.m))
+	for _, s := range c.m {
+		out = append(out, *s)
+	}
+	return out
+}
+
+// Flush writes the counters and resets them; on failure they are added back for the next flush.
+func (c *Counters) Flush(ctx context.Context, st *store.Store) error {
+	c.mu.Lock()
+	taken := c.m
+	c.m = map[[2]int64]*store.IngestStat{}
+	c.mu.Unlock()
+	stats := make([]store.IngestStat, 0, len(taken))
+	for _, s := range taken {
+		stats = append(stats, *s)
+	}
+	err := st.AddStats(ctx, stats)
+	if err != nil {
+		c.mu.Lock()
+		for k, s := range taken {
+			if t, ok := c.m[k]; ok {
+				addStat(t, *s)
+			} else {
+				c.m[k] = s
+			}
+		}
+		c.mu.Unlock()
+	}
+	return err
+}
+
+func addStat(t *store.IngestStat, s store.IngestStat) {
+	t.Accepted += s.Accepted
+	t.AcceptedServer += s.AcceptedServer
+	t.RateLimited += s.RateLimited
+	t.Rejected += s.Rejected
+	t.Dropped += s.Dropped
+	t.UnknownDomain += s.UnknownDomain
+}

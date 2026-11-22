@@ -88,6 +88,7 @@ Go types:
 | `site_id` | INTEGER | no |  | 1 |
 | `hour` | INTEGER | no |  | 2 |
 | `accepted` | INTEGER | no | `0` |  |
+| `accepted_server` | INTEGER | no | `0` |  |
 | `rate_limited` | INTEGER | no | `0` |  |
 | `rejected` | INTEGER | no | `0` |  |
 | `dropped` | INTEGER | no | `0` |  |
@@ -220,6 +221,7 @@ erDiagram
         INTEGER site_id PK
         INTEGER hour PK
         INTEGER accepted
+        INTEGER accepted_server
         INTEGER rate_limited
         INTEGER rejected
         INTEGER dropped

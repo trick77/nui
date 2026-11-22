@@ -103,12 +103,15 @@ func (s *Store) AddStats(ctx context.Context, stats []IngestStat) error {
 	defer func() { _ = tx.Rollback() }()
 	for _, st := range stats {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO ingest_stat (site_id, hour, accepted, rate_limited, rejected, dropped, unknown_domain)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO ingest_stat (site_id, hour, accepted, accepted_server, rate_limited, rejected, dropped,
+				unknown_domain)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (site_id, hour) DO UPDATE SET accepted = accepted + excluded.accepted,
+				accepted_server = accepted_server + excluded.accepted_server,
 				rate_limited = rate_limited + excluded.rate_limited, rejected = rejected + excluded.rejected,
 				dropped = dropped + excluded.dropped, unknown_domain = unknown_domain + excluded.unknown_domain`,
-			st.SiteID, st.Hour, st.Accepted, st.RateLimited, st.Rejected, st.Dropped, st.UnknownDomain); err != nil {
+			st.SiteID, st.Hour, st.Accepted, st.AcceptedServer, st.RateLimited, st.Rejected, st.Dropped,
+			st.UnknownDomain); err != nil {
 			return err
 		}
 	}

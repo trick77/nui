@@ -69,13 +69,14 @@ type Event struct {
 //
 // Table: ingest_stat
 type IngestStat struct {
-	SiteID        int64
-	Hour          int64
-	Accepted      int64
-	RateLimited   int64
-	Rejected      int64
-	Dropped       int64
-	UnknownDomain int64
+	SiteID         int64
+	Hour           int64
+	Accepted       int64
+	AcceptedServer int64
+	RateLimited    int64
+	Rejected       int64
+	Dropped        int64
+	UnknownDomain  int64
 }
 
 // ActorClass is one actor's class on one day, with its reasons.
