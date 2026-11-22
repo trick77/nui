@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"time"
@@ -122,16 +124,47 @@ func (s *Store) EnforceCap(ctx context.Context, maxBytes int64) (int64, error) {
 	return total, nil
 }
 
+// ErrVacuumStalled is Vacuum giving up: steps that hand no free page back.
+var ErrVacuumStalled = errors.New("incremental vacuum made no progress")
+
+// vacuumStmt is one vacuum step (a test replaces it with one that does nothing).
+var vacuumStmt = `PRAGMA incremental_vacuum(` + strconv.Itoa(vacuumStep) + `)`
+
+// maxStalledSteps is how many steps in a row may leave the free pages as many as before (the writer may free a few
+// meanwhile) before Vacuum stops.
+const maxStalledSteps = 3
+
+// Incremental reports whether the database is in incremental auto-vacuum mode: only then can Vacuum shrink the
+// file. Open switches an empty database; one that held events first stays in its mode.
+func (s *Store) Incremental(ctx context.Context) (bool, error) {
+	var mode int
+	err := s.DB.QueryRowContext(ctx, `PRAGMA auto_vacuum`).Scan(&mode)
+	return mode == 2, err
+}
+
 // Vacuum hands the free pages back to the file system a step at a time, so the volume shrinks too without one long
-// lock.
+// lock. In another mode than incremental it does nothing (the free pages are reused by new rows, the file keeps its
+// size); when steps stop handing pages back it returns ErrVacuumStalled instead of trying forever.
 func (s *Store) Vacuum(ctx context.Context) error {
+	if inc, err := s.Incremental(ctx); err != nil || !inc {
+		return err
+	}
+	prev, stalled := int64(-1), 0
 	for {
 		var free int64
 		if err := s.DB.QueryRowContext(ctx, `SELECT freelist_count FROM pragma_freelist_count()`).Scan(&free); err != nil ||
 			free == 0 {
 			return err
 		}
-		if _, err := s.DB.ExecContext(ctx, `PRAGMA incremental_vacuum(`+strconv.Itoa(vacuumStep)+`)`); err != nil {
+		if prev >= 0 && free >= prev {
+			if stalled++; stalled >= maxStalledSteps {
+				return fmt.Errorf("%w: %d free pages left", ErrVacuumStalled, free)
+			}
+		} else {
+			stalled = 0
+		}
+		prev = free
+		if _, err := s.DB.ExecContext(ctx, vacuumStmt); err != nil {
 			return err
 		}
 		if !run.Sleep(ctx, retentionYield) {
@@ -184,6 +217,14 @@ func (s *Store) RunRetention(ctx context.Context, o RetentionOptions) {
 	}
 	if o.Log == nil {
 		o.Log = slog.Default()
+	}
+	// A database that held events before nui switched incremental auto-vacuum on keeps its mode: switching needs a
+	// full VACUUM, which locks the collector out for minutes and needs the file's size again in free disk. Retention
+	// runs without it: deleted pages are reused by new rows (the cap counts the rows, not the file), the file does
+	// not shrink.
+	if inc, err := s.Incremental(ctx); err == nil && !inc {
+		o.Log.Warn("Database not in incremental auto-vacuum mode: retention frees pages for reuse, the file does not " +
+			"shrink (switch with PRAGMA auto_vacuum = INCREMENTAL; VACUUM; while nui is stopped)")
 	}
 	var lastAge time.Time
 	// The first check a minute after start (sooner with a shorter cadence), then every CapEvery.

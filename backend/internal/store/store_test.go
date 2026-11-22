@@ -1,10 +1,13 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -237,6 +240,80 @@ func TestRunRetention_Cap(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+// A database that held events before incremental auto-vacuum was switched on keeps its mode: Vacuum returns at once
+// (pages are reused, the file keeps its size), never loops on a freelist incremental_vacuum cannot empty, and the
+// retention loop goes on pruning and capping. A step that hands nothing back ends Vacuum with ErrVacuumStalled.
+func TestVacuum_WrongModeAndStall(t *testing.T) {
+	st := open(t)
+	id := seed(t, st)
+	var evs []Event
+	for i := range 6000 {
+		evs = append(evs, Event{SiteID: id, TS: time.Now().UnixMilli() - int64(i), Source: "browser",
+			Kind: "page_view", IP: "192.0.2.1", IPKey: "192.0.2.1", Props: `{"pad":"` + strings.Repeat("x", 200) + `"}`})
+	}
+	if err := st.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	// Stalled: incremental mode, free pages, steps that do nothing.
+	if _, err := st.DB.Exec(`DELETE FROM event WHERE id % 2 = 0`); err != nil {
+		t.Fatal(err)
+	}
+	vacuumStmt = `SELECT 1`
+	err := st.Vacuum(t.Context())
+	vacuumStmt = `PRAGMA incremental_vacuum(` + strconv.Itoa(vacuumStep) + `)`
+	if !errors.Is(err, ErrVacuumStalled) {
+		t.Errorf("stalled vacuum: %v", err)
+	}
+	// The wrong mode: switched back to none, as a database created before the switch would be.
+	conn, err := st.DB.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(t.Context(), `PRAGMA auto_vacuum = NONE`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(t.Context(), `VACUUM`); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	if inc, err := st.Incremental(t.Context()); err != nil || inc {
+		t.Fatalf("incremental %v %v after switching it off", inc, err)
+	}
+	if _, err := st.DB.Exec(`DELETE FROM event WHERE id % 3 = 0`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := st.Vacuum(ctx); err != nil {
+		t.Errorf("vacuum in the wrong mode: %v", err)
+	}
+	// Retention keeps working: the cap still prunes, and the loop says once why the file does not shrink.
+	used, _ := st.UsedBytes(t.Context())
+	var logs bytes.Buffer
+	rctx, rcancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		st.RunRetention(rctx, RetentionOptions{Months: 25, MaxBytes: used / 2, CapEvery: 20 * time.Millisecond,
+			Log: slog.New(slog.NewTextHandler(&logs, nil))})
+		close(done)
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if u, _ := st.UsedBytes(t.Context()); u <= used/2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cap not enforced in the wrong mode")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	rcancel()
+	<-done
+	if !strings.Contains(logs.String(), "not in incremental auto-vacuum mode") {
+		t.Errorf("no word on the mode: %s", logs.String())
+	}
 }
 
 func TestPrune(t *testing.T) {
