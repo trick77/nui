@@ -67,8 +67,7 @@ const briefPrompt = `You brief the owner of a website about its analytics. The d
 	`that matter most for someone who wants to act (at most five), most important first. A line cites findings by ` +
 	`their id, only ids from the findings list; you may merge findings that are clearly one thing (one operator, ` +
 	`one cause) into one line by listing several ids. For each line write one short statement of about nine words ` +
-	`saying what it means. Also write a headline of about eight words for the whole period. Write no figures at ` +
-	`all: no digits, no number words, no percentages or counts; the dashboard shows every figure beside your words.`
+	`saying what it means. Also write a headline of about eight words for the whole period.`
 
 func (s *Service) brief(ctx context.Context, in insight.BriefingInput) error {
 	figures := make([]map[string]string, 0, len(in.Tiles))
@@ -173,9 +172,8 @@ var readPrompt = func() string {
 	}
 	b.WriteString(`Write one sentence of about fourteen words saying what it does and, if it is automated, what ` +
 		`it is probably after; it must agree with the verdict. Pick up to three evidence ids that support the ` +
-		`verdict best, only ids from the evidence list. Write no figures at all (no digits, no number words), no ` +
-		`address, network name or date: the reading is shown for every visitor that behaves alike, with that ` +
-		`visitor's own figures beside it.`)
+		`verdict best, only ids from the evidence list. Write no address, network name or date: the reading is ` +
+		`shown for every visitor that behaves alike, with that visitor's own figures beside it.`)
 	return b.String()
 }()
 
@@ -254,10 +252,10 @@ var labelSchema = map[string]any{
 var labelPrompts = map[string]string{
 	"path": `Each value is a URL path a client requested on a website and got 401, 403 or 404. Label what someone ` +
 		`requesting it is probably looking for, in about four words (for example "looking for leaked secrets", ` +
-		`"WordPress login probe"). Answer with each value's index i. Write no figures, no digits.`,
+		`"WordPress login probe"). Answer with each value's index i.`,
 	"ua": `Each value is the user agent string of a client that is not a browser. Label what kind of client it ` +
 		`is, in about four words (for example "Python scraping script", "SEO crawler"). Answer with each value's ` +
-		`index i. Write no figures, no digits, no version numbers.`,
+		`index i. Write no version numbers.`,
 }
 
 func (s *Service) label(ctx context.Context, site int64, j labelJob) error {

@@ -365,6 +365,20 @@ func TestDefaultModelAcceptsTheRequests(t *testing.T) {
 	}
 }
 
+// Every prompt states the figure rule once, the strict one: a second, laxer one ("no number that is not in the
+// data") contradicted it.
+func TestPromptsOneFigureRule(t *testing.T) {
+	for name, p := range map[string]string{"briefing": briefPrompt, "reading": readPrompt, "path": labelPrompts["path"],
+		"ua": labelPrompts["ua"]} {
+		system := p + "\n\n" + guard
+		if strings.Count(system, "Write no figures") != 1 || strings.Count(system, "no digits") != 1 ||
+			!strings.Contains(system, "Write no figures at all, not even ones in the data") ||
+			strings.Contains(system, "not in the data") || strings.Contains(strings.ToLower(p), "no figures") {
+			t.Errorf("%s prompt: %s", name, system)
+		}
+	}
+}
+
 func TestHelpers(t *testing.T) {
 	if clip("  a  b\nc ", 10) != "a b c" || clip(strings.Repeat("word ", 30), 20) != "word word word word…" ||
 		clip("abcdefghijklmnop", 5) != "abcd…" {
