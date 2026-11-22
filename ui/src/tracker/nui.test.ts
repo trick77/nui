@@ -1029,6 +1029,42 @@ function batchProblems(raw: string): string[] {
     const p = overLimit("p", e.p, 0);
     if (p) out.push(e.k + "." + p);
   }
+  // The context as stored, without the URL and referrer (own columns).
+  const ctx = Object.fromEntries(
+    Object.entries(b.ctx).filter(([k]) => k !== "url" && k !== "ref"),
+  );
+  if (bytes(JSON.stringify(ctx)) > 4096) out.push("ctx size");
+  // What the rows store (store.Event.Size): every row repeats the page URL,
+  // its path and template; page views and session starts the referrer; the
+  // first row the context and the headers (taken as 1.5 KiB). The name is
+  // taken at its 200-byte bound, the address at an IPv6 one.
+  let stored = 0;
+  b.events.forEach((e, i) => {
+    const u = e.url ?? String(b.ctx.url);
+    const path = new URL(u).pathname;
+    const ref =
+      e.k === "page_view" || e.k === "session_start"
+        ? String(b.ctx.ref ?? "")
+        : "";
+    const props = {
+      p: e.p,
+      title: (e as { title?: string }).title,
+      ...(i === 0 ? { ctx, hdr: "h".repeat(1536) } : {}),
+    };
+    const size =
+      96 +
+      bytes(navigator.userAgent) +
+      3 * 39 +
+      2 * 32 +
+      200 +
+      2 * bytes(path) +
+      bytes(u) +
+      2 * bytes(ref) +
+      bytes(JSON.stringify(props));
+    if (size > 16 * 1024) out.push(e.k + " stored");
+    stored += size;
+  });
+  if (stored > 64 * 1024) out.push("batch stored");
   return out;
 }
 
@@ -1036,6 +1072,42 @@ describe("collector limits", () => {
   afterEach(() => {
     document.body.innerHTML = "";
     delete (navigator as { userAgentData?: unknown }).userAgentData;
+  });
+
+  it("keeps what a batch's rows store within the collector's limit", async () => {
+    // Every row repeats the page's URL: a long query fills a batch early.
+    history.replaceState(null, "", "/search?q=" + "x".repeat(1900));
+    const t = boot();
+    fetchMock.mockImplementation(() => new Promise(() => {}));
+    for (let i = 0; i < 48; i++) t.event("e" + i, { i });
+    t.flush(true);
+    await vi.advanceTimersByTimeAsync(0);
+    const raws = fetchMock.mock.calls.map(
+      (c) => (c[1] as RequestInit).body as string,
+    );
+    expect(raws.length).toBeGreaterThan(0);
+    for (const r of raws) expect(batchProblems(r)).toEqual([]);
+  });
+
+  it("keeps the context within the collector's limit", async () => {
+    Object.defineProperty(navigator, "userAgentData", {
+      configurable: true,
+      value: {
+        mobile: false,
+        platform: "p".repeat(500),
+        brands: Array.from({ length: 8 }, () => ({
+          brand: "b".repeat(500),
+          version: "v".repeat(500),
+        })),
+      },
+    });
+    document.title = "t".repeat(500);
+    const t = boot();
+    t.flush(true);
+    await vi.advanceTimersByTimeAsync(0);
+    const b = bodies()[0];
+    expect(batchProblems(JSON.stringify(b))).toEqual([]);
+    expect(b.ctx.title).toBe("t".repeat(500));
   });
 
   it("keeps every property it sends within the collector's limits", async () => {

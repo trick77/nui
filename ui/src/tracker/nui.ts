@@ -41,6 +41,12 @@ export const LIMITS = {
   // Values visited per walk of a host page's props.
   nodes: 200,
   props: 4096,
+  // The context without URL and referrer, encoded: the collector takes
+  // 4 KiB, its encoder writes some characters longer.
+  ctx: 3072,
+  // What a batch's rows store: 64 KiB at the collector. Every row repeats
+  // the page's URL (with its path and template); the estimate is generous.
+  stored: 56 * 1024,
   queue: 100,
   perPage: 300,
   perDocument: 1000,
@@ -393,7 +399,21 @@ export function start(
     set("inputs", () => ({ ...inputs }));
     // Each value is checked at depth 0, like an event's p.
     budget = LIMITS.nodes;
-    return bound(c, "", -1) as Props;
+    const out = bound(c, "", -1) as Props;
+    // Over the context's limit only with odd client hints: they go first.
+    if (ctxLen(out) > LIMITS.ctx) {
+      delete out.uach;
+      delete out.langs;
+    }
+    return out;
+  };
+  // The context as the collector stores it: without URL and referrer.
+  const ctxLen = (c: Props) => {
+    let n = 2;
+    for (const k in c)
+      if (k !== "url" && k !== "ref")
+        n += utf8Len(k) + 4 + utf8Len(safeJSON(c[k]));
+    return n;
   };
 
   // ---- the queue and its guards
@@ -545,6 +565,12 @@ export function start(
         ctx: c,
       }).slice(0, -1) + ',"events":[';
     let size = utf8Len(head) + 2;
+    // What the rows will store: the context and the request headers once,
+    // then per row the URL with its path and template, the user agent, the
+    // ids and addresses, the event, and the referrer on page views.
+    let stored = ctxLen(c) + 1536;
+    const row = 400 + utf8Len(clip(nav.userAgent, LIMITS.str));
+    const refLen = 2 * utf8Len(String(c.ref || ""));
     const parts: string[] = [];
     const batch: Rec[] = [];
     while (
@@ -560,9 +586,14 @@ export function start(
         e.title = r.ti;
       }
       e.p = r.p;
-      const s = safeJSON(e);
-      const w = utf8Len(s) + (parts.length ? 1 : 0);
-      if (size + w > LIMITS.batchBytes) {
+      const j = safeJSON(e);
+      const w = utf8Len(j) + (parts.length ? 1 : 0);
+      const cost =
+        row +
+        3 * utf8Len(r.u) +
+        w +
+        (r.k === "page_view" || r.k === "session_start" ? refLen : 0);
+      if (size + w > LIMITS.batchBytes || stored + cost > LIMITS.stored) {
         if (!parts.length) {
           // Cannot fit even alone: drop it rather than block the queue.
           queue.shift();
@@ -572,7 +603,8 @@ export function start(
         break;
       }
       size += w;
-      parts.push(s);
+      stored += cost;
+      parts.push(j);
       batch.push(queue.shift()!);
     }
     if (!batch.length) return null;
