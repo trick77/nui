@@ -77,7 +77,7 @@ func (w *World) bots(p *dayPlan, s *Site, d int64) {
 		addr, _ := w.BotAddr("renderer", s.idx)
 		bot := &person{addr: addr, prof: &uaProfile{ua: b.UA, chromium: true, brand: "Chromium", platform: "Linux",
 			screen: [2]int{1024, 1024}, viewport: [2]int{1024, 1024}, dpr: 1, hc: 4, mem: 8},
-			loc: locale{[]string{"en-US"}, "UTC", 0}, vid: r.hex32()}
+			loc: locale{[]string{"en-US"}, "UTC", 0}, vid: r.hex32(), scripted: true}
 		for range r.poisson(4 * w.Scale) {
 			start := d0.Add(time.Duration(r.Int64N(int64(day))))
 			pg := s.paths.page(r)
@@ -201,7 +201,7 @@ func (w *World) automation(p *dayPlan, s *Site, d int64) {
 		r := newRng(w.Seed, 23, int64(s.idx), d)
 		bot := &person{addr: HeadlessAddr, prof: &uaProfile{ua: HeadlessUA, chromium: true, brand: "HeadlessChrome",
 			platform: "Linux", screen: [2]int{800, 600}, viewport: [2]int{800, 600}, dpr: 1, hc: 2, mem: 2},
-			loc: locale{[]string{"en-US"}, "UTC", 0}, vid: r.hex32()}
+			loc: locale{[]string{"en-US"}, "UTC", 0}, vid: r.hex32(), scripted: true}
 		for range r.poisson(2) {
 			start := d0.Add(time.Duration(r.Int64N(int64(day - time.Hour))))
 			var pages []page
