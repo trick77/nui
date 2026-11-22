@@ -42,9 +42,10 @@ const STATUS_OPTS: [string, string][] = [
   ["5xx", "5xx"],
 ];
 
-// A text filter applied after a short pause; follows the URL when a click
-// elsewhere sets it. The pending change dies with the field or a newer value
-// and reaches the latest onChange, so it applies to the filter as it is then.
+// A text filter applied after a short pause, trimmed; the field keeps what
+// was typed. It follows the URL when a click elsewhere sets another value.
+// The pending change dies with the field or a newer value and reaches the
+// latest onChange, so it applies to the filter as it is then.
 function TextFilter({
   label,
   value,
@@ -58,7 +59,8 @@ function TextFilter({
   const [seen, setSeen] = useState(value);
   if (value !== seen) {
     setSeen(value);
-    setDraft(value);
+    // Its own trimmed text coming back is no new value.
+    if (value !== draft.trim()) setDraft(value);
   }
   const apply = useEffectEvent((v: string) => onChange(v));
   useEffect(() => {

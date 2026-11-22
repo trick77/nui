@@ -947,6 +947,25 @@ describe("log page", () => {
       ]);
     });
 
+    it("keep what was typed, sending it trimmed", async () => {
+      start("/dashboard/log?site=lens.example.com");
+      const log = await screen.findByRole("region", { name: "Log" });
+      await within(log).findByText(/events in this range/);
+      fireEvent.change(box(log, "Path or event name"), {
+        target: { value: "sign " },
+      });
+      await pause();
+      expect(lastCall("/api/dash/log").get("path")).toBe("sign");
+      // The space just typed stays in the field.
+      expect(box(log, "Path or event name")).toHaveValue("sign ");
+      fireEvent.change(box(log, "Path or event name"), {
+        target: { value: "sign up" },
+      });
+      await pause();
+      expect(lastCall("/api/dash/log").get("path")).toBe("sign up");
+      expect(box(log, "Path or event name")).toHaveValue("sign up");
+    });
+
     it("are dropped when the filters are cleared", async () => {
       start("/dashboard/log?site=lens.example.com&path=/x");
       const log = await screen.findByRole("region", { name: "Log" });
