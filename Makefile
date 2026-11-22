@@ -21,3 +21,20 @@ hooks:
 lint:
 	$(SHIP_CMD) lint
 # ship:end
+
+# The UI against a simulated world: the real server (server -sim) on a temporary data directory, sign-in off, a
+# seeded history backfilled and advancing as the dashboard asks, and Vite's dev server proxying to it. Ctrl-C stops
+# both. Knobs: NUI_SIM_* (README). The server is built first: go run would not pass the stop on to it.
+SIM_SERVER = $${TMPDIR:-/tmp}/nui-sim-server
+
+.PHONY: sim sim-server
+
+sim:
+	cd backend && go build -o $(SIM_SERVER) ./cmd/server
+	$(SIM_SERVER) -sim & pid=$$!; trap 'kill $$pid 2>/dev/null' EXIT INT TERM; \
+	cd ui && NUI_API_TARGET=http://127.0.0.1:$${NUI_SIM_PORT:-8080} npm run dev
+
+# Just the simulated server, for curl or a second UI process.
+sim-server:
+	cd backend && go build -o $(SIM_SERVER) ./cmd/server
+	$(SIM_SERVER) -sim
