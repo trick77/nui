@@ -85,7 +85,9 @@ func (w *Writer) Enqueue(evs []store.Event) bool {
 		return true
 	}
 	b := weight(evs)
-	if w.queued.Add(n) > w.max || w.queuedBytes.Add(b) > w.maxBytes {
+	// Both counters first, then the checks: a short-circuit would roll back bytes never added.
+	events, bytes := w.queued.Add(n), w.queuedBytes.Add(b)
+	if events > w.max || bytes > w.maxBytes {
 		w.queued.Add(-n)
 		w.queuedBytes.Add(-b)
 		return false
@@ -156,9 +158,11 @@ func (w *Writer) Run(ctx context.Context) {
 func (w *Writer) Done() <-chan struct{} { return w.done }
 
 func (w *Writer) write(ctx context.Context, evs []store.Event) {
+	// The weight as enqueued, before enrich adds a country: the queue gives back exactly what it took.
+	b := weight(evs)
 	defer func() {
 		w.queued.Add(-int64(len(evs)))
-		w.queuedBytes.Add(-weight(evs))
+		w.queuedBytes.Add(-b)
 	}()
 	if w.enrich != nil {
 		for i := range evs {

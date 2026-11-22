@@ -707,6 +707,34 @@ func TestWriter_QueueBytes(t *testing.T) {
 	if w.Enqueue([]store.Event{big}) || w.QueuedBytes() != before {
 		t.Error("refused batch counted")
 	}
+	// Refused by the event bound: the bytes stay exact too.
+	small := newRig(t, 2, false).c.Writer
+	ev := store.Event{SiteID: 1, Props: "{}"}
+	small.Enqueue([]store.Event{ev, ev})
+	for range 3 {
+		if small.Enqueue([]store.Event{ev}) {
+			t.Fatal("past the event bound")
+		}
+	}
+	if small.QueuedBytes() != weight([]store.Event{ev, ev}) {
+		t.Errorf("bytes %d after event-bound refusals, want %d", small.QueuedBytes(), weight([]store.Event{ev, ev}))
+	}
+}
+
+// What the writer writes, enriched, it gives back to the queue exactly.
+func TestWriter_BytesBalance(t *testing.T) {
+	r := newRig(t, 0, true) // the rig's enrich adds a country
+	if w := r.browser(batch(domain, 3, ""), "192.0.2.70", ""); w.Code != http.StatusNoContent {
+		t.Fatal(w.Code)
+	}
+	waitEvents(t, r.st, 3)
+	deadline := time.Now().Add(5 * time.Second)
+	for r.c.Writer.Queued() != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if r.c.Writer.QueuedBytes() != 0 || r.c.Writer.Queued() != 0 {
+		t.Errorf("after the write: %d events, %d bytes queued", r.c.Writer.Queued(), r.c.Writer.QueuedBytes())
+	}
 }
 
 // Shutdown during a write: the write under way completes and the queue is drained; nothing is dropped.
