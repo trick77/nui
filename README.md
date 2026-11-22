@@ -99,14 +99,19 @@ answers 404 like any unknown path and does not lead there.
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/trick77/nui/master/compose.yaml
-curl -fsSL -o .env https://raw.githubusercontent.com/trick77/nui/master/.env.example
+printf 'PUBLIC_FQDN=nui.example.com\nBACKEND_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
 mkdir -p data
 curl -fsSL -o data/sites.json https://raw.githubusercontent.com/trick77/nui/master/docs/sites.example.json
-# edit .env: PUBLIC_FQDN, the OIDC client and/or BACKEND_ADMIN_TOKEN, BACKEND_SESSION_SECRET
-# edit data/sites.json: your domains (next section)
+# edit .env: your host name; edit data/sites.json: your domains (next section)
 sudo chown -R 65532:65532 data
 docker compose pull && docker compose up -d
 ```
+
+`.env` holds only what differs from the defaults: the host name (`PUBLIC_FQDN`) and a sign-in method, the admin
+token above, the OIDC client (`BACKEND_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET`, optionally `_ADMIN_GROUP`), or
+both (next section). Optionally `LLMWIRE_MIMO_API_KEY` adds the model's briefing and readings. Everything else has a
+default that suits the compose file. [`.env.example`](.env.example) is the complete list: every variable, its
+default and what it does; copy a line from there into `.env` only to change it.
 
 ### Sign-in
 
