@@ -19,9 +19,13 @@ type Live struct {
 	// MaxGap is the longest wall-clock gap a tick catches up on: after a longer idle spell the world skips ahead
 	// instead of sending the missed time's traffic at once (the collector would date it all now).
 	MaxGap time.Duration
-	// MaxSpan is the most world time one tick hands out, whatever the speed: beyond it the world skips ahead. An
-	// hour of the largest world is some ten thousand events.
+	// MaxSpan is the most world time one tick hands out, whatever the speed: beyond it the world skips ahead.
 	MaxSpan time.Duration
+	// MaxEvents is the most events one tick hands out: an hour of the largest world, a live flood in it, can be
+	// several times that. The span's earlier requests beyond it are skipped (Skipped counts them).
+	MaxEvents int
+	// Skipped counts the requests ticks left out at MaxEvents.
+	Skipped int
 	// Budget is the wall time one delivery may take: what is left after it is skipped, so a dashboard request that
 	// advances the world never waits long.
 	Budget time.Duration
@@ -37,8 +41,8 @@ func NewLive(w *World, start time.Time, speed float64) *Live {
 	if SpeedLimit.Check(speed) != nil {
 		speed = 1
 	}
-	return &Live{World: w, Speed: speed, MaxGap: 2 * time.Minute, MaxSpan: time.Hour, Budget: time.Second,
-		start: start, cursor: w.Anchor}
+	return &Live{World: w, Speed: speed, MaxGap: 2 * time.Minute, MaxSpan: time.Hour, MaxEvents: 20_000,
+		Budget: time.Second, start: start, cursor: w.Anchor}
 }
 
 // maxWorld bounds world time's distance from the anchor, within a time.Duration's range: at the largest speed a
@@ -82,7 +86,18 @@ func (l *Live) Tick(now time.Time) []*Request {
 		from = to.Add(-gap)
 	}
 	l.cursor = to
-	for _, q := range l.World.Requests(from, to) {
+	reqs := l.World.Requests(from, to)
+	if l.MaxEvents > 0 {
+		// The latest requests up to the bound, as a skip ahead keeps the latest time.
+		n, i := 0, len(reqs)
+		for i > 0 && n+reqs[i-1].Events() <= l.MaxEvents {
+			i--
+			n += reqs[i].Events()
+		}
+		l.Skipped += i
+		reqs = reqs[i:]
+	}
+	for _, q := range reqs {
 		heap.Push(&l.retries, q)
 	}
 	var out []*Request

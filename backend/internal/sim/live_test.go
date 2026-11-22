@@ -195,6 +195,23 @@ func TestLiveBounded(t *testing.T) {
 	if len(w.plans) > maxPlans {
 		t.Errorf("%d day plans held", len(w.plans))
 	}
+	// A tick holds at most MaxEvents: a live flood's ten minutes are thousands, the earlier ones skipped.
+	k := DefaultKnobs()
+	k.Flood, k.Scale = "addr", 0.5
+	fw, err := k.World(w.Ref, anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fl := NewLive(fw, start, 60)
+	fl.MaxEvents = 1000
+	events := 0
+	flooded := fl.Tick(start.Add(11 * time.Second)) // eleven minutes of the world: the flood
+	for _, q := range flooded {
+		events += q.Events()
+	}
+	if events > fl.MaxEvents || fl.Skipped == 0 || len(flooded) == 0 {
+		t.Errorf("a flood's tick: %d events in %d requests, %d skipped", events, len(flooded), fl.Skipped)
+	}
 	// A delivery stops at its budget and counts what it left.
 	slow := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		time.Sleep(2 * time.Millisecond)
