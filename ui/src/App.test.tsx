@@ -9,7 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setFetcher } from "./api";
 import App from "./App";
-import { type FixtureOptions, fixtureFetch } from "./fixtures";
+import { type FixtureOptions, TRAIL_NEXT, fixtureFetch } from "./fixtures";
 
 let calls: string[] = [];
 
@@ -441,13 +441,17 @@ describe("dashboard on a domain with a server feed", () => {
     // A row fills the detail below.
     fireEvent.click(within(v).getByText("203.0.113.42"));
     const d = screen.getByRole("region", { name: "Visitor" });
-    await within(d).findByText("Ordinary use");
+    await within(d).findByText("Person");
+    // What it does, as the table says it: the model's sentence, marked.
+    const does = within(d).getByText(/Looked up one AS after a search/);
+    expect(does).toHaveClass("gen");
+    expect(does).toHaveAttribute("title", "Written by the model");
     expect(
       within(d).getByRole("img", { name: "Activity by hour" }).children,
     ).toHaveLength(24);
     fireEvent.click(within(d).getByRole("button", { name: "Load earlier →" }));
     await waitFor(() =>
-      expect(lastCall("/api/dash/visitor").get("cursor")).toBe("t5"),
+      expect(lastCall("/api/dash/visitor").get("cursor")).toBe(TRAIL_NEXT),
     );
     fireEvent.click(
       within(d).getByRole("button", { name: /Every event of this address/ }),
@@ -532,6 +536,12 @@ describe("dashboard on a domain with a server feed", () => {
     expect(
       await within(d).findByText(/No reading for this address yet/),
     ).toBeInTheDocument();
+    // Without the model's sentence, the computed one, unmarked.
+    fireEvent.click(within(v).getByText("192.0.2.66"));
+    const does = await within(d).findByText(
+      "Known bot, mostly view /AS:n (1520×)",
+    );
+    expect(does).not.toHaveClass("gen");
   });
 
   it("runs the top-N lists: order, show all, search, expand, log", async () => {
@@ -610,7 +620,7 @@ describe("dashboard on a domain with a server feed", () => {
     expect(vrow).toHaveFocus();
     fireEvent.click(vrow);
     const d = screen.getByRole("region", { name: "Visitor" });
-    expect(await within(d).findByText("Ordinary use")).toBeInTheDocument();
+    expect(await within(d).findByText("Person")).toBeInTheDocument();
     expect(vrow).toHaveAttribute("aria-pressed", "true");
 
     const pages = screen.getByRole("region", { name: "Pages" });
@@ -900,7 +910,7 @@ describe("while an answer is on its way", () => {
     });
     fireEvent.click(await within(v).findByText("203.0.113.42"));
     const d = panel("Visitor");
-    await within(d).findByText("Ordinary use");
+    await within(d).findByText("Person");
     expect(
       within(d).getByRole("button", { name: "Load earlier →" }),
     ).toBeEnabled();

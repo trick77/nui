@@ -198,6 +198,8 @@ export type Visitor = {
   // The model's label for an unknown automated client, as in the table.
   client_gen?: string | null;
   signals: string[];
+  // What it does in one sentence, as in the table.
+  does: Gen;
   requests: number | null;
   addresses: number;
   reading: Reading | null;

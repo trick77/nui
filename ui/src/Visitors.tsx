@@ -319,6 +319,9 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
           <div className="border-border px-[18px] py-4 min-[1000px]:border-r">
             <div className="eyebrow">Visitor</div>
             <div className="mt-1 font-mono text-[15px]">{v.key}</div>
+            <p className="mt-1.5 mb-0 text-[13px] text-ink-dim">
+              <GenText gen={v.does.gen} text={v.does.text} />
+            </p>
             <dl className="mt-2.5 mb-0 grid grid-cols-[auto_1fr] gap-x-3.5 gap-y-[5px] text-[13px]">
               <dt className="text-muted">Class</dt>
               <dd className="m-0">

@@ -18,6 +18,7 @@ import type {
   Overview,
   SiteInfo,
   Tile,
+  TrailItem,
   Visitor,
   VisitorRow,
   Visitors,
@@ -617,7 +618,7 @@ const VISITORS: VisitorRow[] = [
     signals: ["no script beacon", "no assets", "0.8 s interval"],
     does: {
       gen: "Walks the IP lookup API in address order with an invalid key: a scraping attempt.",
-      text: "2’338 refused API requests, no browser",
+      text: "Unknown automated, mostly GET /api/v1/ip/{addr} → 401 (2338×)",
     },
   },
   {
@@ -638,7 +639,7 @@ const VISITORS: VisitorRow[] = [
     signals: ["pointer + scroll", "assets loaded"],
     does: {
       gen: "Looked up one AS after a search, then left for the GitHub data repository.",
-      text: "61 views in 14 visits",
+      text: "Person, mostly view /AS:n (40×)",
     },
   },
   {
@@ -657,7 +658,7 @@ const VISITORS: VisitorRow[] = [
     events: 0,
     last: "2026-11-22T13:17:20Z",
     signals: ["ipverse crawlers.json", "renders JS"],
-    does: { gen: null, text: "Verified crawler, 1’904 requests" },
+    does: { gen: null, text: "Known bot, mostly view /AS:n (1520×)" },
   },
   {
     key: "2001:db8:4f2:1a00::/64",
@@ -677,7 +678,7 @@ const VISITORS: VisitorRow[] = [
     signals: ["3 addresses in this /64"],
     does: {
       gen: "Checked an IPv6 address, then went on to the console.",
-      text: "22 views in 6 visits",
+      text: "Person, mostly view /:ipv6 (12×)",
     },
   },
   {
@@ -698,7 +699,7 @@ const VISITORS: VisitorRow[] = [
     signals: ["ipverse monitoring.json", "every 60 s"],
     does: {
       gen: "Uptime check of the front page, once a minute.",
-      text: "1’440 HEAD requests",
+      text: "Uptime probe, mostly HEAD / → 200 (1440×)",
     },
   },
   {
@@ -719,7 +720,7 @@ const VISITORS: VisitorRow[] = [
     signals: ["navigator.webdriver", "no input", "800×600"],
     does: {
       gen: "Headless Chrome stepping through AS pages one per second: a scraper.",
-      text: "97 views, no input",
+      text: "Unknown automated, mostly view /AS:n (97×)",
     },
   },
   {
@@ -740,7 +741,7 @@ const VISITORS: VisitorRow[] = [
     signals: ["touch", "assets loaded"],
     does: {
       gen: "Looked up a single address on a phone.",
-      text: "5 views in 2 visits",
+      text: "Person, mostly view /:ipv4 (3×)",
     },
   },
   ...Array.from({ length: 9 }, (_, i): VisitorRow => ({
@@ -759,7 +760,7 @@ const VISITORS: VisitorRow[] = [
     events: i % 2,
     last: "2026-11-21T18:00:00Z",
     signals: ["touch"],
-    does: { gen: null, text: `${3 - (i % 3)} views in 1 visit` },
+    does: { gen: null, text: `Person, mostly view /AS:n (${3 - (i % 3)}×)` },
   })),
 ];
 
@@ -801,13 +802,16 @@ function visitor(key: string, feed: boolean): Visitor | null {
   const v = VISITORS.find((x) => x.key === key);
   if (!v) return null;
   const r = rng(key.length * 31);
-  const hours = Array.from({ length: 24 }, (_, h) => {
+  const raw = Array.from({ length: 24 }, (_, h) => {
     if (v.class === "monitor") return 3;
     if (v.class === "bot") return 1 + Math.floor(r() * 3);
     if (v.class === "unknown")
       return h === 11 ? 2 : h === 12 || h === 14 ? 4 : 0;
     return h >= 8 && h <= 22 && r() > 0.62 ? 1 + Math.floor(r() * 3) : 0;
   });
+  // Levels 0-4, the busiest hour 4, as the backend scales them.
+  const top = Math.max(...raw);
+  const hours = raw.map((x) => (top ? Math.round((x * 4) / top) : 0));
   const scrape = v.class === "unknown";
   return {
     key: v.key,
@@ -818,17 +822,21 @@ function visitor(key: string, feed: boolean): Visitor | null {
     client: v.client,
     client_gen: v.client_gen ?? null,
     signals: v.signals,
+    does: v.does,
     requests: feed ? v.requests : null,
     addresses: v.key.endsWith("/64") ? 3 : 1,
     reading:
       v.key === "203.0.113.9"
         ? null
         : {
+            // One of the backend's fixed verdicts.
             verdict: scrape
               ? "Scraping attempt"
               : v.class === "bot"
-                ? "Verified crawler"
-                : "Ordinary use",
+                ? "Search crawler"
+                : v.class === "monitor"
+                  ? "Uptime check"
+                  : "Person",
             suspicious: scrape,
             evidence: scrape
               ? [
@@ -852,66 +860,36 @@ function visitor(key: string, feed: boolean): Visitor | null {
             to: "2026-11-22T13:19:42Z",
             interval_s: 0.8,
           },
-          {
-            t: "2026-11-22T10:02:17Z",
-            kind: "request",
-            what: "GET / → 200",
-            count: 1,
-            from: null,
-            to: null,
-            interval_s: null,
-          },
+          single("2026-11-22T10:02:17Z", "request", "GET / → 200"),
         ]
       : [
-          {
-            t: "2026-11-22T13:12:08Z",
-            kind: "outbound_click",
-            what: "github.com/ipverse/as-ip-blocks",
-            count: 1,
-            from: null,
-            to: null,
-            interval_s: null,
-          },
-          {
-            t: "2026-11-22T13:11:31Z",
-            kind: "engagement",
-            what: "scroll 90 % on /AS64500",
-            count: 1,
-            from: null,
-            to: null,
-            interval_s: null,
-          },
-          {
-            t: "2026-11-22T13:10:55Z",
-            kind: "page_view",
-            what: "/AS64500",
-            count: 1,
-            from: null,
-            to: null,
-            interval_s: null,
-          },
-          {
-            t: "2026-11-22T13:10:12Z",
-            kind: "page_view",
-            what: "/example",
-            count: 1,
-            from: null,
-            to: null,
-            interval_s: null,
-          },
-          {
-            t: "2026-11-22T13:09:47Z",
-            kind: "session_start",
-            what: "visit 14 · 1728×1117 · de-CH",
-            count: 1,
-            from: null,
-            to: null,
-            interval_s: null,
-          },
+          single(
+            "2026-11-22T13:12:08Z",
+            "outbound_click",
+            "outbound_click github.com",
+          ),
+          single("2026-11-22T13:11:31Z", "engagement", "engagement"),
+          single("2026-11-22T13:10:55Z", "page_view", "view /AS:n"),
+          single("2026-11-22T13:10:12Z", "page_view", "view /:text"),
+          single("2026-11-22T13:09:47Z", "session_start", "session_start"),
         ],
-    trail_next: scrape ? "" : "t5",
+    // The backend's keyset cursor, "<ms>.<row id>".
+    trail_next: scrape ? "" : TRAIL_NEXT,
   };
 }
+
+export const TRAIL_NEXT = "1795352951000.48177";
+
+// A trail line of one event: its span is its own moment.
+const single = (t: string, kind: string, what: string): TrailItem => ({
+  t,
+  kind,
+  what,
+  count: 1,
+  from: t,
+  to: t,
+  interval_s: 0,
+});
 
 const LOG_CLIENTS: [string, ClassKey, string, string, LogRow["source"]][] = [
   // what as the backend describes an event: a request by its template.
