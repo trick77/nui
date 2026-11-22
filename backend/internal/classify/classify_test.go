@@ -2,7 +2,8 @@ package classify
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"net"
 	"net/netip"
 	"path/filepath"
 	"strings"
@@ -23,20 +24,25 @@ const crawlers = `{"services":{
 const monitoring = `{"services":{"UptimeRobot":{"ipv4":["69.162.124.224/28"],"ip_list_authoritative":true,
  "user_agent_patterns":["*UptimeRobot*"]}}}`
 
+// resolver names every Bingbot address but 157.55.39.2 msnbot-a-b-c-d.search.msn.com, forward-confirmed; a
+// lookup of 157.55.39.3 times out.
 type resolver struct{}
 
 func (resolver) LookupAddr(_ context.Context, a string) ([]string, error) {
-	if a == "157.55.39.1" {
-		return []string{"msnbot-1.search.msn.com."}, nil
+	switch {
+	case a == "157.55.39.3":
+		return nil, &net.DNSError{Err: "i/o timeout", IsTimeout: true}
+	case strings.HasPrefix(a, "157.55.39.") && a != "157.55.39.2":
+		return []string{"msnbot-" + strings.ReplaceAll(a, ".", "-") + ".search.msn.com."}, nil
 	}
-	return nil, errors.New("nx")
+	return nil, &net.DNSError{Err: "no such host", IsNotFound: true}
 }
 
 func (resolver) LookupHost(_ context.Context, h string) ([]string, error) {
-	if h == "msnbot-1.search.msn.com." {
-		return []string{"157.55.39.1"}, nil
+	if a, ok := strings.CutPrefix(h, "msnbot-"); ok {
+		return []string{strings.ReplaceAll(strings.TrimSuffix(a, ".search.msn.com."), "-", ".")}, nil
 	}
-	return nil, errors.New("nx")
+	return nil, &net.DNSError{Err: "no such host", IsNotFound: true}
 }
 
 type rig struct {
@@ -149,7 +155,7 @@ func TestPass(t *testing.T) {
 	// The rDNS checks are pending after the first pass (the pass never waits for DNS); once answered, the next pass
 	// decides those actors again without new events.
 	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
-	if got := classes["157.55.39.1"]; got.Class != "unknown" || got.Reasons[0] != "claims Bingbot, rDNS check pending" {
+	if got := classes["157.55.39.1"]; got.Class != "bot" || got.Reasons[0] != "Bingbot address range, rDNS check pending" {
 		t.Errorf("before the rDNS answer: %+v", got)
 	}
 	r.c.Verifier.Work(t.Context())
@@ -212,6 +218,67 @@ func TestPass(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	r.c.Run(ctx)
+}
+
+// Only a completed lookup makes a crawler's claim false. A real crawler inside its listed range past the network's
+// lookup budget, or behind a DNS timeout, is the crawler marked unverified, not an impostor; outside the range the
+// claim stays unknown with the true reason. A failed lookup is asked again soon.
+func TestPass_UncheckedClaims(t *testing.T) {
+	r := newRig(t, true)
+	const bing = "Mozilla/5.0 (compatible; bingbot/2.0)"
+	pass := func() {
+		t.Helper()
+		if err := r.c.Pass(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		r.c.Verifier.Work(t.Context())
+	}
+	r.insert(t, req("157.55.39.3", bing, "document", "/", 200, ""))
+	pass()
+	var evs []store.Event
+	for i := range 21 { // with the one above, more than one /24's daily lookups
+		evs = append(evs, req(fmt.Sprintf("157.55.39.%d", 10+i), bing, "document", "/", 200, ""))
+	}
+	r.insert(t, evs...)
+	pass()
+	pass()
+	classes, err := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for key, a := range classes {
+		got[a.Class+"|"+strings.Join(a.Reasons, ",")]++
+		if strings.Contains(strings.Join(a.Reasons, ","), "address is not") {
+			t.Errorf("%s called an impostor without an answer: %v", key, a.Reasons)
+		}
+	}
+	if got["bot|Bingbot, rDNS confirmed"] != 15 || got["bot|Bingbot address range, rDNS not verified"] != 6 ||
+		got["bot|Bingbot address range, rDNS lookup failed"] != 1 {
+		t.Errorf("classes = %v", got)
+	}
+	// The timed-out address waits for its retry; the one past the budget does not.
+	if !r.c.recheck[actorKey{site: r.site.ID, key: "157.55.39.3", day: r.now.UnixMilli() / dayMS}] ||
+		len(r.c.recheck) != 1 {
+		t.Errorf("rechecks: %v", r.c.recheck)
+	}
+	// A claim from outside the listed range past its network's budget is unknown, and says why.
+	var out []store.Event
+	for i := range 17 {
+		out = append(out, req(fmt.Sprintf("198.51.100.%d", 100+i), bing, "document", "/", 200, ""))
+	}
+	r.insert(t, out...)
+	r.c.Verifier.StartPass()
+	for i := range 17 {
+		r.c.Verifier.Check(fmt.Sprintf("198.51.100.%d", 100+i), []string{"*.search.msn.com"})
+	}
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ = r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	if a := classes["198.51.100.116"]; a.Class != "unknown" || a.Reasons[0] != "claims Bingbot, rDNS not verified" {
+		t.Errorf("outside the range past the budget: %+v", a)
+	}
 }
 
 // An event written after a pass but dated before it (the feed's own clock, the browser's back-dating) is still

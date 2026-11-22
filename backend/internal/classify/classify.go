@@ -380,17 +380,18 @@ func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 		if p.Authoritative {
 			return decision{class: p.Class, reasons: []string{p.Name + " address range"}}
 		}
-		confirmed, wait := c.check(a.ip, p)
-		if confirmed {
+		switch c.check(a.ip, p) {
+		case refdata.Confirmed:
 			return decision{class: p.Class, reasons: []string{p.Name + ", rDNS confirmed"}}
+		case refdata.Pending, refdata.Failed:
+			pending = true
 		}
-		pending = wait
 	}
 	var people uaDay // the people's clients summed
 	verdicts := make([]clientVerdict, len(a.uas))
 	var total, automated int64
 	for i, g := range a.uas {
-		v := c.clientVerdict(a.ip, g, f, bots)
+		v := c.clientVerdict(a.ip, addr, g, f, bots)
 		verdicts[i] = v
 		pending = pending || v.pending
 		total += g.n
@@ -455,28 +456,48 @@ func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 	return d
 }
 
-// check asks the verifier for a provider's rDNS, from its cache: confirmed, or pending an answer.
-func (c *Classifier) check(ip string, p *refdata.Provider) (confirmed, pending bool) {
+// check asks the verifier for a provider's rDNS, from its cache.
+func (c *Classifier) check(ip string, p *refdata.Provider) refdata.Verdict {
 	if c.Verifier == nil {
-		return false, false
+		return refdata.Unverified
 	}
 	return c.Verifier.Check(ip, p.RdnsPatterns)
 }
 
+// claimVerdict weighs a client's claim to be p, a provider whose address list is not authoritative, by what rDNS
+// knows. Only a completed lookup refutes the claim. Unchecked (the network's lookup budget spent, a DNS timeout, the
+// lookup still queued), an address inside p's listed range is taken as p's and marked so: a real crawler is no
+// impostor for want of an answer. One outside the range stays unknown, its reason naming the missing check.
+func claimVerdict(p *refdata.Provider, v refdata.Verdict, bots *refdata.Bots, addr netip.Addr) clientVerdict {
+	var state string
+	switch v {
+	case refdata.Confirmed:
+		return clientVerdict{class: p.Class, reason: p.Name + ", rDNS confirmed"}
+	case refdata.Refuted:
+		return clientVerdict{class: "unknown", reason: "claims " + p.Name + ", address is not " + p.Name + "'s"}
+	case refdata.Pending:
+		state = "rDNS check pending"
+	case refdata.Failed:
+		state = "rDNS lookup failed"
+	default:
+		state = "rDNS not verified"
+	}
+	// A pending or failed lookup is asked again soon: the pass decides again once it answers.
+	retry := v == refdata.Pending || v == refdata.Failed
+	if r, ok := bots.ByIP(addr); ok && r.Name == p.Name {
+		return clientVerdict{class: p.Class, reason: p.Name + " address range, " + state, pending: retry}
+	}
+	return clientVerdict{class: "unknown", reason: "claims " + p.Name + ", " + state, pending: retry}
+}
+
 // clientVerdict is one user agent's own, conclusive evidence.
-func (c *Classifier) clientVerdict(ip string, g uaDay, f siteFacts, bots *refdata.Bots) clientVerdict {
+func (c *Classifier) clientVerdict(ip string, addr netip.Addr, g uaDay, f siteFacts, bots *refdata.Bots) clientVerdict {
 	if p, ok := bots.ByUA(g.ua); ok {
 		switch {
 		case !p.HasRanges:
 			return clientVerdict{class: p.Class, reason: "client is " + p.Name}
 		case !p.Authoritative:
-			confirmed, pending := c.check(ip, p)
-			switch {
-			case confirmed:
-				return clientVerdict{class: p.Class, reason: p.Name + ", rDNS confirmed"}
-			case pending:
-				return clientVerdict{class: "unknown", reason: "claims " + p.Name + ", rDNS check pending", pending: true}
-			}
+			return claimVerdict(p, c.check(ip, p), bots, addr)
 		}
 		return clientVerdict{class: "unknown", reason: "claims " + p.Name + ", address is not " + p.Name + "'s"}
 	}

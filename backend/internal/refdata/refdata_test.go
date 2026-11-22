@@ -5,10 +5,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -409,24 +409,34 @@ func TestParse_OverbroadPrefixes(t *testing.T) {
 }
 
 type fakeResolver struct {
-	ptr   map[string][]string
-	host  map[string][]string
+	ptr  map[string][]string
+	host map[string][]string
+	// fail are the names (addresses or hosts) whose lookup times out.
+	fail  map[string]bool
 	calls int
 }
 
+var errTimeout = &net.DNSError{Err: "i/o timeout", IsTimeout: true}
+
 func (f *fakeResolver) LookupAddr(_ context.Context, a string) ([]string, error) {
 	f.calls++
+	if f.fail[a] {
+		return nil, errTimeout
+	}
 	if n, ok := f.ptr[a]; ok {
 		return n, nil
 	}
-	return nil, errors.New("nxdomain")
+	return nil, &net.DNSError{Err: "no such host", Name: a, IsNotFound: true}
 }
 
 func (f *fakeResolver) LookupHost(_ context.Context, h string) ([]string, error) {
+	if f.fail[h] {
+		return nil, errTimeout
+	}
 	if a, ok := f.host[h]; ok {
 		return a, nil
 	}
-	return nil, errors.New("nxdomain")
+	return nil, &net.DNSError{Err: "no such host", Name: h, IsNotFound: true}
 }
 
 func TestVerifier(t *testing.T) {
@@ -445,37 +455,85 @@ func TestVerifier(t *testing.T) {
 	pats := []string{"*.search.msn.com"}
 	// The first ask never waits for DNS: it is pending, the lookup runs off the caller's path.
 	for _, ip := range []string{"157.55.39.1", "157.55.39.2", "198.51.100.1"} {
-		if ok, pending := v.Check(ip, pats); ok || !pending {
-			t.Errorf("%s: first check %v %v, want pending", ip, ok, pending)
+		if got := v.Check(ip, pats); got != Pending {
+			t.Errorf("%s: first check %v, want pending", ip, got)
 		}
 	}
 	if r.calls != 0 {
 		t.Error("Check looked up on the caller's path")
 	}
 	v.Work(t.Context())
-	check := func(ip string, p []string) bool {
-		ok, pending := v.Check(ip, p)
-		if pending {
-			t.Errorf("%s still pending", ip)
+	for _, tt := range []struct {
+		ip   string
+		pats []string
+		want Verdict
+	}{
+		{"157.55.39.1", pats, Confirmed},
+		{"157.55.39.2", pats, Refuted},  // spoofed PTR
+		{"198.51.100.1", pats, Refuted}, // no PTR at all: an answer
+		{"157.55.39.1", []string{"*.googlebot.com"}, Refuted},
+		{"bad", pats, Unverified},
+		{"157.55.39.1", nil, Unverified}, // a provider without rDNS patterns cannot be checked
+	} {
+		if got := v.Check(tt.ip, tt.pats); got != tt.want {
+			t.Errorf("%s %v = %v, want %v", tt.ip, tt.pats, got, tt.want)
 		}
-		return ok
-	}
-	if !check("157.55.39.1", pats) {
-		t.Error("real bingbot not confirmed")
-	}
-	if check("157.55.39.2", pats) {
-		t.Error("spoofed PTR confirmed")
-	}
-	if check("198.51.100.1", pats) || check("bad", pats) || check("157.55.39.1", nil) {
-		t.Error("confirmed without evidence")
 	}
 	calls := r.calls
-	check("157.55.39.1", pats)
+	v.Check("157.55.39.1", pats)
 	if r.calls != calls {
 		t.Error("verdict not cached")
 	}
 	if NewVerifier(nil, time.Second).r == nil {
 		t.Error("default resolver")
+	}
+}
+
+// A failed lookup is no answer: the claim reads Failed, never Refuted, and is asked again after failRetry, not a day.
+func TestVerifier_Failure(t *testing.T) {
+	r := &fakeResolver{
+		ptr:  map[string][]string{"157.55.39.3": {"msnbot-3.search.msn.com."}},
+		host: map[string][]string{"msnbot-3.search.msn.com.": {"157.55.39.3"}},
+		fail: map[string]bool{"157.55.39.3": true, "157.55.39.4": true, "fwd.search.msn.com.": true},
+	}
+	r.ptr["157.55.39.5"] = []string{"fwd.search.msn.com."}
+	now := time.Unix(1_800_000_000, 0)
+	v := NewVerifier(r, time.Second)
+	v.now = func() time.Time { return now }
+	pats := []string{"*.search.msn.com"}
+	for _, ip := range []string{"157.55.39.3", "157.55.39.5"} {
+		v.Check(ip, pats)
+	}
+	v.Work(t.Context())
+	for _, ip := range []string{"157.55.39.3", "157.55.39.5"} { // reverse fails; forward fails
+		if got := v.Check(ip, pats); got != Failed {
+			t.Errorf("%s after a timeout = %v, want failed", ip, got)
+		}
+	}
+	// Retried after failRetry: queued again, and answered this time.
+	now = now.Add(failRetry)
+	delete(r.fail, "157.55.39.3")
+	v.StartPass()
+	if got := v.Check("157.55.39.3", pats); got != Pending {
+		t.Errorf("retry = %v, want pending", got)
+	}
+	v.Work(t.Context())
+	if got := v.Check("157.55.39.3", pats); got != Confirmed {
+		t.Errorf("after the retry = %v, want confirmed", got)
+	}
+	// A failure past the network's budget is unverified, not refuted.
+	v.budget[networkOf(netip.MustParseAddr("157.55.39.5"))] = lookupsPerNetwork
+	if got := v.Check("157.55.39.5", pats); got != Unverified {
+		t.Errorf("failed past the budget = %v, want unverified", got)
+	}
+	// A cancelled lookup is not cached at all.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	v.StartPass()
+	v.Check("157.55.39.4", pats)
+	v.Work(ctx)
+	if _, ok := v.cache["157.55.39.4"]; ok {
+		t.Error("cut-short lookup cached")
 	}
 }
 
@@ -488,15 +546,19 @@ func TestVerifier_Budgets(t *testing.T) {
 	pending := 0
 	for i := range 200 {
 		v.StartPass()
-		if _, p := v.Check(fmt.Sprintf("2001:db8:7:%x::1", i), pats); p {
+		switch v.Check(fmt.Sprintf("2001:db8:7:%x::1", i), pats) {
+		case Pending:
 			pending++
+		case Unverified:
+		default:
+			t.Fatal("past the budget: neither pending nor unverified")
 		}
 		v.Work(t.Context())
 	}
 	if pending != lookupsPerNetwork || r.calls != lookupsPerNetwork {
 		t.Errorf("one /48: %d pending, %d lookups, want %d", pending, r.calls, lookupsPerNetwork)
 	}
-	if _, p := v.Check("2001:db8:8::1", pats); !p {
+	if v.Check("2001:db8:8::1", pats) != Pending {
 		t.Error("another /48 refused")
 	}
 	// One pass: at most LookupsPerPass queued, the rest pending for a later pass.
