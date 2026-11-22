@@ -137,13 +137,23 @@ func serve(cfg app.Config) error {
 	}
 	start(writer.Run)
 	start(func(c context.Context) { flushCounters(c, counters, st) })
+	// The classifier's first pass re-decides yesterday and today: it waits for the cached reference data (the AS
+	// table takes seconds), or it would miss bot ranges and hosting networks.
+	refCached := make(chan struct{})
 	start(func(c context.Context) {
 		ref.LoadCached()
+		close(refCached)
 		if !cfg.RefDataDisabled {
 			ref.Run(c)
 		}
 	})
-	start(cls.Run)
+	start(func(c context.Context) {
+		select {
+		case <-refCached:
+			cls.Run(c)
+		case <-c.Done():
+		}
+	})
 	start(model.Run)
 	start(func(c context.Context) { prune(c, st, cfg) })
 	if cfg.OIDCConfigured() && !cfg.AuthDisabled {
