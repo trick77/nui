@@ -190,4 +190,9 @@ func TestPrune(t *testing.T) {
 	if err := st.DB.QueryRow(`PRAGMA auto_vacuum`).Scan(&av); err != nil || av != 2 {
 		t.Errorf("auto_vacuum = %d, %v; want 2 (incremental)", av, err)
 	}
+	// Temp tables and sorters stay in memory: the container's file system is read-only outside /data.
+	var ts int
+	if err := st.DB.QueryRow(`PRAGMA temp_store`).Scan(&ts); err != nil || ts != 2 {
+		t.Errorf("temp_store = %d, %v; want 2 (memory)", ts, err)
+	}
 }

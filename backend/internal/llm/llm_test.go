@@ -221,6 +221,32 @@ func TestBudgetAndFailures(t *testing.T) {
 	}
 }
 
+// The production model's profile accepts the exact requests the service sends, checked offline by llmwire's
+// Validate against its default registry (no key, no network).
+func TestDefaultModelAcceptsTheRequests(t *testing.T) {
+	client := llmwire.New(llmwire.Config{Logger: quiet()})
+	s := New(nil, Options{Client: client, Model: "mimo-v2.6-flash"})
+	if s.jsonFmt != llmwire.FormatJSONSchema {
+		t.Errorf("profile output format %q, want json_schema", s.jsonFmt)
+	}
+	for name, c := range map[string]struct {
+		schema map[string]any
+		prompt string
+	}{"briefing": {briefSchema, briefPrompt}, "reading": {readSchema, readPrompt}, "labels": {labelSchema, labelPrompts["path"]}} {
+		req, err := s.request(name, c.schema, c.prompt, map[string]any{"x": 1}, 600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		warnings, err := client.Validate(req)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		for _, w := range warnings {
+			t.Logf("%s: warning %s %s", name, w.Kind, w.Feature)
+		}
+	}
+}
+
 func TestHelpers(t *testing.T) {
 	if clip("  a  b\nc ", 10) != "a b c" || clip(strings.Repeat("word ", 30), 20) != "word word word word…" ||
 		clip("abcdefghijklmnop", 5) != "abcde…" {

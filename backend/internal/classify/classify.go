@@ -45,10 +45,12 @@ type Classifier struct {
 	Log      *slog.Logger
 	Now      func() time.Time
 
-	mu       sync.Mutex
-	today    int64
-	known    map[int64]map[string]int // site → ip_key → cls, today's
-	lastPass time.Time
+	mu    sync.Mutex
+	today int64
+	known map[int64]map[string]int // site → ip_key → cls, today's
+	// lastID is the newest event id the last pass covered. By id, not time: the feed may date a record up to an hour
+	// back and the browser's events are back-dated by their client offset, and a time window would miss them.
+	lastID int64
 }
 
 func (c *Classifier) now() time.Time {
@@ -119,22 +121,22 @@ func (c *Classifier) Run(ctx context.Context) {
 	}
 }
 
-// Pass classifies every actor with events since the last pass (since the start of yesterday on the first), for
-// each day it was active, and stamps the class on that day's events.
+// Pass classifies every actor with events written since the last pass (on the first, every actor of yesterday and
+// today), for each day it was active, and stamps the class on that day's events.
 func (c *Classifier) Pass(ctx context.Context) error {
 	now := c.now()
 	c.mu.Lock()
-	since := c.lastPass
+	after := c.lastID
 	c.mu.Unlock()
-	if since.IsZero() {
-		since = time.UnixMilli((now.UnixMilli()/dayMS - 1) * dayMS)
+	var upto int64
+	if err := c.DB.DB.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM event`).Scan(&upto); err != nil {
+		return err
 	}
-	// Overlap a little: an event the writer had queued at the last pass lands with an earlier ts.
-	since = since.Add(-time.Minute)
+	since := (now.UnixMilli()/dayMS - 1) * dayMS
 	today := now.UnixMilli() / dayMS
 	known := map[int64]map[string]int{}
 	for _, s := range c.Sites.All() {
-		got, err := c.passSite(ctx, s, since.UnixMilli(), today)
+		got, err := c.passSite(ctx, s, after, upto, since, today)
 		if err != nil {
 			return fmt.Errorf("site %s: %w", s.Domain, err)
 		}
@@ -156,28 +158,21 @@ func (c *Classifier) Pass(ctx context.Context) error {
 			c.known[site][k] = v
 		}
 	}
-	c.lastPass = now
+	c.lastID = upto
 	c.mu.Unlock()
 	return nil
 }
 
-// actorDay is one actor's day as the pass weighs it.
-type actorDay struct {
-	key, ip, ua       string
-	browser, server   int64
-	docs, assets      int64
-	refused           int64
-	webdriver         bool
-	noFetch, noLang   int64
-	uas               int64
-	asn               int64
-	engaged, pageView int64
-}
-
-func (c *Classifier) passSite(ctx context.Context, s *sites.Site, since, today int64) (map[string]int, error) {
-	// Which actors moved since the last pass, on which days.
-	rows, err := c.DB.DB.QueryContext(ctx, `SELECT DISTINCT ip_key, ts / ? FROM event WHERE site_id = ? AND ts >= ?`,
-		dayMS, s.ID, since)
+func (c *Classifier) passSite(ctx context.Context, s *sites.Site, after, upto, since, today int64) (map[string]int, error) {
+	// Which actors moved since the last pass, on which days: the ids written since (a rowid range), or on the
+	// first pass yesterday and today.
+	q, args := `SELECT DISTINCT ip_key, ts / ? FROM event WHERE id > ? AND id <= ? AND site_id = ?`,
+		[]any{dayMS, after, upto, s.ID}
+	if after == 0 {
+		q, args = `SELECT DISTINCT ip_key, ts / ? FROM event WHERE site_id = ? AND ts >= ? AND id <= ?`,
+			[]any{dayMS, s.ID, since, upto}
+	}
+	rows, err := c.DB.DB.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

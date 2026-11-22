@@ -9,17 +9,6 @@ import (
 	"github.com/trick77/nui/backend/internal/apix"
 )
 
-// bucketStats is one bucket's overview figures.
-type bucketStats struct {
-	visitors map[string]struct{} // visitor ids (aud bots: address keys)
-	views    float64
-	events   float64
-	requests float64
-	unknown  float64 // unknown automated requests, over all requests whatever aud
-	allReq   float64
-	errors   float64
-}
-
 // browserNoise are the automatic kinds the Events tile leaves out: they describe a view, they are not something a
 // visitor did.
 const eventKinds = `kind NOT IN ('page_view', 'session_start', 'engagement', 'vital')`
@@ -99,11 +88,6 @@ type overview struct {
 	} `json:"period"`
 	Live  live   `json:"live"`
 	Tiles []tile `json:"tiles"`
-}
-
-type live struct {
-	Humans    int64 `json:"humans"`
-	Automated int64 `json:"automated"`
 }
 
 // tileDef is how one tile reads a bucket and judges its change.

@@ -250,6 +250,9 @@ func (s *Server) list(ctx context.Context, q *query, dim string, d dimSpec, o li
 	for k, g := range cur {
 		row := listRow{Key: k, Label: k, Sub: g.sub, Value: d.value(g.a, g.b, int64(len(g.d))),
 			Second: d.second(g.a, g.b, int64(len(g.d)))}
+		if row.Value == 0 { // an address with requests but no refusals is no row of "refused"
+			continue
+		}
 		var c, p float64
 		if cg, ok := closed[k]; ok {
 			c = float64(d.value(cg.a, cg.b, int64(len(cg.d))))

@@ -35,6 +35,8 @@ Checks:
 
 Go types:
 
+- `classify.actorDay` (internal/classify): actorDay is one actor's day as the pass weighs it, sums over its events.
+- `dash.actor` (internal/dash): actor is one address key's events summed over a range.
 - `store.Event` (internal/store): Event is one row the batch writer inserts: a browser event or a server request.
 
 | Column | Type | Null | Default | PK |
@@ -178,6 +180,31 @@ Indexes:
 Checks:
 
 - `CHECK (kind IN ('site', 'api'))`
+
+## Types not stored as rows
+
+### dash.bucketStats
+
+In `internal/dash`. bucketStats is one bucket's overview figures, sums over events.
+
+| Field | Type | Doc |
+| --- | --- | --- |
+| `visitors` | `map[string]struct{}` | visitor ids (aud bots: address keys) |
+| `views` | `float64` |  |
+| `events` | `float64` |  |
+| `requests` | `float64` |  |
+| `unknown` | `float64` | unknown automated requests, over all requests whatever aud |
+| `allReq` | `float64` |  |
+| `errors` | `float64` |  |
+
+### dash.live
+
+In `internal/dash`. live counts the address keys seen in the last five minutes, people apart from the automated.
+
+| Field | Type | Doc |
+| --- | --- | --- |
+| `Humans` | `int64` |  |
+| `Automated` | `int64` |  |
 
 ## Diagram
 

@@ -67,10 +67,11 @@ func (s *Store) Close() error { return s.DB.Close() }
 // Ping is the readiness check.
 func (s *Store) Ping(ctx context.Context) error { return s.DB.PingContext(ctx) }
 
-// dsn is kit's DSN plus _txlock=immediate: a write transaction takes the lock at BEGIN, so writers queue on the busy
-// timeout instead of failing on upgrade.
+// dsn is kit's DSN plus _txlock=immediate (a write transaction takes the lock at BEGIN, so writers queue on the busy
+// timeout instead of failing on upgrade) and temp_store in memory: the container's root is read-only, and a
+// dashboard read's GROUP BY or DISTINCT that spills its sorter to a temp file would fail there.
 func dsn(path string) string {
-	return sqlitex.DSN(path, "_txlock=immediate")
+	return sqlitex.DSN(path, "_pragma=temp_store(memory)", "_txlock=immediate")
 }
 
 // incrementalVacuum turns on incremental auto-vacuum while the database holds no events, so the retention job can

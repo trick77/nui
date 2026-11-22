@@ -386,9 +386,14 @@ func TestLists(t *testing.T) {
 	if !found {
 		t.Errorf("probed %v", body)
 	}
-	_, body = r.get(t, "list", p(feedSite, "dim", "refused"))
+	_, body = r.get(t, "list", p(feedSite, "dim", "refused", "limit", "500"))
 	if rows := listRows(body); len(rows) == 0 || !strings.HasPrefix(rows[0]["key"].(string), "203.0.113.") {
 		t.Errorf("refused %v", body)
+	}
+	for _, row := range listRows(body) {
+		if row["value"].(float64) == 0 {
+			t.Errorf("refused lists an address without refusals: %v", row)
+		}
 	}
 	_, body = r.get(t, "list", p(feedSite, "dim", "events"))
 	subs := map[string]bool{}

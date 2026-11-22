@@ -20,19 +20,6 @@ import (
 	"github.com/trick77/nui/backend/internal/insight"
 )
 
-// actor is one address key summed over a range.
-type actor struct {
-	key                     string
-	visits, views, requests int64
-	refused, events         int64
-	last                    int64
-	ua                      string
-	asn                     int64
-	country                 string
-	cls                     int
-	browser                 bool
-}
-
 // actors sums every address key over the range's buckets.
 func (s *Server) actors(ctx context.Context, q *query) (map[string]*actor, error) {
 	out := map[string]*actor{}

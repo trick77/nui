@@ -200,6 +200,31 @@ func TestPass(t *testing.T) {
 	r.c.Run(ctx)
 }
 
+// An event written after a pass but dated before it (the feed's own clock, the browser's back-dating) is still
+// classified by the next pass.
+func TestPass_LateEvent(t *testing.T) {
+	r := newRig(t, true)
+	r.insert(t, req("192.0.2.50", "curl/8", "", "/", 200, ""))
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	r.now = r.now.Add(10 * time.Minute)
+	late := req("198.51.100.77", browserUA, "document", "/", 200, `{}`)
+	late.TS = r.now.Add(-50 * time.Minute).UnixMilli()
+	late.IPKey = late.IP
+	late.SiteID = r.site.ID
+	if err := r.st.InsertEvents(t.Context(), []store.Event{late}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var cls int
+	if err := r.st.DB.QueryRow(`SELECT cls FROM event WHERE ip = '198.51.100.77'`).Scan(&cls); err != nil || cls == store.ClsPending {
+		t.Errorf("late event cls = %d, %v", cls, err)
+	}
+}
+
 func TestPass_NoFeed(t *testing.T) {
 	r := newRig(t, false)
 	r.insert(t, store.Event{Source: "browser", Kind: "page_view", IP: "192.0.2.1", UA: browserUA})

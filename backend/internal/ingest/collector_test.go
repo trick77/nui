@@ -290,6 +290,21 @@ func TestBrowser_Flooding(t *testing.T) {
 	}
 }
 
+// A flood of junk is metered too: one token a request, then 429.
+func TestBrowser_JunkFlood(t *testing.T) {
+	r := newRig(t, 0, false)
+	codes := map[int]int{}
+	for range BrowserBurst + 5 {
+		codes[r.browser(`{nope`, "203.0.113.200", "").Code]++
+	}
+	if codes[http.StatusBadRequest] != BrowserBurst || codes[http.StatusTooManyRequests] != 5 {
+		t.Errorf("codes %v", codes)
+	}
+	if s := r.stat(t, 0); s.RateLimited != 5 || s.Rejected != BrowserBurst {
+		t.Errorf("stat %+v", s)
+	}
+}
+
 func TestBrowser_QueueFullDrops(t *testing.T) {
 	r := newRig(t, 5, false) // writer not running: the queue fills
 	site := r.siteID(domain)

@@ -145,30 +145,28 @@ func (c *Collector) HandleBrowser(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBrowserBody))
 	var tooBig *http.MaxBytesError
 	if errors.As(err, &tooBig) {
-		c.reject(w, c.siteOf(r), http.StatusRequestEntityTooLarge)
+		c.refuse(w, r, c.siteOf(r), http.StatusRequestEntityTooLarge, false)
 		return
 	}
 	if err != nil {
-		c.reject(w, c.siteOf(r), http.StatusBadRequest)
+		c.refuse(w, r, c.siteOf(r), http.StatusBadRequest, false)
 		return
 	}
 	var b browserBatch
 	if err := json.Unmarshal(body, &b); err != nil || b.V != 1 || b.Site == "" {
-		c.reject(w, c.siteOf(r), http.StatusBadRequest)
+		c.refuse(w, r, c.siteOf(r), http.StatusBadRequest, false)
 		return
 	}
 	site, ok := c.Sites.Lookup(b.Site)
 	if !ok {
-		c.count(c.siteOf(r), func(s *store.IngestStat) { s.UnknownDomain++ })
-		w.WriteHeader(http.StatusForbidden)
+		c.refuse(w, r, c.siteOf(r), http.StatusForbidden, true)
 		return
 	}
 	// A browser on another site naming this one (the script copied onto a foreign page) is refused: Origin is the
 	// browser's, not the page's, to set.
 	if o := r.Header.Get("Origin"); o != "" {
 		if u, err := url.Parse(o); err != nil || !strings.EqualFold(u.Hostname(), site.Domain) {
-			c.count(site.ID, func(s *store.IngestStat) { s.Rejected++ })
-			w.WriteHeader(http.StatusForbidden)
+			c.refuse(w, r, site.ID, http.StatusForbidden, false)
 			return
 		}
 	}
@@ -178,7 +176,7 @@ func (c *Collector) HandleBrowser(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errTooLarge) {
 			status = http.StatusRequestEntityTooLarge
 		}
-		c.reject(w, site.ID, status)
+		c.refuse(w, r, site.ID, status, false)
 		return
 	}
 	n := float64(len(evs))
@@ -198,6 +196,22 @@ func (c *Collector) HandleBrowser(w http.ResponseWriter, r *http.Request) {
 func (c *Collector) reject(w http.ResponseWriter, site int64, status int) {
 	c.count(site, func(s *store.IngestStat) { s.Rejected++ })
 	w.WriteHeader(status)
+}
+
+// refuse answers a browser request the collector will not store. It costs the caller one token, so a flood of
+// junk or of unknown domains is throttled like a flood of events: once the caller's tokens are gone, 429.
+func (c *Collector) refuse(w http.ResponseWriter, r *http.Request, site int64, status int, unknownDomain bool) {
+	if ok, wait := c.Browser.Take(r, 1); !ok {
+		c.count(site, func(s *store.IngestStat) { s.RateLimited++ })
+		apix.TooMany(w, wait)
+		return
+	}
+	if unknownDomain {
+		c.count(site, func(s *store.IngestStat) { s.UnknownDomain++ })
+		w.WriteHeader(status)
+		return
+	}
+	c.reject(w, site, status)
 }
 
 func (c *Collector) accept(site int64, source string, evs []store.Event) {
