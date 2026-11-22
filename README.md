@@ -63,11 +63,13 @@ The key goes to the product's feed emitter (`Authorization: Bearer <key>` on `PO
 ### Server feed
 
 `POST /api/feed` takes `{"v": 1, "site": "<domain>", "events": [...]}` as JSON, at most 256 KiB and 500 events per
-batch, rate-limited per key. The batch as a whole is refused only for bad JSON (400), a wrong key (401), another
-site's name (400), its size or event count (413) or the rate (429). One event's content never refuses the batch:
-strings over their limit are clipped (on a character boundary), and an event without a parseable `ip` or with an
-impossible `status` (outside 0-999), `dur_ms` or `bytes` (negative) is dropped and counted as rejected in the
-dashboard's footer, the rest is stored.
+batch, rate-limited per key. The batch as a whole is refused only for an unparseable envelope (400), a wrong key
+(401), another site's name (400), its size or event count (413), a body not received within 30 s (408) or the rate
+(429). One event's content never refuses the batch: strings over their limit are clipped (on a character boundary),
+and an event that is no JSON object, has a field of the wrong type, lacks a parseable `ip` or has an impossible
+`status` (outside 0-999), `dur_ms` or `bytes` (negative) is dropped and counted as rejected in the dashboard's
+footer, the rest is stored. A request with a wrong key names no site nui can trust: it is counted collector-wide,
+with the unknown domains every footer shows.
 
 | Field | Limit (bytes) |
 |---|---|

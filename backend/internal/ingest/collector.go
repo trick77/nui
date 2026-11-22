@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"math"
 	"net/http"
 	"net/netip"
@@ -37,7 +38,26 @@ const (
 	// maxClientSkew is how far the client's own clock may place an event before the batch was received: a batch is
 	// sent within seconds of its events, a hidden tab's flush within minutes.
 	maxClientSkew = 30 * time.Minute
+	// maxCtx bounds the context as stored (encoded), maxHeader each stored browser header.
+	maxCtx    = 4 << 10
+	maxHeader = 256
+	// maxEventBytes and maxBatchBytes bound what one event and one batch store (store.Event.Size), whatever the
+	// body: the page URL, user agent and ids repeat on every event, so a small body can name a large write.
+	maxEventBytes = 16 << 10
+	maxBatchBytes = 2 * MaxBrowserBody
+	// StoreUnit is the stored bytes one token pays for: a batch costs an event per event, or per StoreUnit stored
+	// when that is more. maxBatchBytes / StoreUnit stays below the burst, so a byte charge is never a 413.
+	StoreUnit = 2 << 10
+	// Body read deadlines: a body trickled in holds a handler, and the connection, no longer than this.
+	browserBodyTimeout = 10 * time.Second
+	feedBodyTimeout    = 30 * time.Second
 )
+
+// browserHeaders are the request headers the collector keeps, lower-case: the client hints and fetch metadata a
+// browser sends. Only these: the names are the caller's to choose, any number of them.
+var browserHeaders = []string{"accept-language", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
+	"sec-ch-ua-platform-version", "sec-ch-ua-model", "sec-ch-ua-arch", "sec-ch-ua-bitness",
+	"sec-ch-ua-full-version-list", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-user"}
 
 // The browser rate limit (contract: "60 events / min per address or /64 · 600 per /48"). The /64 burst admits the
 // largest batch; the /48 tier (an IPv4 /24) bounds a caller rotating through its block.
@@ -68,7 +88,8 @@ func FeedLimiter(now func() time.Time) *ratelimit.Limiter {
 
 // RateRule is the browser limit as the dashboard's footer states it.
 func RateRule() string {
-	return fmt.Sprintf("%d events / min per address or /64 · %d per /48", int(BrowserRate*60), int(BrowserWideRate*60))
+	return fmt.Sprintf("%d events / min per address or /64 · %d per /48 · %d KiB stored counts as an event",
+		int(BrowserRate*60), int(BrowserWideRate*60), StoreUnit>>10)
 }
 
 // BatchRule is the browser batch limit as the footer states it.
@@ -85,6 +106,48 @@ type Collector struct {
 	Feed        *ratelimit.Limiter
 	TrustedHops int
 	Now         func() time.Time
+	// BodyTimeout overrides both endpoints' body read deadline (tests); 0 keeps the defaults.
+	BodyTimeout time.Duration
+}
+
+// readBody reads at most limit bytes within timeout. status is 0 on success, else the answer: 413 over the limit,
+// 408 for a body not delivered in time, 400 for any other read failure.
+func readBody(w http.ResponseWriter, r *http.Request, limit int64, timeout time.Duration) ([]byte, int) {
+	rc := http.NewResponseController(w)
+	// Not every ResponseWriter can (a test recorder cannot); the real server's can.
+	_ = rc.SetReadDeadline(time.Now().Add(timeout))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if err == nil {
+		_ = rc.SetReadDeadline(time.Time{})
+		return body, 0
+	}
+	// The rest of a failed body is never read: the connection closes after the answer. Without this the server
+	// would wait, deadline lifted, to discard what a slow sender still owes.
+	w.Header().Set("Connection", "close")
+	var tooBig *http.MaxBytesError
+	switch {
+	case errors.As(err, &tooBig):
+		return nil, http.StatusRequestEntityTooLarge
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return nil, http.StatusRequestTimeout
+	}
+	return nil, http.StatusBadRequest
+}
+
+func (c *Collector) bodyTimeout(def time.Duration) time.Duration {
+	if c.BodyTimeout > 0 {
+		return c.BodyTimeout
+	}
+	return def
+}
+
+// encodeJSON is json.Marshal without HTML escaping: <, > and & stay one byte each instead of six.
+func encodeJSON(v any) string {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(v)
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 func (c *Collector) now() time.Time {
@@ -143,55 +206,64 @@ func (c *Collector) HandleBrowser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Expose-Headers", "Retry-After")
 	w.Header().Set("Cache-Control", "no-store")
 	recv := c.now()
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBrowserBody))
-	var tooBig *http.MaxBytesError
-	if errors.As(err, &tooBig) {
-		c.refuse(w, r, c.siteOf(r), http.StatusRequestEntityTooLarge, false)
+	// Every request pays one token before any work: a caller without one is refused before its body is read or
+	// parsed, so a flood of junk or of unknown domains is throttled like a flood of events.
+	if ok, wait := c.Browser.Take(r, 1); !ok {
+		c.count(c.siteOf(r), func(s *store.IngestStat) { s.RateLimited++ })
+		apix.TooMany(w, wait)
 		return
 	}
-	if err != nil {
-		c.refuse(w, r, c.siteOf(r), http.StatusBadRequest, false)
+	body, status := readBody(w, r, MaxBrowserBody, c.bodyTimeout(browserBodyTimeout))
+	if status != 0 {
+		c.refuse(w, c.siteOf(r), status, false)
 		return
 	}
 	var b browserBatch
 	if err := json.Unmarshal(body, &b); err != nil || b.V != 1 || b.Site == "" {
-		c.refuse(w, r, c.siteOf(r), http.StatusBadRequest, false)
+		c.refuse(w, c.siteOf(r), http.StatusBadRequest, false)
 		return
 	}
 	site, ok := c.Sites.Lookup(b.Site)
 	if !ok {
-		c.refuse(w, r, c.siteOf(r), http.StatusForbidden, true)
+		c.refuse(w, c.siteOf(r), http.StatusForbidden, true)
 		return
 	}
 	// A browser on another site naming this one (the script copied onto a foreign page) is refused: Origin is the
 	// browser's, not the page's, to set.
 	if o := r.Header.Get("Origin"); o != "" {
 		if u, err := url.Parse(o); err != nil || !strings.EqualFold(u.Hostname(), site.Domain) {
-			c.refuse(w, r, site.ID, http.StatusForbidden, false)
+			c.refuse(w, site.ID, http.StatusForbidden, false)
 			return
 		}
 	}
-	evs, err := c.browserEvents(site, &b, r, recv)
+	evs, stored, err := c.browserEvents(site, &b, r, recv)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, errTooLarge) {
 			status = http.StatusRequestEntityTooLarge
 		}
-		c.refuse(w, r, site.ID, status, false)
+		c.refuse(w, site.ID, status, false)
 		return
 	}
-	n := float64(len(evs))
-	if ok, wait := c.Browser.Take(r, n); !ok {
-		if wait == 0 { // more than any burst admits: a limit breach, not a pace one
-			c.reject(w, site.ID, http.StatusRequestEntityTooLarge)
+	// The rest of the charge, the first token paid above.
+	if cost := browserCost(len(evs), stored); cost > 1 {
+		if ok, wait := c.Browser.Take(r, float64(cost-1)); !ok {
+			if wait == 0 { // more than any burst admits: a limit breach, not a pace one
+				c.reject(w, site.ID, http.StatusRequestEntityTooLarge)
+				return
+			}
+			c.count(site.ID, func(s *store.IngestStat) { s.RateLimited += int64(len(evs)) })
+			apix.TooMany(w, wait)
 			return
 		}
-		c.count(site.ID, func(s *store.IngestStat) { s.RateLimited += int64(len(evs)) })
-		apix.TooMany(w, wait)
-		return
 	}
 	c.accept(site.ID, "browser", evs)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// browserCost is a batch's tokens: one per event, or one per StoreUnit stored when that is more.
+func browserCost(events, stored int) int {
+	return max(events, (stored+StoreUnit-1)/StoreUnit)
 }
 
 func (c *Collector) reject(w http.ResponseWriter, site int64, status int) {
@@ -199,14 +271,8 @@ func (c *Collector) reject(w http.ResponseWriter, site int64, status int) {
 	w.WriteHeader(status)
 }
 
-// refuse answers a browser request the collector will not store. It costs the caller one token, so a flood of
-// junk or of unknown domains is throttled like a flood of events: once the caller's tokens are gone, 429.
-func (c *Collector) refuse(w http.ResponseWriter, r *http.Request, site int64, status int, unknownDomain bool) {
-	if ok, wait := c.Browser.Take(r, 1); !ok {
-		c.count(site, func(s *store.IngestStat) { s.RateLimited++ })
-		apix.TooMany(w, wait)
-		return
-	}
+// refuse answers a browser request the collector will not store (its token is paid on arrival).
+func (c *Collector) refuse(w http.ResponseWriter, site int64, status int, unknownDomain bool) {
 	if unknownDomain {
 		c.count(site, func(s *store.IngestStat) { s.UnknownDomain++ })
 		w.WriteHeader(status)
@@ -233,38 +299,50 @@ func (c *Collector) accept(site int64, source string, evs []store.Event) {
 	c.Counters.Seen(site, source)
 }
 
-// browserEvents validates a batch and turns it into rows. Every string and the props are bounded; anything over a
-// bound refuses the whole batch (errTooLarge), anything malformed too.
-func (c *Collector) browserEvents(site *sites.Site, b *browserBatch, r *http.Request, recv time.Time) ([]store.Event, error) {
+// browserEvents validates a batch and turns it into rows, returning them and the bytes they store. Every string and
+// the props are bounded, and so is what each event and the batch store; anything over a bound refuses the whole
+// batch (errTooLarge), anything malformed too.
+func (c *Collector) browserEvents(site *sites.Site, b *browserBatch, r *http.Request, recv time.Time) ([]store.Event, int, error) {
 	if len(b.Events) == 0 {
-		return nil, errors.New("no events")
+		return nil, 0, errors.New("no events")
 	}
 	if len(b.Events) > MaxBrowserEvents {
-		return nil, errTooLarge
+		return nil, 0, errTooLarge
 	}
 	if err := checkString(b.VID, maxString); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if err := checkString(b.SID, maxString); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
+	var pageURL, ref string
 	ctx := map[string]any{}
 	for k, raw := range b.Ctx {
 		var v any
 		if err := json.Unmarshal(raw, &v); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if err := checkValue(k, v, 0); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
-		ctx[k] = v
+		// The page's URL and referrer have columns of their own: stored once there, not again in the context.
+		switch k {
+		case "url":
+			pageURL, _ = v.(string)
+		case "ref":
+			ref, _ = v.(string)
+		default:
+			ctx[k] = v
+		}
 	}
-	pageURL, _ := ctx["url"].(string)
-	ref, _ := ctx["ref"].(string)
+	ctxJSON := encodeJSON(ctx)
+	if len(ctxJSON) > maxCtx {
+		return nil, 0, errTooLarge
+	}
 	ip := httpx.ClientIP(r, c.TrustedHops)
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	ipKey := ratelimit.Key(ip)
 	ua := truncate(r.UserAgent(), maxString)
@@ -273,10 +351,9 @@ func (c *Collector) browserEvents(site *sites.Site, b *browserBatch, r *http.Req
 		visitor = anonVisitor(ipKey, ua)
 	}
 	hdr := map[string]string{}
-	for name, vals := range r.Header {
-		lname := strings.ToLower(name)
-		if lname == "accept-language" || strings.HasPrefix(lname, "sec-ch-ua") || strings.HasPrefix(lname, "sec-fetch-") {
-			hdr[lname] = truncate(strings.Join(vals, ", "), maxString)
+	for _, name := range browserHeaders {
+		if vals := r.Header.Values(name); len(vals) > 0 {
+			hdr[name] = truncate(strings.Join(vals, ", "), maxHeader)
 		}
 	}
 	refHost := hostOf(ref)
@@ -284,32 +361,33 @@ func (c *Collector) browserEvents(site *sites.Site, b *browserBatch, r *http.Req
 		refHost = ""
 	}
 	out := make([]store.Event, 0, len(b.Events))
+	stored := 0
 	for i, e := range b.Events {
 		if !browserKinds[e.K] {
-			return nil, fmt.Errorf("kind %q", e.K)
+			return nil, 0, fmt.Errorf("kind %q", e.K)
 		}
 		if len(e.P) > maxProps {
-			return nil, errTooLarge
+			return nil, 0, errTooLarge
 		}
 		if err := checkString(e.URL, maxURL); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if err := checkString(e.Title, maxString); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if err := checkString(e.N, maxString); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if e.K == "custom" && e.N == "" {
-			return nil, errors.New("custom event without a name")
+			return nil, 0, errors.New("custom event without a name")
 		}
 		var p map[string]any
 		if len(e.P) > 0 && string(e.P) != "null" {
 			if err := json.Unmarshal(e.P, &p); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			if err := checkValue("p", p, 0); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 		}
 		evURL := pageURL
@@ -318,7 +396,7 @@ func (c *Collector) browserEvents(site *sites.Site, b *browserBatch, r *http.Req
 		}
 		u, err := url.Parse(evURL)
 		if evURL != "" && (err != nil || !strings.EqualFold(u.Hostname(), site.Domain)) {
-			return nil, errors.New("url outside the site")
+			return nil, 0, errors.New("url outside the site")
 		}
 		path := "/"
 		if u != nil && u.EscapedPath() != "" {
@@ -333,25 +411,29 @@ func (c *Collector) browserEvents(site *sites.Site, b *browserBatch, r *http.Req
 		}
 		// The context and the browser headers once per batch: they are the same for every event in it.
 		if i == 0 {
-			props["ctx"] = ctx
+			props["ctx"] = json.RawMessage(ctxJSON)
 			if len(hdr) > 0 {
 				props["hdr"] = hdr
 			}
 		}
-		pj, _ := json.Marshal(props)
 		ev := store.Event{
 			SiteID: site.ID, TS: eventTime(recv, b.Sent, e.T), Source: "browser", Kind: e.K, Name: eventName(e, p),
 			Visitor: visitor, SID: b.SID, IP: addr.Unmap().String(), IPKey: ipKey, UA: ua, Path: path,
-			Template: site.Template(path), URL: evURL, Props: string(pj),
+			Template: site.Template(path), URL: evURL, Props: encodeJSON(props),
 		}
 		if e.K == "page_view" || e.K == "session_start" {
 			// The page's own URL and referrer are kept whole (campaign tags live in the query); the feed's request
 			// paths are not, since an API query string can carry a key.
 			ev.Ref, ev.RefHost = ref, refHost
 		}
+		size := ev.Size()
+		stored += size
+		if size > maxEventBytes || stored > maxBatchBytes {
+			return nil, 0, errTooLarge
+		}
 		out = append(out, ev)
 	}
-	return out, nil
+	return out, stored, nil
 }
 
 // eventTime is the receive time moved back by how much earlier than the batch the client says the event happened,
@@ -449,7 +531,9 @@ func (c *Collector) HandleFeed(w http.ResponseWriter, r *http.Request) {
 	key, _ := httpx.Bearer(r)
 	site, ok := c.Sites.ByKey(key)
 	if !ok {
-		c.count(0, func(s *store.IngestStat) { s.Rejected++ })
+		// A key no site has names no site the collector can trust (the body is never read): counted with the
+		// collector-wide refusals every footer shows, beside the unknown domains.
+		c.count(0, func(s *store.IngestStat) { s.UnknownDomain++ })
 		apix.Error(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -457,14 +541,28 @@ func (c *Collector) HandleFeed(w http.ResponseWriter, r *http.Request) {
 		c.count(site.ID, func(s *store.IngestStat) { s.Rejected++ })
 		apix.Error(w, status, msg)
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxFeedBody))
-	var tooBig *http.MaxBytesError
-	if errors.As(err, &tooBig) {
-		fail(http.StatusRequestEntityTooLarge, "request body too large")
+	limitKey := strconv.FormatInt(site.ID, 10)
+	// A key without a token left is refused before its body is read or parsed.
+	if !c.Feed.Permitted(limitKey) {
+		c.count(site.ID, func(s *store.IngestStat) { s.RateLimited++ })
+		apix.TooMany(w, c.Feed.RetryAfter(limitKey))
+		return
+	}
+	body, status := readBody(w, r, MaxFeedBody, c.bodyTimeout(feedBodyTimeout))
+	switch status {
+	case 0:
+	case http.StatusRequestEntityTooLarge:
+		fail(status, "request body too large")
+		return
+	case http.StatusRequestTimeout:
+		fail(status, "request body not received in time")
+		return
+	default:
+		fail(http.StatusBadRequest, "malformed request")
 		return
 	}
 	var b feedBatch
-	if err != nil || json.Unmarshal(body, &b) != nil {
+	if json.Unmarshal(body, &b) != nil {
 		fail(http.StatusBadRequest, "malformed request")
 		return
 	}
@@ -477,13 +575,13 @@ func (c *Collector) HandleFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// One event's content never refuses the batch: the sender is a trusted backend, but the fields are its public
-	// clients' (a crafted method or user agent would otherwise blind the feed). Unusable events are dropped and
-	// counted as rejected, the rest is taken.
+	// clients' (a crafted method or user agent would otherwise blind the feed). Each event is decoded on its own;
+	// unusable ones (a wrong JSON type included) are dropped and counted as rejected, the rest is taken.
 	evs, dropped := c.feedEvents(site, b.Events)
 	if dropped > 0 {
 		c.count(site.ID, func(s *store.IngestStat) { s.Rejected += int64(dropped) })
 	}
-	if ok, wait := c.Feed.Take(strconv.FormatInt(site.ID, 10), float64(len(evs)), 0); !ok {
+	if ok, wait := c.Feed.Take(limitKey, float64(len(evs)), 0); !ok {
 		c.count(site.ID, func(s *store.IngestStat) { s.RateLimited += int64(len(evs)) })
 		apix.TooMany(w, wait)
 		return
@@ -492,10 +590,11 @@ func (c *Collector) HandleFeed(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// feedBatch is the envelope; its events are decoded one at a time (feedEvents).
 type feedBatch struct {
-	V      int         `json:"v"`
-	Site   string      `json:"site"`
-	Events []feedEvent `json:"events"`
+	V      int               `json:"v"`
+	Site   string            `json:"site"`
+	Events []json.RawMessage `json:"events"`
 }
 
 type feedEvent struct {
@@ -527,11 +626,18 @@ const (
 
 // feedEvents turns a feed batch into rows: strings clipped to their limits, events without a usable address or
 // with impossible numbers dropped (the count is returned).
-func (c *Collector) feedEvents(site *sites.Site, in []feedEvent) ([]store.Event, int) {
+func (c *Collector) feedEvents(site *sites.Site, in []json.RawMessage) ([]store.Event, int) {
 	now := c.now().UnixMilli()
 	out := make([]store.Event, 0, len(in))
 	dropped := 0
-	for _, e := range in {
+	for _, raw := range in {
+		var e feedEvent
+		// An event that is no object or has a field of the wrong type is unusable: decoding goes on past a type
+		// error, so a half-filled event must not be kept.
+		if json.Unmarshal(raw, &e) != nil {
+			dropped++
+			continue
+		}
 		for _, f := range []struct {
 			v     *string
 			limit int
@@ -568,7 +674,7 @@ func (c *Collector) feedEvents(site *sites.Site, in []feedEvent) ([]store.Event,
 				props[k] = v
 			}
 		}
-		pj, _ := json.Marshal(props)
+		pj := encodeJSON(props)
 		ipKey := ratelimit.Key(e.IP)
 		refHost := hostOf(e.Ref)
 		if strings.EqualFold(refHost, site.Domain) {
@@ -578,7 +684,7 @@ func (c *Collector) feedEvents(site *sites.Site, in []feedEvent) ([]store.Event,
 			SiteID: site.ID, TS: ts, Source: "server", Kind: "request", Name: e.SFDest,
 			Visitor: anonVisitor(ipKey, e.UA), IP: addr.Unmap().String(), IPKey: ipKey, UA: e.UA, Path: path,
 			Template: template, Ref: stripQuery(e.Ref), RefHost: refHost, Method: method, Status: e.Status,
-			DurMS: e.DurMS, Account: e.Account, Props: string(pj),
+			DurMS: e.DurMS, Account: e.Account, Props: pj,
 		})
 	}
 	return out, dropped

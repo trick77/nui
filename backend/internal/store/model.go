@@ -65,6 +65,18 @@ type Event struct {
 	Props    string
 }
 
+// rowOverhead approximates what a row takes beyond its text: the integer columns, the record header and the two
+// index entries (each holds site_id and ts, the actor index ip_key too, counted with the text).
+const rowOverhead = 96
+
+// Size is about the bytes the row takes on disk: its text plus a fixed overhead. The collector bounds and charges
+// by it, the batch writer's queue counts it.
+func (e *Event) Size() int {
+	return rowOverhead + len(e.Source) + len(e.Kind) + len(e.Name) + len(e.Visitor) + len(e.SID) + len(e.IP) +
+		2*len(e.IPKey) + len(e.UA) + len(e.Path) + len(e.Template) + len(e.URL) + len(e.Ref) + len(e.RefHost) +
+		len(e.Method) + len(e.Country) + len(e.Account) + len(e.Props)
+}
+
 // IngestStat is one site's collector counters for one hour.
 //
 // Table: ingest_stat

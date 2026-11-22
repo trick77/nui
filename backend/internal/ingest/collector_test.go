@@ -1,11 +1,13 @@
 package ingest
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -235,11 +237,13 @@ func TestBrowser_Hostile(t *testing.T) {
 			t.Errorf("%s: status %d, want %d", tt.name, w.Code, tt.want)
 		}
 	}
+	// Refused before the site is known (size, JSON, version, no site) counts siteless; every refusal after the
+	// lookup counts for the site.
 	s := r.stat(t, site)
-	if s.Accepted != 0 || s.Rejected < 10 {
-		t.Errorf("site counters %+v", s)
+	if s.Accepted != 0 || s.Rejected != 15 {
+		t.Errorf("site counters %+v, want 15 rejected", s)
 	}
-	if g := r.stat(t, 0); g.UnknownDomain != 1 || g.Rejected == 0 {
+	if g := r.stat(t, 0); g.UnknownDomain != 1 || g.Rejected != 4 {
 		t.Errorf("siteless counters %+v", g)
 	}
 	// A refused request with the site's Origin is counted for the site, not as siteless.
@@ -261,15 +265,20 @@ func TestBrowser_Flooding(t *testing.T) {
 	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") == "" {
 		t.Fatalf("same /64: %d %q", w.Code, w.Header().Get("Retry-After"))
 	}
-	// Rotating /64s within one /48 passes the narrow tier each time until the /48's 600 run out.
-	refused := 0
+	// Rotating /64s within one /48 passes the narrow tier each time until the /48's 600 run out: 50 + 1 are spent
+	// (the refused request paid its arrival token), 549 admit ten more batches of 50, the rest is refused.
+	var codes []int
 	for i := range 20 {
-		if w := r.browser(batch(domain, 50, ""), fmt.Sprintf("2001:db8:1:%x::1", 0x100+i), ""); w.Code == http.StatusTooManyRequests {
-			refused++
-		}
+		codes = append(codes, r.browser(batch(domain, 50, ""), fmt.Sprintf("2001:db8:1:%x::1", 0x100+i), "").Code)
 	}
-	if refused == 0 {
-		t.Error("a /48 rotating /64s was never limited")
+	for i, c := range codes {
+		want := http.StatusNoContent
+		if i >= 10 {
+			want = http.StatusTooManyRequests
+		}
+		if c != want {
+			t.Errorf("rotating /64 %d: %d, want %d", i, c, want)
+		}
 	}
 	// Another /48 is unaffected, and so is IPv4.
 	if w := r.browser(batch(domain, 10, ""), "2001:db8:2::1", ""); w.Code != http.StatusNoContent {
@@ -283,8 +292,9 @@ func TestBrowser_Flooding(t *testing.T) {
 	if w := r.browser(batch(domain, 50, ""), "2001:db8:1:1::3", ""); w.Code != http.StatusNoContent {
 		t.Errorf("after refill: %d", w.Code)
 	}
-	if s := r.stat(t, site); s.RateLimited < 50 {
-		t.Errorf("rate_limited = %d", s.RateLimited)
+	// The same-/64 batch and ten rotated ones, 50 events each.
+	if s := r.stat(t, site); s.RateLimited != 550 || s.Accepted != 50+500+10+10+50 {
+		t.Errorf("stat %+v, want 550 rate-limited", s)
 	}
 	if !strings.Contains(RateRule(), "60 events / min") || !strings.Contains(BatchRule(), "32 KiB") {
 		t.Error("rules text")
@@ -486,6 +496,191 @@ func TestFeed_Hostile(t *testing.T) {
 	}
 	if s := r.stat(t, site); s.RateLimited == 0 {
 		t.Errorf("stat %+v", s)
+	}
+}
+
+// storedRows is every stored row's size (store.Event.Size over the columns) and props, in id order.
+func storedRows(t *testing.T, st *store.Store) ([]int, []string) {
+	t.Helper()
+	rows, err := st.DB.Query(`SELECT source, kind, name, visitor, sid, ip, ip_key, ua, path, template, url, ref,
+		ref_host, method, country, account, props FROM event ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var sizes []int
+	var props []string
+	for rows.Next() {
+		var e store.Event
+		if err := rows.Scan(&e.Source, &e.Kind, &e.Name, &e.Visitor, &e.SID, &e.IP, &e.IPKey, &e.UA, &e.Path,
+			&e.Template, &e.URL, &e.Ref, &e.RefHost, &e.Method, &e.Country, &e.Account, &e.Props); err != nil {
+			t.Fatal(err)
+		}
+		sizes = append(sizes, e.Size())
+		props = append(props, e.Props)
+	}
+	return sizes, props
+}
+
+// What one token stores is bounded whatever the request: caller-named headers are not kept, the encoding does not
+// inflate <, > and &, and a batch whose rows would outgrow the bounds is refused.
+func TestBrowser_StoredBytesPerToken(t *testing.T) {
+	r := newRig(t, 0, true)
+	// 490 headers named like client hints, 512 bytes each, on a one-event batch.
+	req := httptest.NewRequest(http.MethodPost, "/api/in", strings.NewReader(batch(domain, 1, "")))
+	req.Header.Set("X-Forwarded-For", "198.51.100.30")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	for i := range 490 {
+		req.Header.Set(fmt.Sprintf("Sec-Ch-Ua-X%d", i), strings.Repeat("h", 512))
+	}
+	w := httptest.NewRecorder()
+	r.c.HandleBrowser(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("header flood: %d", w.Code)
+	}
+	// A batch of < characters: 8 events, 3.5 KB of them in each one's props.
+	var p []string
+	for i := range 7 {
+		p = append(p, fmt.Sprintf(`"k%d":"%s"`, i, strings.Repeat("<", 500)))
+	}
+	lt := strings.Replace(batch(domain, 8, ""), `"p":{}`, `"p":{`+strings.Join(p, ",")+`}`, -1)
+	if w := r.browser(lt, "198.51.100.31", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("< batch: %d", w.Code)
+	}
+	waitEvents(t, r.st, 9)
+	sizes, props := storedRows(t, r.st)
+	if sizes[0] > 2*StoreUnit || strings.Contains(props[0], "sec-ch-ua-x") || !strings.Contains(props[0], `"sec-fetch-mode":"cors"`) {
+		t.Errorf("header flood stored %d bytes: %s", sizes[0], props[0])
+	}
+	total := 0
+	for i, s := range sizes[1:] {
+		total += s
+		if s > 4<<10 || strings.Contains(props[i+1], `\`+`u003c`) || !strings.Contains(props[i+1], "<<<") {
+			t.Errorf("< event %d stored %d bytes", i, s)
+		}
+	}
+	// The batch was charged for what it stores: the bytes per token stay within StoreUnit.
+	if cost := browserCost(8, total); total > cost*StoreUnit || cost <= 8 {
+		t.Errorf("< batch stored %d bytes for %d tokens", total, cost)
+	}
+	// 12 events naming a 1.9 KB URL each store twice the body: charged for the bytes, so the second such batch
+	// passes and the third does not (by the event count alone 36 of 60 tokens would be spent).
+	long := `,"url":"https://` + domain + `/` + strings.Repeat("u", 1900) + `"`
+	body := `{"v":1,"site":"` + domain + `","events":[` + strings.TrimSuffix(strings.Repeat(`{"k":"engagement"`+long+`},`, 12), ",") + `]}`
+	for i, want := range []int{http.StatusNoContent, http.StatusNoContent, http.StatusTooManyRequests} {
+		if w := r.browser(body, "198.51.100.32", ""); w.Code != want {
+			t.Errorf("long-URL batch %d: %d, want %d", i, w.Code, want)
+		}
+	}
+	// 50 events of 17 bytes each, under a 2 KB page URL and referrer: every page view stores both, 300 KB from a
+	// 5 KB body. Over the batch bound: refused.
+	ctxLong := `"url":"https://` + domain + `/` + strings.Repeat("u", 2000) + `","ref":"https://ref.example.org/` +
+		strings.Repeat("r", 2000) + `"`
+	body = `{"v":1,"site":"` + domain + `","ctx":{` + ctxLong + `},"events":[` +
+		strings.TrimSuffix(strings.Repeat(`{"k":"page_view"},`, 50), ",") + `]}`
+	if w := r.browser(body, "198.51.100.33", ""); w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("amplifying batch: %d", w.Code)
+	}
+	// The bounds keep the largest charge under the burst: a byte charge never becomes a 413.
+	if browserCost(1, maxBatchBytes) >= BrowserBurst {
+		t.Errorf("max byte charge %d", browserCost(1, maxBatchBytes))
+	}
+}
+
+// readFlag is a body that records whether anyone read it.
+type readFlag struct {
+	r    io.Reader
+	read bool
+}
+
+func (f *readFlag) Read(p []byte) (int, error) { f.read = true; return f.r.Read(p) }
+
+// A caller without tokens is refused before its body is read: refusing is cheap, and every request still pays.
+func TestRefusedBeforeParsing(t *testing.T) {
+	r := newRig(t, 0, false)
+	for range BrowserBurst {
+		r.browser(`{nope`, "203.0.113.77", "")
+	}
+	body := &readFlag{r: strings.NewReader(batch(domain, 1, ""))}
+	req := httptest.NewRequest(http.MethodPost, "/api/in", body)
+	req.Header.Set("X-Forwarded-For", "203.0.113.77")
+	w := httptest.NewRecorder()
+	r.c.HandleBrowser(w, req)
+	if w.Code != http.StatusTooManyRequests || body.read {
+		t.Errorf("browser: %d, body read %v", w.Code, body.read)
+	}
+	// The feed: a key without tokens left is refused unread too.
+	for range FeedBurst/MaxFeedEvents + 1 {
+		r.feed(feedBody(domain, MaxFeedEvents, `{"t":1,"ip":"192.0.2.1"}`), feedKey)
+	}
+	body = &readFlag{r: strings.NewReader(feedBody(domain, 1, ""))}
+	req = httptest.NewRequest(http.MethodPost, "/api/feed", body)
+	req.Header.Set("Authorization", "Bearer "+feedKey)
+	w = httptest.NewRecorder()
+	r.c.HandleFeed(w, req)
+	if w.Code != http.StatusTooManyRequests || body.read || w.Header().Get("Retry-After") == "" {
+		t.Errorf("feed: %d, body read %v", w.Code, body.read)
+	}
+}
+
+// A body trickled in holds its handler no longer than the read deadline, and is counted.
+func TestSlowBody(t *testing.T) {
+	r := newRig(t, 0, false)
+	r.c.BodyTimeout = 200 * time.Millisecond
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/in", r.c.HandleBrowser)
+	mux.HandleFunc("POST /api/feed", r.c.HandleFeed)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	for _, tt := range []struct{ path, hdr string }{
+		{"/api/in", "Origin: https://" + domain + "\r\n"},
+		{"/api/feed", "Authorization: Bearer " + feedKey + "\r\n"},
+	} {
+		conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		_, _ = fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: x\r\n%sContent-Length: 1000\r\n\r\n{\"v\":1,", tt.path, tt.hdr)
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		_ = conn.Close()
+		if err != nil {
+			t.Fatalf("%s: %v", tt.path, err)
+		}
+		if resp.StatusCode != http.StatusRequestTimeout || time.Since(start) > 3*time.Second {
+			t.Errorf("%s: %d after %v", tt.path, resp.StatusCode, time.Since(start))
+		}
+	}
+	if s := r.stat(t, r.siteID(domain)); s.Rejected != 2 {
+		t.Errorf("stat %+v, want both slow bodies counted", s)
+	}
+}
+
+// One event of the wrong JSON shape is dropped and counted; the batch around it is stored. A wrong key is counted
+// where every footer shows it.
+func TestFeed_PerEvent(t *testing.T) {
+	r := newRig(t, 0, true)
+	site := r.siteID(domain)
+	good := `{"t":%d,"ip":"192.0.2.10","ua":"Mozilla/5.0","method":"GET","path":"/","route":"GET /","status":200}`
+	evs := []string{good, `{"ip":"192.0.2.11","status":"200"}`, `1`, `{"ip":["192.0.2.12"]}`, good}
+	for i := range evs {
+		evs[i] = strings.ReplaceAll(evs[i], "%d", fmt.Sprint(time.Now().UnixMilli()))
+	}
+	if w := r.feed(`{"v":1,"site":"`+domain+`","events":[`+strings.Join(evs, ",")+`]}`, feedKey); w.Code != http.StatusNoContent {
+		t.Fatalf("batch: %d %s", w.Code, w.Body)
+	}
+	waitEvents(t, r.st, 2)
+	if s := r.stat(t, site); s.Accepted != 2 || s.Rejected != 3 {
+		t.Errorf("stat %+v, want 2 accepted, 3 rejected", s)
+	}
+	// The envelope itself still refuses: events that are no array.
+	if w := r.feed(`{"v":1,"site":"`+domain+`","events":{}}`, feedKey); w.Code != http.StatusBadRequest {
+		t.Errorf("events object: %d", w.Code)
+	}
+	r.feed(feedBody(domain, 1, ""), "wrong")
+	if g := r.stat(t, 0); g.UnknownDomain != 1 || g.Rejected != 0 {
+		t.Errorf("wrong key counted as %+v", g)
 	}
 }
 
