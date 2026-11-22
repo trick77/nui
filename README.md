@@ -83,9 +83,9 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
   `-wipe` empties the directory first). Anything else is refused untouched, and so is every run with `PUBLIC_FQDN`
   set. Serve it with `server -demo 1` and `BACKEND_REFDATA_DISABLED=true`. About 25,000 events a second.
   The largest run is scale 50: about 110,000 events a simulated day, some 5 s of backfill each, and with the default
-  scenarios up to about 300 MB of day plans in memory (a plan holds a whole day's requests; three are kept once a
-  span crosses midnight, the referrer wave's day the largest), live as long as it runs: `growth` rises up to the
-  start and keeps its level after.
+  scenarios up to about 210 MB of day plans in memory (a plan holds a whole day's requests; the day before is kept
+  beside it only for the three hours past midnight a visit begun on it can last, the referrer wave's day and the one
+  before it the largest pair), live as long as it runs: `growth` rises up to the start and keeps its level after.
 - `live -target http://127.0.0.1:8080 [-rate 50] [-speed 120] [-for 10m] [-key domain=key]` sends tracker and feed
   batches to a running server, backing off on 429 as the tracker does and retrying a batch without an answer or with
   a 5xx after a growing wait. It stops with an error when the server fails everything for 30 s or refuses a site's
