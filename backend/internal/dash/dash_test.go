@@ -573,6 +573,57 @@ func TestVisitsAcrossBuckets(t *testing.T) {
 	}
 }
 
+// The log reads a day at a time: pages that span windows, and windows with no match, lose and repeat nothing.
+func TestLogAcrossWindows(t *testing.T) {
+	r := newRig(t, 0, 0, nil)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	var evs []store.Event
+	// 250 matching events over five days, two of them empty, with non-matching ones between.
+	for i := range 250 {
+		day := []int{0, 1, 4}[i%3]
+		ts := r.end.Add(-time.Duration(day)*24*time.Hour - time.Duration(i)*time.Minute).UnixMilli()
+		evs = append(evs, store.Event{SiteID: site.ID, TS: ts, Source: "server", Kind: "request", IP: "192.0.2.7",
+			IPKey: "192.0.2.7", Template: "GET /rare", Status: 200},
+			store.Event{SiteID: site.ID, TS: ts - 1, Source: "server", Kind: "request", IP: "192.0.2.8",
+				IPKey: "192.0.2.8", Template: "GET /other", Status: 200})
+	}
+	if err := r.s.DB.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	var prev string
+	cur := ""
+	for page := 0; ; page++ {
+		args := p(feedSite, "path", "rare")
+		if cur != "" {
+			args["cursor"] = cur
+		}
+		code, body := r.get(t, "log", args)
+		if code != http.StatusOK || body["total"] != 250.0 {
+			t.Fatalf("page %d: %d, total %v", page, code, body["total"])
+		}
+		for _, x := range body["rows"].([]any) {
+			row := x.(map[string]any)
+			key := row["t"].(string)
+			if prev != "" && key > prev {
+				t.Fatalf("page %d: %s after %s, not newest first", page, key, prev)
+			}
+			prev = key
+			seen[key] = true
+		}
+		cur, _ = body["next"].(string)
+		if cur == "" {
+			break
+		}
+	}
+	if len(seen) != 250 {
+		t.Errorf("paged %d distinct rows, want 250", len(seen))
+	}
+	if got := windows(0, 10, 4*time.Millisecond); len(got) != 3 || got[0] != [2]int64{6, 10} || got[2] != [2]int64{0, 2} {
+		t.Errorf("windows: %v", got)
+	}
+}
+
 func TestLog(t *testing.T) {
 	r := newRig(t, 2, 6, nil)
 	code, body := r.get(t, "log", p(feedSite, "range", "24h"))

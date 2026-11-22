@@ -1,6 +1,7 @@
 package dash
 
 import (
+	"context"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -37,8 +38,8 @@ type logRow struct {
 // sort. Domain and range apply; aud and cmp do not.
 func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 	v := r.URL.Query()
-	where := []string{"site_id = ?", "ts >= ?", "ts < ?"}
-	args := []any{q.site.ID, ms(q.p.From()), ms(q.p.Bounds[q.p.n()])}
+	where := []string{"site_id = ?"}
+	args := []any{q.site.ID}
 	if a := strings.TrimSpace(v.Get("addr")); a != "" {
 		if _, err := netip.ParseAddr(a); err == nil {
 			where, args = append(where, "ip_key = ?", "ip = ?"), append(args, ratelimit.Key(a), netip.MustParseAddr(a).Unmap().String())
@@ -94,51 +95,95 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 		apix.Error(w, http.StatusBadRequest, "bad cursor")
 		return
 	}
-	cond := strings.Join(where, " AND ")
+	cond := strings.Join(where, " AND ") + " AND ts >= ? AND ts < ?"
 	ctx := r.Context()
+	from, to := ms(q.p.From()), ms(q.p.Bounds[q.p.n()])
+	// The total and the page are read a window at a time: a filter the indexes cannot answer (a path substring)
+	// otherwise reads the whole range in one statement, seconds long on a year of events.
 	var total int64
-	if err := s.row(ctx, `SELECT COUNT(*) FROM event WHERE `+cond, args...).Scan(&total); err != nil {
-		s.fail(w, r, err)
-		return
+	for _, win := range windows(from, to, scanWindow) {
+		var n int64
+		if err := s.row(ctx, `SELECT COUNT(*) FROM event WHERE `+cond, append(slices.Clone(args), win[0], win[1])...).
+			Scan(&n); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		total += n
 	}
-	pageArgs := slices.Clone(args)
-	pageCond := cond
 	if cur.ts > 0 {
-		pageCond += " AND (ts < ? OR (ts = ? AND id < ?))"
-		pageArgs = append(pageArgs, cur.ts, cur.ts, cur.id)
+		to = min(to, cur.ts+1)
 	}
-	rows, err := s.query(ctx, `SELECT id, ts, ip, cls, source, kind, name, template, status, ua
-		FROM event WHERE `+pageCond+` ORDER BY ts DESC, id DESC LIMIT `+strconv.Itoa(logPage+1), pageArgs...)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	defer func() { _ = rows.Close() }()
 	out := []logRow{}
 	next := ""
 	var last cursor
+	for _, win := range windows(from, to, scanWindow) {
+		pageArgs := append(slices.Clone(args), win[0], win[1])
+		pageCond := cond
+		if cur.ts > 0 {
+			pageCond += " AND (ts < ? OR (ts = ? AND id < ?))"
+			pageArgs = append(pageArgs, cur.ts, cur.ts, cur.id)
+		}
+		more, err := s.logRows(ctx, pageCond, pageArgs, logPage+1-len(out))
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		for _, lr := range more {
+			if len(out) == logPage {
+				next = last.String()
+				break
+			}
+			out = append(out, lr.row)
+			last = lr.at
+		}
+		if next != "" {
+			break
+		}
+	}
+	apix.JSON(w, http.StatusOK, map[string]any{"rows": out, "total": total, "next": next})
+}
+
+// scanWindow is the longest span one log or footer statement reads: a day of a busy site is short, a year is not.
+const scanWindow = 24 * time.Hour
+
+// countWindow is the span of one footer COUNT: an index-only count, so a week of a busy site is still short.
+const countWindow = 7 * 24 * time.Hour
+
+// windows cuts [from, to) (unix ms) into spans of at most step, newest first.
+func windows(from, to int64, step time.Duration) [][2]int64 {
+	var out [][2]int64
+	for hi := to; hi > from; hi -= step.Milliseconds() {
+		out = append(out, [2]int64{max(from, hi-step.Milliseconds()), hi})
+	}
+	return out
+}
+
+type cursorRow struct {
+	row logRow
+	at  cursor
+}
+
+// logRows reads up to limit log rows matching cond, newest first.
+func (s *Server) logRows(ctx context.Context, cond string, args []any, limit int) ([]cursorRow, error) {
+	rows, err := s.query(ctx, `SELECT id, ts, ip, cls, source, kind, name, template, status, ua
+		FROM event WHERE `+cond+` ORDER BY ts DESC, id DESC LIMIT `+strconv.Itoa(limit), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []cursorRow
 	for rows.Next() {
 		var id, ts int64
 		var ip, source, kind, name, tmpl, ua string
 		var cls, status int
 		if err := rows.Scan(&id, &ts, &ip, &cls, &source, &kind, &name, &tmpl, &status, &ua); err != nil {
-			s.fail(w, r, err)
-			return
-		}
-		if len(out) == logPage {
-			next = last.String()
-			break
+			return nil, err
 		}
 		what, k := describe(source, kind, name, tmpl, status)
-		out = append(out, logRow{T: iso(time.UnixMilli(ts)), Addr: ip, Class: classOf(cls), Kind: k, What: what,
-			Client: classify.Client(ua), Source: source})
-		last = cursor{ts, id}
+		out = append(out, cursorRow{row: logRow{T: iso(time.UnixMilli(ts)), Addr: ip, Class: classOf(cls), Kind: k,
+			What: what, Client: classify.Client(ua), Source: source}, at: cursor{ts, id}})
 	}
-	if err := rows.Err(); err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	apix.JSON(w, http.StatusOK, map[string]any{"rows": out, "total": total, "next": next})
+	return out, rows.Err()
 }
 
 // handleDomain is the footer: collector counters over the range, sources, storage, rules and reference data.
@@ -188,10 +233,22 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 		return
 	}
 	var first, events int64
-	if err := s.row(ctx, `SELECT COALESCE(MIN(ts), 0), COUNT(*) FROM event WHERE site_id = ?`,
-		q.site.ID).Scan(&first, &events); err != nil {
+	if err := s.row(ctx, `SELECT COALESCE(MIN(ts), 0) FROM event WHERE site_id = ?`, q.site.ID).
+		Scan(&first); err != nil {
 		s.fail(w, r, err)
 		return
+	}
+	// Counted a window at a time from the oldest event on: one COUNT over 25 months is a read seconds long.
+	if first > 0 {
+		for _, win := range windows(first, max(s.now().UnixMilli(), first)+1, countWindow) {
+			var n int64
+			if err := s.row(ctx, `SELECT COUNT(*) FROM event WHERE site_id = ? AND ts >= ? AND ts < ?`,
+				q.site.ID, win[0], win[1]).Scan(&n); err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			events += n
+		}
 	}
 	used, err := s.DB.UsedBytes(ctx)
 	if err != nil {
