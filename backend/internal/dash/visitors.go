@@ -1030,14 +1030,40 @@ func respace(reasons []string) []string {
 	return reasons
 }
 
-// clientFamily is a client as an id, for an evidence id and the reading signature: the version dropped (curl/8.4
-// and curl/8.5 behave alike), then its words as a slug. No separator reaches it: a change of the shown spelling
-// would orphan every cached reading of a browser.
+// browserJoin joins a browser's two parts in its client family. classify.Client writes any other name as a product
+// token ([A-Za-z][A-Za-z0-9._-]*, no "+") or, when none starts it, as raw text that does not start with a letter,
+// so "Chrome+macOS" is no tool's family and no shown separator reaches an id.
+const browserJoin = "+"
+
+// noClient is the family of an empty name: stable, and no other client's (it starts with a letter and holds a "+").
+const noClient = "no+client"
+
+// clientFamily is a client as an id, for an evidence id and the reading signature: a browser's parts joined by
+// browserJoin, so a change of the shown separator changes no id (and orphans no cached reading); any other name as
+// written, its version dropped (curl/8.4 and curl/8.5 behave alike), case, digits and punctuation kept.
 func clientFamily(c string) string {
-	if i := strings.IndexByte(c, '/'); i > 0 {
-		c = c[:i]
+	if b, o, ok := strings.Cut(c, apix.Sep); ok && browserPart(b) && browserPart(o) {
+		return b + browserJoin + o
 	}
-	return slug(c)
+	if strings.TrimSpace(c) == "" {
+		return noClient
+	}
+	if i := strings.IndexByte(c, '/'); i > 0 {
+		return c[:i]
+	}
+	return c
+}
+
+// browserPart reports whether s is one of classify.ParseUA's browser or OS names: ASCII letters and spaces, a letter
+// first.
+func browserPart(s string) bool {
+	for i, r := range s {
+		letter := r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z'
+		if !letter && (i == 0 || r != ' ') {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func deref(p *int64) int64 {
