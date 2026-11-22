@@ -1417,6 +1417,22 @@ describe("separators", () => {
     await screen.findByRole("link", { name: "Sign in" });
     expect(plainDots()).toEqual([]);
   });
+
+  it("finds a client typed with plain spaces", async () => {
+    start();
+    const v = await screen.findByRole("region", {
+      name: "Visitors by address",
+    });
+    await within(v).findByText("198.51.100.7");
+    fireEvent.change(within(v).getByRole("textbox"), {
+      target: { value: "chrome · macos" },
+    });
+    await waitFor(
+      () => expect(within(v).queryByText("198.51.100.7")).toBeNull(),
+      { timeout: 2000 },
+    );
+    expect(within(v).getByText("203.0.113.42")).toBeInTheDocument();
+  });
 });
 
 describe("main chart", () => {

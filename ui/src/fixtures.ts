@@ -871,10 +871,13 @@ function visitors(q: URLSearchParams, feed: boolean): Visitors {
   const aud = q.get("aud");
   if (aud === "humans") rows = rows.filter((v) => v.class === "human");
   if (aud === "bots") rows = rows.filter((v) => v.class !== "human");
-  const term = (q.get("q") || "").toLowerCase();
+  // Any run of spaces matches any other, en spaces included, as the
+  // backend folds them.
+  const fold = (s: string) => s.toLowerCase().trim().replace(/\s+/g, " ");
+  const term = fold(q.get("q") || "");
   if (term)
     rows = rows.filter((v) =>
-      `${v.display} ${v.network} ${v.client}`.toLowerCase().includes(term),
+      fold(`${v.display} ${v.network} ${v.client}`).includes(term),
     );
   const sort = q.get("sort") || "requests";
   const key = (v: VisitorRow) =>
