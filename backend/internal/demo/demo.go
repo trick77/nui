@@ -68,6 +68,13 @@ func Generate(ctx context.Context, st *store.Store, o Options) (int, error) {
 			return g.n, err
 		}
 	}
+	stats := make([]store.IngestStat, 0, len(g.stats))
+	for _, s := range g.stats {
+		stats = append(stats, *s)
+	}
+	if err := st.AddStats(ctx, stats); err != nil {
+		return g.n, err
+	}
 	if o.Classes {
 		for k, c := range g.classes {
 			if err := st.SetActorClass(ctx, store.ActorClass{SiteID: o.SiteID, IPKey: k.key, Day: k.day,
@@ -96,6 +103,7 @@ type gen struct {
 	buf     []store.Event
 	n       int
 	classes map[actorDay]classed
+	stats   map[int64]*store.IngestStat // hour → the counters ingest would have kept
 }
 
 func (g *gen) add(e store.Event, class string, reasons ...string) {
@@ -118,7 +126,25 @@ func (g *gen) add(e store.Event, class string, reasons ...string) {
 	}
 }
 
+// flush writes the buffered events and books them in the collector's counters, as ingest would have: accepted in
+// the hour each arrived (its own, the demo has no delay), the server's share apart. The dashboard's source states
+// and the classifier's "script delivered" read these.
 func (g *gen) flush(ctx context.Context) error {
+	if g.stats == nil {
+		g.stats = map[int64]*store.IngestStat{}
+	}
+	for _, e := range g.buf {
+		h := e.TS / 3_600_000
+		s := g.stats[h]
+		if s == nil {
+			s = &store.IngestStat{SiteID: g.o.SiteID, Hour: h}
+			g.stats[h] = s
+		}
+		s.Accepted++
+		if e.Source == "server" {
+			s.AcceptedServer++
+		}
+	}
 	for len(g.buf) > 0 {
 		n := min(len(g.buf), 2000)
 		if err := g.st.InsertEvents(ctx, g.buf[:n]); err != nil {

@@ -34,6 +34,18 @@ func TestGenerate(t *testing.T) {
 	if classes != 4 || kinds < 4 {
 		t.Errorf("classes %d, kinds %d", classes, kinds)
 	}
+	// The collector's counters agree with the events, hour by hour, as real ingest would have kept them.
+	var mismatched int
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM (SELECT ts / 3600000 AS h, COUNT(*) AS n,
+		SUM(source = 'server') AS ns FROM event GROUP BY h) e LEFT JOIN ingest_stat s ON s.hour = e.h
+		WHERE s.accepted IS NOT e.n OR s.accepted_server IS NOT e.ns`).Scan(&mismatched); err != nil || mismatched != 0 {
+		t.Errorf("%d hours whose counters disagree with the events, %v", mismatched, err)
+	}
+	var browserHours int
+	_ = st.DB.QueryRow(`SELECT COUNT(*) FROM ingest_stat WHERE accepted > accepted_server`).Scan(&browserHours)
+	if browserHours == 0 {
+		t.Error("the browser source never delivered")
+	}
 	// Same seed, same traffic.
 	o.Classes, o.End = false, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	a, _ := Generate(t.Context(), st, o)

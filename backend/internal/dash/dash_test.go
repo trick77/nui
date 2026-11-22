@@ -784,11 +784,16 @@ func TestDomainAndSites(t *testing.T) {
 	r := newRig(t, 2, 3, &fakeModel{})
 	_, body := r.get(t, "domain", p(feedSite, "range", "7d"))
 	c := body["counters"].(map[string]any)
-	if c["accepted"].(float64) != 105 || c["rate_limited"].(float64) != 4 || c["unknown_domain"].(float64) != 2 {
-		t.Errorf("counters %v", c)
+	// The demo's events are counted as ingest would have; the rig adds 100 stored and 5 pending.
+	site, _ := r.s.Sites.Lookup(feedSite)
+	var demoEvents float64
+	_ = r.s.DB.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE site_id = ? AND ts >= ?`, site.ID,
+		r.end.Add(-7*24*time.Hour).Truncate(time.Hour).UnixMilli()).Scan(&demoEvents)
+	if c["accepted"].(float64) != 105+demoEvents || c["rate_limited"].(float64) != 4 || c["unknown_domain"].(float64) != 2 {
+		t.Errorf("counters %v, demo events %v", c, demoEvents)
 	}
 	src := body["sources"].(map[string]any)
-	if src["browser"].(map[string]any)["state"] != "receiving" || src["server"].(map[string]any)["state"] != "idle" {
+	if src["browser"].(map[string]any)["state"] != "receiving" || src["server"].(map[string]any)["state"] != "receiving" {
 		t.Errorf("sources %v", src)
 	}
 	st := body["storage"].(map[string]any)
