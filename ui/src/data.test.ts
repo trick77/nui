@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import shell from "../index.html?raw";
+import icon from "../public/icon.svg?raw";
 import { ApiError, api, setAuthListener, setFetcher, type Scope } from "./api";
 import { SITES, fixtureFetch } from "./fixtures";
 import {
@@ -264,5 +266,17 @@ describe("api client", () => {
     expect(d.sources.server).toBeNull();
     expect((await api.log(scope, {}, "")).rows).toHaveLength(25);
     expect((await api.logout()).status).toBe(204);
+  });
+});
+
+describe("shell", () => {
+  it("links its own small icon, never the host's /favicon.ico", () => {
+    // The build makes the public file's path relative, and the server
+    // serves it under /dashboard/.
+    expect(shell).toContain(
+      '<link rel="icon" type="image/svg+xml" href="/icon.svg" />',
+    );
+    expect(icon).toMatch(/^<svg [^]*<\/svg>\s*$/);
+    expect(icon.length).toBeLessThan(600);
   });
 });
