@@ -3,6 +3,7 @@ package dash
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -230,6 +231,9 @@ func TestBadParameters(t *testing.T) {
 		{"log", p(feedSite, "addr", "2001:db8:1::/48"), 400},
 		{"log", p(feedSite, "addr", "192.0.2.0/24"), 400},
 		{"log", p(feedSite, "class", "x"), 400},
+		{"log", p(feedSite, "asn", "x"), 400},
+		{"log", p(feedSite, "asn", "0"), 400},
+		{"log", p(feedSite, "asn", "4294967296"), 400},
 		{"log", p(feedSite, "status", "6xx"), 400},
 		{"log", p(feedSite, "cursor", "1"), 400},
 	} {
@@ -557,6 +561,56 @@ func TestVisitorsAndDetail(t *testing.T) {
 		t.Errorf("v6 %v", v6)
 	} else if code, _ := r.get(t, "visitor", p(feedSite, "key", rows[0]["key"].(string), "range", "24h")); code != 200 {
 		t.Errorf("v6 detail %d", code)
+	}
+}
+
+// A network spike opens the log on that network's requests: the log filters by AS number.
+func TestNetworkSpikeOpensItsLog(t *testing.T) {
+	r := newRig(t, 0, 0, nil)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	var evs []store.Event
+	// In a closed bucket (findings read those only): ten addresses of one network, none a spike of its own.
+	at := r.end.Add(-2 * time.Hour).UnixMilli()
+	for i := range 250 {
+		ip := fmt.Sprintf("198.51.100.%d", i%10)
+		evs = append(evs, store.Event{SiteID: site.ID, TS: at - int64(i)*1000, Source: "server",
+			Kind: "request", IP: ip, IPKey: ip, ASN: 64500, Template: "GET /x", Status: 200})
+	}
+	for i := range 20 {
+		evs = append(evs, store.Event{SiteID: site.ID, TS: at - int64(i)*1000, Source: "server",
+			Kind: "request", IP: "192.0.2.5", IPKey: "192.0.2.5", ASN: 64501, Template: "GET /y", Status: 200})
+	}
+	if err := r.s.DB.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	_, body := r.get(t, "noteworthy", p(feedSite, "range", "24h"))
+	var target map[string]any
+	for _, x := range body["items"].([]any) {
+		if m := x.(map[string]any); m["id"] == "spike:net:64500" {
+			target = m["target"].(map[string]any)
+		}
+	}
+	if target == nil || target["panel"] != "log" {
+		t.Fatalf("no network spike to the log: %v", body["items"])
+	}
+	params := p(feedSite, "range", "24h")
+	for k, v := range target["filter"].(map[string]any) {
+		params[k] = v.(string)
+	}
+	if params["asn"] != "64500" {
+		t.Fatalf("filter %v", target["filter"])
+	}
+	_, log := r.get(t, "log", params)
+	if log["total"].(float64) != 250 {
+		t.Errorf("the network's log holds %v events, want its 250", log["total"])
+	}
+	for _, row := range listRows(log) {
+		if !strings.HasPrefix(row["addr"].(string), "198.51.100.") {
+			t.Errorf("another network's event: %v", row)
+		}
+	}
+	if _, log := r.get(t, "log", p(feedSite, "range", "24h", "asn", "AS64501")); log["total"].(float64) != 20 {
+		t.Errorf("AS64501: %v", log["total"])
 	}
 }
 

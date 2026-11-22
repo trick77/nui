@@ -85,6 +85,7 @@ func TestLargeTable(t *testing.T) {
 		{"classes", long()}, {"status", long()}, {"clients", long()}, {"visitors", long()},
 		{"visitors", long("sort", "refused", "class", "unknown")}, {"visitor", long("key", "203.0.113.5")},
 		{"log", long()}, {"log", long("addr", "203.0.113.5", "status", "4xx")}, {"log", long("path", "/.env")},
+		{"log", long("kind", "request", "asn", "15169")},
 		{"domain", long()},
 	}
 	for dim := range dims {

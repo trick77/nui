@@ -331,7 +331,8 @@ func (s *Server) spikes(ctx context.Context, q *query, add func(insight.Fact)) e
 			if sp.id == "spike:net:" {
 				asn, _ := strconv.ParseInt(k, 10, 64)
 				label, _ = s.networkName(asn)
-				target = insight.Target{Panel: "log", Filter: map[string]string{"kind": "request"}}
+				// The log on that network's requests: what the spike counted, nothing else.
+				target = insight.Target{Panel: "log", Filter: map[string]string{"kind": "request", "asn": k}}
 			} else if asns := s.asnOf(ctx, q.site.ID, []string{k}); asns[k] != 0 {
 				name, _ := s.networkName(asns[k])
 				label += " (" + name + ")"

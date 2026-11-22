@@ -2,6 +2,7 @@ package dash
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -50,6 +51,15 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 			apix.Error(w, http.StatusBadRequest, "addr is an address or a /64")
 			return
 		}
+	}
+	// One network by its AS number: a network spike in Noteworthy opens the log on it.
+	if a := strings.TrimSpace(v.Get("asn")); a != "" {
+		n, err := strconv.ParseInt(strings.TrimPrefix(strings.ToUpper(a), "AS"), 10, 64)
+		if err != nil || n < 1 || n > math.MaxUint32 {
+			apix.Error(w, http.StatusBadRequest, "asn is an AS number")
+			return
+		}
+		where, args = append(where, "asn = ?"), append(args, n)
 	}
 	// A substring of the template, the raw path or the event name (an error's message is its name): the UI opens
 	// the log from an error row with the error's label.
