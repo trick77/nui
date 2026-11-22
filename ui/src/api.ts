@@ -13,6 +13,8 @@ export type Change = { pct: number } | { pp: number } | { new: true } | null;
 
 export type Me = { name: string };
 
+export type AuthMethods = { oidc: boolean; token: boolean };
+
 export type SiteInfo = {
   site: string;
   product: string;
@@ -335,6 +337,17 @@ const dash = <T>(
 
 export const api = {
   me: (signal?: AbortSignal) => getJSON<Me>("/api/me", signal),
+  // How this server signs people in; public.
+  authMethods: (signal?: AbortSignal) =>
+    getJSON<AuthMethods>("/api/auth/methods", signal),
+  // The admin token as a form post: URLSearchParams makes the browser send
+  // it form-encoded. The answer's status is all that is read.
+  tokenLogin: (token: string) =>
+    fetcher("/api/auth/token", {
+      method: "POST",
+      credentials: "same-origin",
+      body: new URLSearchParams({ token }),
+    }),
   logout: () =>
     fetcher("/api/auth/logout", { method: "POST", credentials: "same-origin" }),
   sites: (signal?: AbortSignal) =>

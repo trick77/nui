@@ -261,6 +261,52 @@ body {
 .card {
   padding: 16px 18px 14px;
 }
+
+/* The sign-in and no-access screens' art, netra's way. If it is missing or
+   still loading, the page's own background shows through. */
+.cover {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* 38 %, not centre: the lit interchange is the left part of the art and
+     it runs out to black on the right. Centred, a narrow or portrait window
+     crops to the dark half and the screen has nothing in it. */
+  object-position: 38% 50%;
+}
+/* Two washes, both light. The radial seats the card; the linear takes the
+   bright trails down a step so they stop competing with the button.
+   Neither does legibility work, that is the card's opaque fill, which lets
+   the art stay lit. */
+.wash {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      42% 54% at 50% 50%,
+      rgba(19, 19, 18, 0.72) 0%,
+      rgba(19, 19, 18, 0.34) 58%,
+      transparent 100%
+    ),
+    linear-gradient(
+      90deg,
+      rgba(19, 19, 18, 0.5) 0%,
+      rgba(19, 19, 18, 0.2) 46%,
+      rgba(19, 19, 18, 0.06) 100%
+    );
+}
+/* The card fits a phone: the dashboard's minimum width is not its. */
+body:has(.gate) {
+  min-width: 0;
+}
+/* Above the wash, which comes first in source order but is fixed. */
+.gate {
+  position: relative;
+  z-index: 1;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
 .hero {
   overflow: hidden;
   background:

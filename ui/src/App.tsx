@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { ApiError, api, setAuthListener, type Me } from "./api";
 import Dashboard from "./Dashboard";
+import { SignIn } from "./SignIn";
+import { basePath } from "./state";
 
 type Auth =
   | { state: "checking" }
@@ -9,10 +11,12 @@ type Auth =
   | { state: "denied" }
   | { state: "failed"; message: string };
 
-// Sign-in first: /api/me decides. A 401 shows the sign-in link, a 403 the
-// no-access screen; neither redirects on its own, so nothing can loop.
+// Sign-in first: /api/me decides. A 401 shows the sign-in card, a 403 the
+// no-access screen; neither redirects on its own, so nothing can loop. A
+// token sign-in asks /api/me once more (round).
 export default function App() {
   const [auth, setAuth] = useState<Auth>({ state: "checking" });
+  const [round, setRound] = useState(0);
   useEffect(() => {
     const ctl = new AbortController();
     api.me(ctl.signal).then(
@@ -31,12 +35,26 @@ export default function App() {
       ctl.abort();
       setAuthListener(null);
     };
-  }, []);
+  }, [round]);
 
   if (auth.state === "in") return <Dashboard me={auth.me} />;
+  // The art only behind sign-in and no access: never fetched while the
+  // session is checked, so a signed-in visitor never loads it.
+  const art = auth.state === "out" || auth.state === "denied";
   return (
     <main className="flex min-h-screen items-center justify-center p-6">
-      <div className="panel card w-full max-w-[420px] text-center">
+      {art && (
+        <>
+          <img
+            className="cover"
+            src={`${basePath(window.location.pathname)}login-cover.webp`}
+            alt=""
+            decoding="async"
+          />
+          <div className="wash" />
+        </>
+      )}
+      <div className="panel card gate w-full max-w-[420px] text-center">
         <h1 className="wordmark m-0 mb-3">nui</h1>
         {auth.state === "checking" && (
           <p className="m-0 text-[13.5px] text-muted" aria-busy="true">
@@ -46,14 +64,14 @@ export default function App() {
         {auth.state === "out" && (
           <>
             <p className="m-0 mb-4 text-[13.5px] text-ink-dim">
-              Sign in to see the dashboard.
+              Usage analytics for your own web products.
             </p>
-            <a
-              href="/api/auth/login"
-              className="inline-block rounded-ui-sm bg-accent-fill px-4 py-1.5 text-[14px] text-ink no-underline hover:bg-accent"
-            >
-              Sign in
-            </a>
+            <SignIn
+              onSignedIn={() => {
+                setAuth({ state: "checking" });
+                setRound((r) => r + 1);
+              }}
+            />
           </>
         )}
         {auth.state === "denied" && (

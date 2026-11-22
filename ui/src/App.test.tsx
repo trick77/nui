@@ -63,11 +63,107 @@ beforeEach(() => localStorage.clear());
 afterEach(() => setFetcher(null));
 
 describe("sign-in", () => {
+  const cover = () =>
+    document.querySelector('img[src="/dashboard/login-cover.webp"]');
+  const tokenBox = () => screen.getByLabelText("Admin token");
+
   it("links to the login on 401 and never redirects itself", async () => {
     start("/dashboard/", { me: 401 });
     const link = await screen.findByRole("link", { name: "Sign in" });
     expect(link).toHaveAttribute("href", "/api/auth/login");
-    expect(calls).toEqual(["/api/me"]);
+    expect(calls).toEqual(["/api/me", "/api/auth/methods"]);
+    // The token below it, folded away.
+    const fold = screen.getByText("Use the admin token instead");
+    expect(fold.closest("details")).not.toHaveAttribute("open");
+    expect(tokenBox()).toHaveAttribute("type", "password");
+    expect(tokenBox()).toHaveAttribute("autocomplete", "current-password");
+    expect(tokenBox()).not.toHaveFocus();
+    // The art behind the card, decoration only.
+    expect(cover()).toHaveAttribute("alt", "");
+  });
+
+  it("offers single sign-on alone, the token form alone, or says neither is set up", async () => {
+    const { unmount } = start("/dashboard/", {
+      me: 401,
+      methods: { oidc: true, token: false },
+    });
+    await screen.findByRole("link", { name: "Sign in" });
+    expect(screen.queryByLabelText("Admin token")).toBeNull();
+    unmount();
+
+    const second = start("/dashboard/", {
+      me: 401,
+      methods: { oidc: false, token: true },
+    });
+    await screen.findByLabelText("Admin token");
+    expect(screen.queryByRole("link", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByText("Use the admin token instead")).toBeNull();
+    await waitFor(() => expect(tokenBox()).toHaveFocus());
+    const form = screen.getByRole("form", { name: "Admin token sign-in" });
+    expect(form).toHaveAttribute("method", "post");
+    expect(form).toHaveAttribute("action", "/api/auth/token");
+    expect(form).toHaveTextContent("BACKEND_ADMIN_TOKEN");
+    second.unmount();
+
+    start("/dashboard/", { me: 401, methods: { oidc: false, token: false } });
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Sign-in is not configured",
+    );
+  });
+
+  it("signs in with the admin token and loads the dashboard", async () => {
+    start("/dashboard/", {
+      me: 401,
+      methods: { oidc: false, token: true },
+      token: 204,
+    });
+    fireEvent.change(await screen.findByLabelText("Admin token"), {
+      target: { value: "fixture-token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Log in" }));
+    expect(await screen.findByText("dev ·")).toBeInTheDocument();
+    expect(calls.filter((c) => c === "/api/me")).toHaveLength(2);
+    // The signed-in dashboard never fetches the art.
+    expect(cover()).toBeNull();
+  });
+
+  it("says why a token was refused, never echoing it", async () => {
+    for (const [status, text] of [
+      [401, "That is not the admin token."],
+      [413, "That value is too long to be the admin token."],
+      [429, "Too many attempts. Wait 30 s and try again."],
+      [500, "The server could not process the sign-in. Try again."],
+    ] as const) {
+      const { unmount } = start("/dashboard/", {
+        me: 401,
+        methods: { oidc: false, token: true },
+        token: status,
+      });
+      fireEvent.change(await screen.findByLabelText("Admin token"), {
+        target: { value: "s3cret-value" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Log in" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(text);
+      expect(tokenBox()).toHaveValue("");
+      expect(document.body.textContent).not.toContain("s3cret-value");
+      expect(localStorage.length).toBe(0);
+      unmount();
+    }
+    // A network failure reads as one, not as a refused token.
+    window.history.replaceState(null, "", "/dashboard/");
+    const fx = fixtureFetch({ me: 401, methods: { oidc: true, token: true } });
+    setFetcher((u, i) =>
+      u === "/api/auth/token"
+        ? Promise.reject(new TypeError("down"))
+        : fx(u, i),
+    );
+    render(<App />);
+    fireEvent.click(await screen.findByText("Use the admin token instead"));
+    fireEvent.change(tokenBox(), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: "Log in" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not reach the server.",
+    );
   });
 
   it("says so on 403", async () => {
@@ -75,6 +171,8 @@ describe("sign-in", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "not in the group",
     );
+    expect(cover()).not.toBeNull();
+    expect(calls).toEqual(["/api/me"]);
   });
 
   it("reports an unreachable server", async () => {

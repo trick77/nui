@@ -1041,14 +1041,22 @@ const clients: Clients = {
   ],
 };
 
-const json = (body: unknown, status = 200) =>
+const json = (
+  body: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+) =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
   });
 
 export type FixtureOptions = {
   me?: 200 | 401 | 403;
+  // What /api/auth/methods offers; both by default.
+  methods?: { oidc: boolean; token: boolean };
+  // The answer to a token sign-in; 204 signs in ("fixture-token" only).
+  token?: 204 | 401 | 413 | 429 | 500;
   // Answer these paths (e.g. "/api/dash/classes") with a 500.
   fail?: string[];
   delayMs?: number;
@@ -1056,6 +1064,7 @@ export type FixtureOptions = {
 
 // A fetch that answers the dashboard API from the fixtures above.
 export function fixtureFetch(opt: FixtureOptions = {}) {
+  let me = opt.me;
   return async (input: string, init?: RequestInit): Promise<Response> => {
     if (opt.delayMs) await new Promise((r) => setTimeout(r, opt.delayMs));
     if (init?.signal?.aborted) throw new DOMException("aborted", "AbortError");
@@ -1064,15 +1073,35 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
     if (opt.fail?.includes(u.pathname))
       return json({ detail: "fixture failure" }, 500);
     if (u.pathname === "/api/me")
-      return opt.me && opt.me !== 200
+      return me && me !== 200
         ? json(
-            { detail: opt.me === 401 ? "not signed in" : "not in the group" },
-            opt.me,
+            {
+              detail:
+                me === 401 ? "not signed in" : "not in the dashboard group",
+            },
+            me,
           )
         : json({ name: "dev" });
+    if (u.pathname === "/api/auth/methods")
+      return json(opt.methods ?? { oidc: true, token: true });
+    if (u.pathname === "/api/auth/token") {
+      // As the server reads it: a form post with one field.
+      const body = init?.body;
+      if (init?.method !== "POST" || !(body instanceof URLSearchParams))
+        return json({ detail: "not a form post" }, 400);
+      const st = opt.token ?? 401;
+      if (st === 204 && body.get("token") === "fixture-token") {
+        me = 200;
+        return new Response(null, { status: 204 });
+      }
+      if (st === 429)
+        return json({ detail: "slow down" }, 429, { "Retry-After": "30" });
+      return json({ detail: "refused" }, st === 204 ? 401 : st);
+    }
     if (u.pathname === "/api/auth/logout")
       return new Response(null, { status: 204 });
-    if (opt.me === 403) return json({ detail: "not in the group" }, 403);
+    if (me === 401) return json({ detail: "not signed in" }, 401);
+    if (me === 403) return json({ detail: "not in the dashboard group" }, 403);
     const site = q.get("site") || "";
     const feed = SITES.find((s) => s.site === site)?.server != null;
     const range = q.get("range") || "7d";
