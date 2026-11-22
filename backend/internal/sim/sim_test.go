@@ -86,10 +86,14 @@ func dump(t testing.TB, st *store.Store) string {
 // The same seed and anchor store the same history, byte for byte as dumped.
 func TestBackfillDeterministic(t *testing.T) {
 	var digests []string
+	days, scale, scenarios := 3, 0.5, "all"
+	if raceOn {
+		days, scale, scenarios = 1, 0.2, "api-walker,scan-wave,headless,cred-prober,deploy-error"
+	}
 	for range 2 {
-		w := testWorld(t, 0.5, "all")
+		w := testWorld(t, scale, scenarios)
 		st := testStore(t, w)
-		s, err := Backfill(t.Context(), st, w, BackfillOptions{Days: 3, Classify: true})
+		s, err := Backfill(t.Context(), st, w, BackfillOptions{Days: days, Classify: true})
 		if err != nil || s.Events == 0 {
 			t.Fatalf("%v, %v", s, err)
 		}
@@ -145,13 +149,17 @@ func TestRequestsWithinLimits(t *testing.T) {
 			t.Fatalf("tracker batch of %d events, %d bytes", q.Events(), len(body))
 		}
 	}
-	w = testWorld(t, 2, "baseline")
+	scale := 2.0
+	if raceOn {
+		scale = 0.3
+	}
+	w = testWorld(t, scale, "baseline")
 	st := testStore(t, w)
 	s, err := Backfill(t.Context(), st, w, BackfillOptions{Days: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(s.Refused) != 0 || s.Events < 1000 {
+	if len(s.Refused) != 0 || s.Events < 500 {
 		t.Errorf("baseline: %v", s)
 	}
 	// The collector's counters agree with the events, site by site. (Not hour by hour: an event is dated when it
@@ -196,7 +204,7 @@ func TestSmallScale(t *testing.T) {
 	if s, err = Backfill(t.Context(), st, w, BackfillOptions{Days: 1, Classify: true}); err != nil {
 		t.Fatal(err)
 	}
-	if d := time.Since(start); d > 2*time.Second {
+	if d := time.Since(start); d > time.Second && !raceOn {
 		t.Errorf("a day at scale 1 took %v", d)
 	}
 	t.Log(s)

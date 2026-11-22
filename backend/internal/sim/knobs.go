@@ -79,7 +79,13 @@ func ReadKnobs(getenv func(string) string, warn func(string)) Knobs {
 		}
 		return int(v)
 	}
-	k.Seed = uint64(whole("NUI_SIM_SEED", 1, 0, math.MaxInt32))
+	if raw := strings.TrimSpace(getenv("NUI_SIM_SEED")); raw != "" {
+		if s, err := strconv.ParseUint(raw, 10, 64); err == nil {
+			k.Seed = s
+		} else {
+			bad("NUI_SIM_SEED", raw, "a whole number from 0", k.Seed)
+		}
+	}
 	k.Scale = num("NUI_SIM_SCALE", k.Scale, 0, 10_000)
 	k.Speed = num("NUI_SIM_SPEED", k.Speed, 0.01, 100_000)
 	k.Port = whole("NUI_SIM_PORT", k.Port, 1, 65535)

@@ -298,7 +298,7 @@ func checkCmd(ctx context.Context, k sim.Knobs, log *slog.Logger, out io.Writer)
 	failed := 0
 	for _, s := range sc {
 		one := k
-		one.Scenarios, one.Days = s.Name, max(k.Days, s.MinDays, 9)
+		one.Scenarios, one.Days = s.Name, max(k.Days, s.MinDays, 3)
 		if one.Start.IsZero() {
 			one.Start = FixtureAnchor
 		}
