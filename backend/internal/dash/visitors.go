@@ -1019,8 +1019,7 @@ func slug(s string) string {
 	}), "-")
 }
 
-// oldSep is the separator before apix.Sep: past days' stored reasons hold it, and the cached readings' evidence ids
-// and signatures were made with it.
+// oldSep is the separator before apix.Sep: past days' stored reasons still hold it.
 const oldSep = " · "
 
 // respace spells a stored reason's separators as apix.Sep: a day classified before it keeps its row.
@@ -1031,14 +1030,14 @@ func respace(reasons []string) []string {
 	return reasons
 }
 
-// clientFamily drops the version: curl/8.4 and curl/8.5 behave alike. A browser's keeps the old separator: it names
-// an evidence id and the signature, and a new spelling would orphan every cached reading of a browser.
+// clientFamily is a client as an id, for an evidence id and the reading signature: the version dropped (curl/8.4
+// and curl/8.5 behave alike), then its words as a slug. No separator reaches it: a change of the shown spelling
+// would orphan every cached reading of a browser.
 func clientFamily(c string) string {
-	c = strings.ReplaceAll(c, apix.Sep, oldSep)
 	if i := strings.IndexByte(c, '/'); i > 0 {
-		return c[:i]
+		c = c[:i]
 	}
-	return c
+	return slug(c)
 }
 
 func deref(p *int64) int64 {
