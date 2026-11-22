@@ -1,13 +1,23 @@
 # nui
 
-Self-hosted, passive usage analytics for your own web products. One host serves the collector under `/api` and the
-dashboard under `/dashboard`.
+Self-hosted usage analytics that sees all of your incoming traffic, not only the part that runs JavaScript.
 
-- A browser script (`/nui.js`) and an optional server feed from your backend deliver events.
-- The dashboard (behind a sign-in: OIDC, an admin token, or both) shows per-domain figures, trends and who is asking: people, known bots, uptime
-  probes and unknown automation, each with the reasons it was classified that way.
-- With an [llmwire](https://github.com/trick77/toolkit) model key it adds a short briefing and readings of
-  automated visitors; every figure is computed without it.
+Most analytics tools are a browser script, so they only ever see visitors whose browser runs it. nui also takes a
+feed from your backend and puts the two together: the people, and everything else that knocks on your door, from
+crawlers and uptime probes to scanners and scripts walking your API.
+
+- **The whole picture.** A small browser script reports page views, clicks, errors and web vitals; your backend
+  reports every request it serves. Together they give a 360° view of what reaches your product.
+- **Who is doing what.** Every address with its network, country and client, and the trail of what it did. Nothing
+  is sampled and nothing leaves your server.
+- **People or bots.** Each visitor is classed as a person, a known bot, an uptime probe or unknown automation, and
+  the dashboard shows the reasons. Known bots come from the [ipverse](https://github.com/ipverse) lists.
+- **AI that reads the traffic for you.** With a model key nui writes a short briefing of what changed and says in a
+  sentence what an address is up to. Every figure is computed without it; the model never produces a number.
+- **Harmless to your site.** The script is under 6 kB gzipped, sends in the background, and caps and backs off on its
+  own. If nui is down, your pages and your backend do not notice.
+- **One container.** A single image behind your reverse proxy, with its database inside and sign-in by OIDC or an
+  admin token: `docker compose up -d`.
 
 The name: *nui* is Hawaiian and Māori for "many", for all the data that comes in.
 
