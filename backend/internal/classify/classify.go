@@ -79,12 +79,6 @@ type knownActor struct {
 	ua  map[string]int
 }
 
-type actorKey struct {
-	site int64
-	key  string
-	day  int64
-}
-
 func (c *Classifier) now() time.Time {
 	if c.Now != nil {
 		return c.Now()

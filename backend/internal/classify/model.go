@@ -17,6 +17,15 @@ type uaDay struct {
 	first, last int64
 }
 
+// actorKey is one actor-day of a site: a pass's unit of work, and what an rDNS answer still pending marks.
+//
+// Table: event
+type actorKey struct {
+	site int64
+	key  string
+	day  int64
+}
+
 // actorDay is one actor's day as the pass weighs it: its address, network and its most frequent user agents.
 //
 // Table: event
