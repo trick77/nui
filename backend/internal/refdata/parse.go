@@ -33,6 +33,9 @@ type botFile struct {
 	} `json:"services"`
 }
 
+// ParseBots reads both bot lists, for a caller holding the files (tests, a demo).
+func ParseBots(crawlers, monitoring []byte) (*Bots, error) { return parseBots(crawlers, monitoring) }
+
 // parseBots reads both bot lists (crawlers as bot, monitoring as monitor) into one Bots. A list that does not parse
 // is an error: the caller keeps the last good load.
 func parseBots(crawlers, monitoring []byte) (*Bots, error) {
