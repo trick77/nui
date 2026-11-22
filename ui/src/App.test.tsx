@@ -524,6 +524,18 @@ describe("dashboard on a domain with a server feed", () => {
     );
   });
 
+  it("opens the log for an automatic event by its kind", async () => {
+    start();
+    const ev = await screen.findByRole("region", { name: "Events" });
+    fireEvent.click(await within(ev).findByText("download"));
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/dashboard/log"),
+    );
+    const q = new URLSearchParams(window.location.search);
+    expect(q.get("kind")).toBe("download");
+    expect(q.get("path")).toBeNull();
+  });
+
   it("draws the traffic charts with tooltips", async () => {
     start();
     const t = await screen.findByRole("region", { name: "Requests by class" });

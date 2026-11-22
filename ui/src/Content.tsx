@@ -74,7 +74,11 @@ export function Content() {
             { key: "custom", label: "Custom", dim: "events", sub: "custom" },
           ]}
           cols={eventCols}
-          onRow={(r) => openLog({ path: r.key })}
+          // An automatic event's key is its kind; a custom one's and an
+          // outbound link's, the name the log matches as text.
+          onRow={(r) =>
+            openLog(r.sub === "auto" ? { kind: r.key } : { path: r.key })
+          }
           empty="No events in this range yet."
         />
       </div>

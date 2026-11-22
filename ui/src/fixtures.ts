@@ -962,7 +962,7 @@ function log(q: URLSearchParams, feed: boolean): Log {
       r.addr.startsWith(addr.replace(/:?:?\/(64|48)$/, "")),
     );
   const path = q.get("path");
-  if (path) rows = rows.filter((r) => r.what.includes(path) || r.kind === path);
+  if (path) rows = rows.filter((r) => r.what.includes(path));
   for (const k of ["class", "kind"] as const) {
     const v = q.get(k);
     if (v) rows = rows.filter((r) => r[k] === v);
