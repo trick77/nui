@@ -54,10 +54,10 @@ type Limit struct {
 }
 
 // The knobs' ranges. Scale and speed bound the work: a day's plan grows with the scale and with nothing else, live
-// time past the anchor included (at 50 a world of the default scenarios holds up to about 300 MB of plans, three
-// days the referrer wave's among them; TestPlanMemory measures the days); a live tick hands out at most an hour of
-// world time (Live.MaxSpan), which at the largest speed is a second of wall time: faster, the world would skip most
-// of its time.
+// time past the anchor included (at 50 a world of the default scenarios holds up to about 210 MB of plans, two days,
+// the referrer wave's and the one before; TestPlanMemory measures a week of them); a live tick hands out at most an
+// hour of world time (Live.MaxSpan), which at the largest speed is a second of wall time: faster, the world would
+// skip most of its time.
 var (
 	ScaleLimit   = Limit{lo: 0.01, hi: 50}
 	SpeedLimit   = Limit{lo: 0.01, hi: 3600}
