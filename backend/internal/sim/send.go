@@ -27,9 +27,10 @@ type SendOptions struct {
 }
 
 // Send runs l against a collector over HTTP: every beat it takes the requests due and posts them, each browser
-// batch from its client's address (X-Forwarded-For, which the collector trusts from one proxy: the target must be
-// the server itself, not a proxy that sets the header anew), each feed batch with its site's key. A 429 is retried
-// after its Retry-After, as the tracker and a well-behaved emitter do, unless the client is one that ignores it.
+// batch from its client's address (the one X-Forwarded-For entry, which the server reads with one trusted hop, as
+// server -sim and BACKEND_TRUSTED_HOPS' default have it: the target must be the server itself, not a proxy that
+// adds its own entry), each feed batch with its site's key. A 429 is retried after its Retry-After, as the tracker
+// and a well-behaved emitter do, unless the client is one that ignores it.
 func Send(ctx context.Context, l *Live, o SendOptions) (Stats, error) {
 	if o.Client == nil {
 		o.Client = &http.Client{Timeout: 30 * time.Second}
