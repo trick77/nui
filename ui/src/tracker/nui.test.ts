@@ -588,6 +588,53 @@ describe("sending", () => {
     expect(t.state().queued).toBe(0);
   });
 
+  it("sends the end of a visit despite its own back-off, not despite Retry-After", async () => {
+    const hide = () => {
+      Object.defineProperty(document, "visibilityState", {
+        value: "hidden",
+        configurable: true,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+      Object.defineProperty(document, "visibilityState", {
+        value: "visible",
+        configurable: true,
+      });
+    };
+    for (const [failure, sent] of [
+      [() => reply(503), true],
+      [() => reply(408), true],
+      [() => Promise.reject(new TypeError("offline")), true],
+      [() => reply(429), true],
+      [() => reply(429, { "Retry-After": "120" }), false],
+    ] as [() => Promise<Response>, boolean][]) {
+      tracker?.stop();
+      localStorage.clear();
+      fetchMock.mockReset();
+      fetchMock.mockImplementationOnce(failure);
+      fetchMock.mockImplementation(() => reply(204));
+      const t = boot();
+      // The first batch fails: the visit's start waits in the queue.
+      t.flush();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.state().queued).toBe(2);
+      document.dispatchEvent(new Event("pointerdown"));
+      vi.advanceTimersByTime(1000);
+      hide();
+      await vi.advanceTimersByTimeAsync(0);
+      if (sent) {
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(bodies()[1].events.map((e) => e.k)).toEqual(
+          expect.arrayContaining(["session_start", "page_view", "engagement"]),
+        );
+        expect(t.state().queued).toBe(0);
+      } else {
+        // The pause the collector asked for holds.
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(t.state().queued).toBeGreaterThan(2);
+      }
+    }
+  });
+
   it("survives a fetch that throws", async () => {
     const t = boot();
     fetchMock.mockImplementation(() => {

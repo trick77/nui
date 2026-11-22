@@ -286,6 +286,11 @@ export function start(
   let failures = 0;
   let backoff = 0;
   let notBefore = 0;
+  // The pause a 429 named with Retry-After: the collector asked for it, so
+  // the final flush on leaving waits for it too. The own back-off after a
+  // network error, a 5xx or a 408 does not hold the final flush back: the
+  // end of the visit would be lost, and with a failed first batch its start.
+  let asked = 0;
   let timer: ReturnType<typeof setTimeout> | 0 = 0;
   let inFlight = false;
   // The latest page view, its title still to be taken (see pageView).
@@ -597,6 +602,7 @@ export function start(
     notBefore =
       now() +
       Math.min(LIMITS.retryMaxMs, paced && ra ? ra : Math.max(backoff, ra));
+    asked = paced && ra ? notBefore : 0;
   };
 
   const requeue = (batch: Rec[]) => {
@@ -738,7 +744,7 @@ export function start(
         if (st >= 200 && st < 300) {
           failures = 0;
           backoff = 0;
-          notBefore = 0;
+          notBefore = asked = 0;
         } else if (st === 403) {
           // Unknown site: nothing here will ever be accepted.
           disabled = true;
@@ -778,7 +784,7 @@ export function start(
   const flush = (final: boolean) => {
     if (disabled || !queue.length) return;
     if (inFlight && !final) return;
-    if (now() < notBefore) {
+    if (now() < (final ? asked : notBefore)) {
       if (!final) schedule(notBefore - now());
       return;
     }
