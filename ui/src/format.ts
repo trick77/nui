@@ -5,6 +5,18 @@ import type { Change } from "./api";
 
 const LOCALE = "de-CH";
 
+// The separator between two pieces of text: a middle dot with an en space
+// each side, plain spaces read cramped in the family's fonts. Built from the
+// code point: a raw U+2002 in source trips no-irregular-whitespace and is
+// invisible in review. The backend's is apix.Sep.
+const ENSP = String.fromCharCode(0x2002);
+export const SEP = `${ENSP}·${ENSP}`;
+
+// Parts joined by SEP, the empty ones dropped.
+export function joinSep(parts: (string | false | null | undefined)[]): string {
+  return parts.filter(Boolean).join(SEP);
+}
+
 export function num(x: number | null | undefined, digits = 0): string {
   if (x == null || !Number.isFinite(x)) return "–";
   return x.toLocaleString(LOCALE, {

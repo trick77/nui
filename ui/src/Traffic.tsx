@@ -1,6 +1,6 @@
 import { api, type Classes, type ListRow, type Status } from "./api";
 import { StackChart, Strip, type StripPart } from "./charts";
-import { num, pct } from "./format";
+import { SEP, joinSep, num, pct } from "./format";
 import { type Loaded, useApi } from "./hooks";
 import { TopList, scopeKey } from "./lists";
 import {
@@ -79,10 +79,16 @@ export function WhoIsAsking({ classes }: { classes: Loaded<Classes> }) {
             </tbody>
           </table>
           <p className="mx-0.5 mt-2.5 mb-0 text-[12px] text-muted">
-            Classified by: ipverse bot list (CIDR, user agent, reverse DNS) ·{" "}
-            <span className="font-mono">navigator.webdriver</span> · no script
-            beacon after a page request · no asset requests · hosting network ·
-            no pointer, key or scroll input.
+            Classified by: ipverse bot list (CIDR, user agent, reverse DNS)
+            {SEP}
+            <span className="font-mono">navigator.webdriver</span>
+            {SEP}
+            {joinSep([
+              "no script beacon after a page request",
+              "no asset requests",
+              "hosting network",
+              "no pointer, key or scroll input.",
+            ])}
           </p>
         </>
       )}

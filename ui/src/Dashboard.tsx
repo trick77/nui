@@ -14,7 +14,7 @@ import {
 } from "./api";
 import { Content } from "./Content";
 import { DomainFooter } from "./DomainFooter";
-import { num } from "./format";
+import { SEP, num } from "./format";
 import { useApi } from "./hooks";
 import { LogPage } from "./LogPage";
 import { Noteworthy } from "./Noteworthy";
@@ -221,7 +221,7 @@ export default function Dashboard({ me }: { me: Me }) {
                 {num(ov.data.live.humans)}
               </b>{" "}
               humans<span className="max-[1099px]:hidden"> online</span>
-              &ensp;·&ensp;
+              {SEP}
               <b className="font-medium text-ink tabular-nums">
                 {num(ov.data.live.automated)}
               </b>{" "}
@@ -230,7 +230,10 @@ export default function Dashboard({ me }: { me: Me }) {
           </span>
         )}
         <span className="text-[13px] whitespace-nowrap text-muted">
-          <span className="max-[1099px]:hidden">{me.name} · </span>
+          <span className="max-[1099px]:hidden">
+            {me.name}
+            {SEP}
+          </span>
           <button
             title={`Signed in as ${me.name}`}
             type="button"
@@ -369,12 +372,12 @@ function FilterBar({
           aria-busy={busy || undefined}
         >
           one point per <span className="text-ink-dim">{p.bucket}</span>
+          {SEP}
           {view.cmp === "off" ? (
-            " · no comparison"
+            "no comparison"
           ) : (
             <>
-              {" "}
-              · compared with the{" "}
+              compared with the{" "}
               <span className="text-ink-dim">{p.prev_label}</span>
             </>
           )}

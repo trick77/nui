@@ -9,7 +9,16 @@ import {
   type Visitors as VisitorsPage,
 } from "./api";
 import { Hours } from "./charts";
-import { countryName, dateTime, num, pct, seconds, when } from "./format";
+import {
+  SEP,
+  countryName,
+  dateTime,
+  joinSep,
+  num,
+  pct,
+  seconds,
+  when,
+} from "./format";
 import { useApi, useDebounced, useMore } from "./hooks";
 import { scopeKey } from "./lists";
 import {
@@ -143,8 +152,7 @@ export function Visitors({ aud }: { aud: Audience }) {
                           {v.display}
                         </span>
                         <span className="block text-[12px] text-muted">
-                          {v.network}
-                          {v.network_kind ? ` · ${v.network_kind}` : ""}
+                          {joinSep([v.network, v.network_kind])}
                         </span>
                       </RowButton>
                     </td>
@@ -193,7 +201,7 @@ export function Visitors({ aud }: { aud: Audience }) {
                         <div
                           className={`text-[12px] text-muted ${hangDoes ? "pl-4" : ""}`}
                         >
-                          {v.signals.join(" · ")}
+                          {joinSep(v.signals)}
                         </div>
                       )}
                     </td>
@@ -312,7 +320,7 @@ function trailCount(t: TrailLine): string {
 
 function trailText(t: TrailLine): string {
   if (t.count <= 1 && !t.continues) return t.what;
-  const span = ` · ${dateTime(t.from)} to ${dateTime(t.to)}`;
+  const span = `${SEP}${dateTime(t.from)} to ${dateTime(t.to)}`;
   // Parts of one run with different medians: the range between them.
   const lo = Math.min(...t.intervals);
   const hi = Math.max(...t.intervals);
@@ -382,10 +390,7 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
                 <ClassPill cls={v.class} />
               </dd>
               <dt className="text-muted">Network</dt>
-              <dd className="m-0">
-                {v.network}
-                {v.network_kind ? ` · ${v.network_kind}` : ""}
-              </dd>
+              <dd className="m-0">{joinSep([v.network, v.network_kind])}</dd>
               <dt className="text-muted">Country</dt>
               <dd className="m-0">{countryName(v.country)}</dd>
               <dt className="text-muted">Client</dt>
@@ -397,7 +402,7 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
                 />
               </dd>
               <dt className="text-muted">Signals</dt>
-              <dd className="m-0">{v.signals.join(" · ") || "–"}</dd>
+              <dd className="m-0">{joinSep(v.signals) || "–"}</dd>
               {feed && v.requests != null && (
                 <>
                   <dt className="text-muted">Requests</dt>
@@ -454,12 +459,12 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
                 measured.
               </p>
             )}
-            <div className="eyebrow mt-4">Activity by hour · 00 to 23</div>
+            <div className="eyebrow mt-4">Activity by hour{SEP}00 to 23</div>
             <Hours levels={v.hours} />
           </div>
           <div className="px-[18px] py-4">
             <div className="flex flex-wrap items-baseline gap-3">
-              <div className="eyebrow">Trail · newest first</div>
+              <div className="eyebrow">Trail{SEP}newest first</div>
               <button type="button" className="link ml-auto" onClick={onLog}>
                 Every event of this address in the log →
               </button>

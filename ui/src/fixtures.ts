@@ -23,6 +23,7 @@ import type {
   VisitorRow,
   Visitors,
 } from "./api";
+import { joinSep } from "./format";
 
 export const SITES: SiteInfo[] = [
   {
@@ -711,7 +712,7 @@ const VISITORS: VisitorRow[] = [
     network_kind: "isp",
     country: "CH",
     class: "human",
-    client: "Chrome · macOS",
+    client: joinSep(["Chrome", "macOS"]),
     client_gen: null,
     visits: 14,
     views: 61,
@@ -759,7 +760,7 @@ const VISITORS: VisitorRow[] = [
     network_kind: "isp",
     country: "DE",
     class: "human",
-    client: "Firefox · Windows",
+    client: joinSep(["Firefox", "Windows"]),
     client_gen: null,
     visits: 6,
     views: 22,
@@ -825,7 +826,7 @@ const VISITORS: VisitorRow[] = [
     network_kind: "isp",
     country: "CH",
     class: "human",
-    client: "Safari · iOS",
+    client: joinSep(["Safari", "iOS"]),
     client_gen: null,
     visits: 2,
     views: 5,
@@ -847,7 +848,7 @@ const VISITORS: VisitorRow[] = [
     network_kind: "isp",
     country: "AT",
     class: "human",
-    client: "Chrome · Android",
+    client: joinSep(["Chrome", "Android"]),
     client_gen: null,
     visits: 1,
     views: 3 - (i % 3),
@@ -1066,13 +1067,13 @@ const LOG_CLIENTS: [string, ClassKey, string, string, LogRow["source"]][] = [
     "browser",
   ],
 ];
-// A browser as "<browser> · <OS>", a tool by its product token.
+// A browser as browser and OS joined by SEP, a tool by its product token.
 const CLIENT_NAME: Record<string, string> = {
   "192.0.2.120": "UptimeRobot/2.0",
   "198.51.100.7": "python-requests/2.32.3",
   "192.0.2.66": "Googlebot/2.1",
-  "203.0.113.42": "Chrome · macOS",
-  "2001:db8:4f2:1a00::7c": "Firefox · Windows",
+  "203.0.113.42": joinSep(["Chrome", "macOS"]),
+  "2001:db8:4f2:1a00::7c": joinSep(["Firefox", "Windows"]),
 };
 
 // Each address's AS number, for the log's asn filter.
@@ -1175,8 +1176,8 @@ function domain(site: string, feed: boolean, script: boolean): Domain {
       identity: "address + user agent, plus browser id",
     },
     rules: {
-      rate: "60 events / min per address or /64 · 600 per /48",
-      batch: "32 KiB · 50 events",
+      rate: joinSep(["60 events / min per address or /64", "600 per /48"]),
+      batch: joinSep(["32 KiB", "50 events"]),
       botlist: { services: 24, updated: "2026-11-22T03:00:00Z" },
       networks: { updated: "2026-11-22T03:00:00Z" },
       tz: "Europe/Zurich",

@@ -4,7 +4,7 @@
 
 import { type ReactNode, useId, useRef, useState } from "react";
 import type { Change, ClassKey, Verdict } from "./api";
-import { num, pct, value as fmtValue } from "./format";
+import { SEP, num, pct, value as fmtValue } from "./format";
 import { useWidth } from "./hooks";
 import { CLASSES, Delta, Tip, useTip } from "./ui";
 
@@ -158,7 +158,7 @@ export function MainChart({
     if (median != null) rows.push(["Median", fmt(median)]);
     show(
       e,
-      labels[i] + (openLast && i === n - 1 ? " · still filling" : ""),
+      labels[i] + (openLast && i === n - 1 ? `${SEP}still filling` : ""),
       rows,
     );
   };
@@ -466,7 +466,7 @@ export function StackChart({
                 onMouseMove={(e) =>
                   show(
                     e,
-                    lab + (open && i === n - 1 ? " · still filling" : ""),
+                    lab + (open && i === n - 1 ? `${SEP}still filling` : ""),
                     CLASSES.map((c) => [c.label, num(series[c.key]?.[i] ?? 0)]),
                   )
                 }
@@ -562,7 +562,7 @@ export function BarRows({
             }}
           />
           <span className="text-muted">
-            {otherLabel ?? `Other · ${num(other.count)}`}
+            {otherLabel ?? `Other${SEP}${num(other.count)}`}
           </span>
           <span className="val">
             {num(other.value)}

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Audience, Overview, Tile, TileKey } from "./api";
 import { MainChart, Spark } from "./charts";
-import { num } from "./format";
+import { SEP, num } from "./format";
 import { Delta, ErrorBox, Panel, SectionHead, Skeleton } from "./ui";
 
 export const AUD_NOTE: Record<Audience, string> = {
@@ -101,7 +101,9 @@ export function OverviewSection({
               <div className="card">
                 <div className="mb-2.5 flex flex-wrap items-center gap-2.5">
                   <h3 className="m-0 text-[15px] font-medium">
-                    {sel.label} per {p.bucket} · {AUD_WORD[aud]}
+                    {sel.label} per {p.bucket}
+                    {SEP}
+                    {AUD_WORD[aud]}
                   </h3>
                   <div className="legend ml-auto">
                     <span>
