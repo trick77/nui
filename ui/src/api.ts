@@ -45,7 +45,6 @@ export type Tile = {
   prev: number | null;
   change: Change;
   verdict: Verdict | null;
-  sub: string;
   series: number[];
   prev_series: number[] | null;
   median: number | null;

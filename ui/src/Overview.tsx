@@ -29,13 +29,8 @@ function TileValue({ t }: { t: Tile }) {
 }
 
 function prevText(t: Tile, prevLabel: string): string {
-  const parts: string[] = [];
-  if (t.prev != null)
-    parts.push(
-      `${num(t.prev, t.kind === "rate" ? 1 : 0)}${t.unit ? ` ${t.unit}` : ""} in the ${prevLabel}`,
-    );
-  if (t.sub) parts.push(t.sub);
-  return parts.join(" · ");
+  if (t.prev == null) return "";
+  return `${num(t.prev, t.kind === "rate" ? 1 : 0)}${t.unit ? ` ${t.unit}` : ""} in the ${prevLabel}`;
 }
 
 export function OverviewSection({

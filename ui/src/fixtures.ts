@@ -133,7 +133,7 @@ function overview(
   aud: string,
   cmp: string,
 ): Overview {
-  const feed = site === "lens.example.com";
+  const feed = SITES.find((s) => s.site === site)?.server != null;
   const scale = range === "12mo" ? 30 : range === "24h" ? 0.05 : 1;
   const k = aud === "humans" ? 0.8 : aud === "bots" ? 0.25 : 1;
   const base = 410 * scale * k;
@@ -167,8 +167,9 @@ function overview(
       ? round1(value - prev)
       : round1(((value - prev) / prev) * 100);
     const up = diff > 0;
+    // Flat below 2 % or half a point, as the backend judges.
     const verdict =
-      Math.abs(diff) < 0.5
+      Math.abs(diff) < (opt.rate ? 0.5 : 2)
         ? "flat"
         : up !== Boolean(opt.lowerBetter)
           ? "good"
@@ -185,7 +186,6 @@ function overview(
       prev: cmp === "off" ? null : prev,
       change: cmp === "off" ? null : opt.rate ? { pp: diff } : { pct: diff },
       verdict: cmp === "off" ? "flat" : verdict,
-      sub: opt.sub ?? "",
       series: cur,
       prev_series: prevSeries,
       median: opt.rate ? value : Math.round(median(cur.slice(0, -1))),
@@ -200,13 +200,11 @@ function overview(
     mk("auto_share", "Unknown automated", base, 5, {
       rate: true,
       lowerBetter: true,
-      sub: "of all requests",
       server: true,
       spike: 2.5,
     }),
     mk("errors", "Errors", base * 0.12, 6, {
       lowerBetter: true,
-      sub: feed ? "JS + 4xx/5xx" : "JS errors",
       spike: 3,
     }),
   ].filter((t) => feed || !t.server);
