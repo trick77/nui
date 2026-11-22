@@ -52,7 +52,8 @@ only: never together, never with `PUBLIC_FQDN` set.
 
 `make sim` runs the UI against a simulated world: the real server on a temporary data directory, sign-in off, a
 seeded history backfilled through the real collector and classifier, then advancing live each time the dashboard
-asks; Vite's dev server proxies to it and Ctrl-C stops both. `make sim-server` is the server alone, for curl or a
+asks; Vite's dev server starts once that server answers on its port (a port in use stops `make sim` with a message)
+and proxies to it, and Ctrl-C stops both. `make sim-server` is the server alone, for curl or a
 second UI. The knobs, each falling back to its default with a warning when it does not parse:
 
 | Knob | Default | |

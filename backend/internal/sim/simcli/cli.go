@@ -35,6 +35,7 @@ Commands:
   live        send live traffic to a running collector (-target)
   export      write the dashboard's answers over a simulated history as fixture files (-out)
   check       backfill each scenario on its own and check its expectations
+  port        print the port server -sim listens on (NUI_SIM_PORT, its default when it does not parse)
 
 The NUI_SIM_* environment knobs (README) set the world; the flags below override them.
 `
@@ -84,6 +85,9 @@ func Main(ctx context.Context, args []string, getenv func(string) string, stdout
 	switch args[0] {
 	case "scenarios":
 		err = listScenarios(stdout)
+	case "port":
+		// The port server -sim listens on, NUI_SIM_PORT as read (make sim points the UI there).
+		_, _ = fmt.Fprintln(stdout, k.Port)
 	case "backfill":
 		err = backfillCmd(ctx, k, *data, *wipe, getenv, log, stdout)
 	case "live":
