@@ -2,7 +2,9 @@ package simcli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -144,6 +146,27 @@ func TestCommands(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Error(err)
 		}
+	}
+}
+
+// check fails on any failure, the baseline's in a scenario's own run too, and says what it checked.
+func TestCheckCountsTheBaseline(t *testing.T) {
+	t.Cleanup(func() { checkWorld = Check })
+	checkWorld = func(ctx context.Context, st *store.Store, w *sim.World) ([]Failure, error) {
+		fails, err := Check(ctx, st, w)
+		for _, e := range w.Expectations() {
+			if e.Scenario == "baseline" {
+				fails = append(fails, Failure{Expectation: e, Err: errors.New("broken on purpose")})
+				break
+			}
+		}
+		return fails, err
+	}
+	code, out, errs := run(t, map[string]string{"NUI_SIM_DAYS": "2", "NUI_SIM_SCALE": "0.3"}, "check", "-scenarios",
+		"cred-prober")
+	if code != 1 || !strings.Contains(out, "FAIL baseline") || !strings.Contains(out, "the baseline's), 1 failed") ||
+		!strings.Contains(errs, "not met") {
+		t.Errorf("a baseline failure: %d %s %s", code, out, errs)
 	}
 }
 
