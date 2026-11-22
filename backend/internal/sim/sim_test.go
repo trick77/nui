@@ -192,9 +192,9 @@ func BenchmarkBackfill(b *testing.B) {
 	}
 }
 
-// The day plans a world holds at the largest scale fit in memory: a day's plan grows with the scale, measured here
-// at a small one, day by day over the history's last days (the referrer wave's the largest) and the live week after
-// the anchor, at its level. Two neighbouring days are held at once.
+// The day plans plan keeps (maxPlans neighbouring days) fit in memory at the largest scale: a day's plan grows with
+// the scale, measured here at a small one, day by day over the history's last days (the referrer wave's the largest)
+// and the live week after the anchor, at its level.
 func TestPlanMemory(t *testing.T) {
 	const scale = 4
 	w := testWorld(t, scale, DefaultScenarios)
