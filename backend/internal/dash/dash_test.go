@@ -754,14 +754,6 @@ func TestNetworkSpikeOpensItsLog(t *testing.T) {
 	if target == nil || target["panel"] != "log" {
 		t.Fatalf("no network spike to the log: %v", body["items"])
 	}
-	// findings=all answers the same items, none held back here; anything else is refused.
-	if code, all := r.get(t, "noteworthy", p(feedSite, "range", "24h", "findings", "all")); code != http.StatusOK ||
-		len(all["items"].([]any)) != len(body["items"].([]any))+int(body["more"].(float64)) || all["more"] != 0.0 {
-		t.Errorf("findings=all: %d %v", code, all)
-	}
-	if code, _ := r.get(t, "noteworthy", p(feedSite, "range", "24h", "findings", "some")); code != http.StatusBadRequest {
-		t.Errorf("findings=some: %d", code)
-	}
 	params := p(feedSite, "range", "24h")
 	for k, v := range target["filter"].(map[string]any) {
 		params[k] = v.(string)
@@ -780,6 +772,48 @@ func TestNetworkSpikeOpensItsLog(t *testing.T) {
 	}
 	if _, log := r.get(t, "log", p(feedSite, "range", "24h", "asn", "AS64501")); log["total"].(float64) != 20 {
 		t.Errorf("AS64501: %v", log["total"])
+	}
+}
+
+// Noteworthy shows five findings and counts the rest; findings=all lists every one, nothing held back, the five
+// first in the same order. Anything else is refused.
+func TestNoteworthyFindingsAll(t *testing.T) {
+	r := newRig(t, 0, 0, nil)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	// Eight new script errors in a closed bucket: eight findings.
+	at := r.end.Add(-2 * time.Hour).UnixMilli()
+	var evs []store.Event
+	for i := range 8 {
+		evs = append(evs, store.Event{SiteID: site.ID, TS: at - int64(i)*1000, Source: "browser", Kind: "js_error",
+			Name: fmt.Sprintf("TypeError: broken %d", i), IP: "192.0.2.70", IPKey: "192.0.2.70", UA: "Mozilla/5.0",
+			Template: "/", Path: "/"})
+	}
+	if err := r.s.DB.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	ids := func(body map[string]any) []string {
+		var out []string
+		for _, x := range body["items"].([]any) {
+			out = append(out, x.(map[string]any)["id"].(string))
+		}
+		return out
+	}
+	code, some := r.get(t, "noteworthy", p(feedSite, "range", "24h"))
+	if code != http.StatusOK || len(ids(some)) != 5 || some["more"] != 3.0 {
+		t.Fatalf("the panel's findings: %d %v, %v more", code, ids(some), some["more"])
+	}
+	code, all := r.get(t, "noteworthy", p(feedSite, "range", "24h", "findings", "all"))
+	got := ids(all)
+	if code != http.StatusOK || len(got) != 8 || all["more"] != 0.0 || !slices.Equal(got[:5], ids(some)) {
+		t.Fatalf("findings=all: %d %v, %v more", code, got, all["more"])
+	}
+	for i := range 8 {
+		if id := fmt.Sprintf("err:TypeError: broken %d", i); !slices.Contains(got, id) {
+			t.Errorf("findings=all lacks %s: %v", id, got)
+		}
+	}
+	if code, _ := r.get(t, "noteworthy", p(feedSite, "range", "24h", "findings", "some")); code != http.StatusBadRequest {
+		t.Errorf("findings=some: %d", code)
 	}
 }
 
