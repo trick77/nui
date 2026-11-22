@@ -71,7 +71,7 @@ export function OverviewSection({
           </div>
         ) : (
           <>
-            <div className="tiles">
+            <div className={`tiles${tiles.length === 4 ? " four" : ""}`}>
               {tiles.map((t) => (
                 <button
                   key={t.key}
