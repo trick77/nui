@@ -876,6 +876,7 @@ export function start(
   tick();
   const engagement = (at?: [string, string]) => {
     tick();
+    measure();
     if (activeMs <= 0 && maxScroll <= 0 && pageInputs <= 0) return;
     record(
       "engagement",
@@ -891,7 +892,14 @@ export function start(
     maxScroll = 0;
     pageInputs = 0;
   };
-  const scrolled = () => {
+  // The scroll depth is measured at most once a frame, and when the
+  // engagement is taken; never in the scroll handler: the page's height
+  // and scroll position force a layout, on every event of a page whose own
+  // scroll handler changes the DOM.
+  let scrolled = false;
+  const measure = () => {
+    if (!scrolled) return;
+    scrolled = false;
     const el = doc.documentElement;
     const h = Math.max(el.scrollHeight, doc.body ? doc.body.scrollHeight : 0);
     if (h <= 0) return;
@@ -903,7 +911,14 @@ export function start(
     touch();
     if (inputs[k] < 1e6) inputs[k]++;
     pageInputs++;
-    if (k === "scroll") scrolled();
+    if (k === "scroll" && !scrolled) {
+      scrolled = true;
+      try {
+        win.requestAnimationFrame(() => guard(measure));
+      } catch {
+        // no frames: measured with the engagement
+      }
+    }
   };
   on(doc, "pointerdown", count("pointer"), { capture: true, passive: true });
   on(doc, "keydown", count("key"), { capture: true, passive: true });

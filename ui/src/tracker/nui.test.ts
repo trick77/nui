@@ -1121,6 +1121,55 @@ describe("capture", () => {
     expect(cls).toHaveLength(1);
   });
 
+  it("measures the scroll depth at most once a frame, never in the handler", async () => {
+    const reads = { n: 0 };
+    const height = (el: Element, h: number) =>
+      Object.defineProperty(el, "scrollHeight", {
+        configurable: true,
+        get: () => {
+          reads.n++;
+          return h;
+        },
+      });
+    height(document.documentElement, 2000);
+    height(document.body, 1000);
+    try {
+      for (const frames of [true, false]) {
+        tracker?.stop();
+        fetchMock.mockClear();
+        if (!frames) vi.stubGlobal("requestAnimationFrame", undefined);
+        boot();
+        reads.n = 0;
+        for (let i = 0; i < 30; i++) window.dispatchEvent(new Event("scroll"));
+        expect(reads.n).toBe(0);
+        await vi.advanceTimersByTimeAsync(50);
+        // Once for the frame, both heights.
+        expect(reads.n).toBe(frames ? 2 : 0);
+        Object.defineProperty(document, "visibilityState", {
+          value: "hidden",
+          configurable: true,
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        Object.defineProperty(document, "visibilityState", {
+          value: "visible",
+          configurable: true,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(reads.n).toBe(2);
+        const eng = bodies()
+          .flatMap((b) => b.events)
+          .find((e) => e.k === "engagement")!;
+        expect(eng.p.scroll).toBe(
+          Math.round(((window.scrollY + window.innerHeight) / 2000) * 100),
+        );
+      }
+    } finally {
+      delete (document.documentElement as { scrollHeight?: number })
+        .scrollHeight;
+      delete (document.body as { scrollHeight?: number }).scrollHeight;
+    }
+  });
+
   it("sends one engagement when a page is left, not one per signal", async () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     boot();
