@@ -166,12 +166,20 @@ func items(body map[string]any, key string) []map[string]any {
 	return out
 }
 
-// hasFinding checks Noteworthy for a finding id, in its items or among the more it leaves out.
+// findings is the Noteworthy request of every finding (findings=all), the ones the panel holds back past its five
+// included: a world playing several scenarios has more findings than the panel shows.
+func findings(site, rng string) map[string]string { return params(site, rng, "findings", "all") }
+
+// hasFinding checks a Noteworthy answer for a finding id, among every item's findings (a briefing line merges
+// several). Asked with findings(), the answer holds them all.
 func hasFinding(id string) func(map[string]any) error {
 	return func(body map[string]any) error {
 		var ids []string
 		for _, it := range items(body, "items") {
-			ids = append(ids, fmt.Sprint(it["id"]))
+			xs, _ := it["ids"].([]any)
+			for _, x := range xs {
+				ids = append(ids, fmt.Sprint(x))
+			}
 		}
 		if slices.Contains(ids, id) {
 			return nil
@@ -268,7 +276,7 @@ func expectBaseline(w *World, _ *Scenario) []Expectation {
 func expectReferrer(w *World, _ *Scenario) []Expectation {
 	s := w.Sites[0].Domain
 	return []Expectation{
-		{Says: "Noteworthy lists the new referrer news.example.com", Endpoint: "noteworthy", Params: params(s, "7d"),
+		{Says: "Noteworthy lists the new referrer news.example.com", Endpoint: "noteworthy", Params: findings(s, "7d"),
 			Check: hasFinding("ref:news.example.com")},
 		{Says: "the referrers list leads with news.example.com", Endpoint: "list",
 			Params: params(s, "7d", "dim", "referrers"), Check: func(b map[string]any) error {
@@ -283,7 +291,7 @@ func expectReferrer(w *World, _ *Scenario) []Expectation {
 func expectScan(w *World, _ *Scenario) []Expectation {
 	s := w.Sites[w.firstFeed()].Domain
 	return []Expectation{
-		{Says: "Noteworthy lists the new probed path GET /.env", Endpoint: "noteworthy", Params: params(s, "7d"),
+		{Says: "Noteworthy lists the new probed path GET /.env", Endpoint: "noteworthy", Params: findings(s, "7d"),
 			Check: hasFinding("probe:GET /.env")},
 		{Says: "the probed list has GET /.env answered 404", Endpoint: "list",
 			Params: params(s, "7d", "dim", "probed", "limit", "50"), Check: rowWith("GET /.env", func(r map[string]any) error {
@@ -315,7 +323,7 @@ func expectWalker(w *World, _ *Scenario) []Expectation {
 func expectDeploy(w *World, _ *Scenario) []Expectation {
 	s := w.Sites[0].Domain
 	return []Expectation{
-		{Says: "Noteworthy lists the release's script error as new", Endpoint: "noteworthy", Params: params(s, "7d"),
+		{Says: "Noteworthy lists the release's script error as new", Endpoint: "noteworthy", Params: findings(s, "7d"),
 			Check: hasFinding("err:" + DeployError)},
 		{Says: "the status breakdown has 5xx answers", Endpoint: "status", Params: params(s, "7d"),
 			Check: func(b map[string]any) error {
@@ -340,7 +348,7 @@ func expectFlood(w *World, sc *Scenario) []Expectation {
 	s := w.Sites[w.firstFeed()].Domain
 	id := map[string]string{"flood-addr": "spike:addr:" + FloodAddr.String(),
 		"flood-64": "spike:addr:" + ratelimit.Key(hostIn(Flood64, 1).String()), "flood-48": "spike:net:64506"}[sc.Name]
-	return []Expectation{{Says: "Noteworthy lists the spike " + id, Endpoint: "noteworthy", Params: params(s, "24h"),
+	return []Expectation{{Says: "Noteworthy lists the spike " + id, Endpoint: "noteworthy", Params: findings(s, "24h"),
 		Check: hasFinding(id)}}
 }
 
@@ -394,13 +402,13 @@ func expectLateFeed(w *World, sc *Scenario) []Expectation {
 func expectGrowth(w *World, _ *Scenario) []Expectation {
 	s := w.Sites[0].Domain
 	return []Expectation{{Says: "Noteworthy has visitors up against the prior 90 days", Endpoint: "noteworthy",
-		Params: params(s, "90d"), Check: hasFinding("trend:visitors:up")}}
+		Params: findings(s, "90d"), Check: hasFinding("trend:visitors:up")}}
 }
 
 func expectHammer(w *World, _ *Scenario) []Expectation {
 	s := w.Sites[w.firstScript()].Domain
 	return []Expectation{
-		{Says: "Noteworthy has the collector's refusals as a problem", Endpoint: "noteworthy", Params: params(s, "24h"),
+		{Says: "Noteworthy has the collector's refusals as a problem", Endpoint: "noteworthy", Params: findings(s, "24h"),
 			Check: hasFinding("collector:refused")},
 		{Says: "the footer counts rate-limited events", Endpoint: "domain", Params: params(s, "24h"),
 			Check: func(b map[string]any) error {
@@ -425,7 +433,7 @@ func expectProber(w *World, _ *Scenario) []Expectation {
 	s := w.Sites[w.firstFeed()].Domain
 	return []Expectation{
 		{Says: "Noteworthy lists the new probed path POST /api/v1/login", Endpoint: "noteworthy",
-			Params: params(s, "24h"), Check: hasFinding("probe:POST /api/v1/login")},
+			Params: findings(s, "24h"), Check: hasFinding("probe:POST /api/v1/login")},
 		visitor("the prober is unknown automated: its client, mostly refused", s, "24h", ProberAddr.String(),
 			"unknown", "client "+ProberUA, "mostly refused"),
 	}

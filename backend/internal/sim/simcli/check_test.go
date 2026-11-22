@@ -2,6 +2,7 @@ package simcli
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +65,30 @@ func TestExpectationsFailWithoutTheirStory(t *testing.T) {
 	}
 	if failed["baseline"] {
 		t.Errorf("the baseline fails: %v", fails)
+	}
+}
+
+// Played together, the scenarios still show what each says: Noteworthy's findings past the five it shows are
+// checked too.
+func TestScenariosTogether(t *testing.T) {
+	t.Parallel()
+	var names []string
+	for _, c := range sim.Catalogue() {
+		if c.MinDays <= 30 {
+			names = append(names, c.Name)
+		}
+	}
+	days, scale := 9, 1.0
+	if raceOn {
+		days, scale = 7, 0.3
+	}
+	st, w := history(t, scale, days, strings.Join(names, ","))
+	fails, err := Check(t.Context(), st, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fails {
+		t.Error(f)
 	}
 }
 
