@@ -845,7 +845,11 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		if rd, ok := s.Model.Readings(ctx, []insight.ReadingInput{in}, true)[key]; ok {
 			// Shown only when every fact it cites exists for this actor, with this actor's figures and span.
 			if evidence, ok := resolve(rd, shown); ok {
-				related, _ := s.related(ctx, q, key, row.Class)
+				related, err := s.related(ctx, q, key, row.Class)
+				if err != nil {
+					s.fail(w, r, err)
+					return
+				}
 				resp["reading"] = map[string]any{"verdict": rd.Verdict, "suspicious": insight.Suspicious(rd.Verdict),
 					"evidence": evidence, "related": related,
 					"basis": map[string]any{"from": iso(time.UnixMilli(a.first)), "to": iso(time.UnixMilli(a.last))}}
