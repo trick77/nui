@@ -95,12 +95,16 @@ otherwise, the limits are:
 (U+2028 and U+2029 take six bytes each); the request's client-hint and fetch headers are kept up to 2 KiB, on the
 batch's first row. The rate is 60 events a minute per address or IPv6 /64 and 600 per /48 (IPv4 /24), with a burst
 of 60; a batch is charged one event per event or per 2 KiB stored, whichever is more, and every request pays one on
-arrival (429 with `Retry-After` beyond it). A body not received within 10 s is a 408: send it again.
+arrival (429 with `Retry-After` beyond it). `Retry-After` covers the retry: the same batch sent again after it
+passes, its arrival token included, unless other requests from the address spent the tokens meanwhile. A body not
+received within 10 s is a 408: send it again.
 
 ### Server feed
 
 `POST /api/feed` takes `{"v": 1, "site": "<domain>", "events": [...]}` as JSON, at most 256 KiB and 500 events per
-batch, rate-limited per key (200 events a second, a burst of 5000). The batch as a whole is refused only for an unparseable envelope (400), a wrong key
+batch, rate-limited per key (200 events a second, a burst of 5000): a batch is charged one per event it stores, and
+a key with nothing left is refused before its body is read, its `Retry-After` then the wait for one event; a batch
+refused after reading waits for all of its events. The batch as a whole is refused only for an unparseable envelope (400), a wrong key
 (401), another site's name (400), its size or event count (413), a body not received within 30 s (408) or the rate
 (429). One event's content never refuses the batch: strings over their limit are clipped (on a character boundary),
 and an event that is no JSON object, has a field of the wrong type, lacks a parseable `ip` or has an impossible
@@ -116,9 +120,16 @@ with the unknown domains every footer shows.
 | `route` | 200 |
 | `ua`, `lang`, `ch_ua` | 512 |
 | `path`, `ref` | 2048 (query and fragment dropped) |
+| `ip` | an IPv4 or IPv6 address; a zone (`%eth0`) is dropped |
 
 Send only these fields, never raw request headers: they can carry credentials. A refused batch (408, 429, 5xx)
-can be sent again; 400, 401 and 413 will be refused again.
+can be sent again; 400, 401 and 413 will be refused again. Events an accepted batch dropped are counted as
+rejected once; a batch refused for the rate is not counted until it is taken.
+
+### Dashboard API
+
+`/api/dash/*` is the dashboard's own API (a session required). For links into it: the log's `addr` filter takes an
+address or an IPv6 /64 (any other prefix is a 400), its `asn` filter an AS number.
 
 ## License
 
