@@ -59,7 +59,7 @@ second UI. The knobs, each falling back to its default with a warning when it do
 | `NUI_SIM_SCALE` | 1 | volume; 1 is about 25 visitors a day per site, at most 50 |
 | `NUI_SIM_SPEED` | 1 | simulated time per wall time, live, at most 3600; a tick hands out at most an hour of it |
 | `NUI_SIM_DAYS` | 30 | history before the start |
-| `NUI_SIM_START` | now | the start, RFC 3339 |
+| `NUI_SIM_START` | now | the start, RFC 3339: the history ends there, and live time runs on from it once the server serves |
 | `NUI_SIM_PORT` | 8080 | the server's loopback port (the UI proxies there) |
 | `NUI_SIM_SCENARIOS` | the default set | comma-separated, `all` for every one (`sim scenarios` below) |
 | `NUI_SIM_CLASSIFY` | true | run the classifier over the history |

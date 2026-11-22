@@ -237,6 +237,7 @@ func TestServer(t *testing.T) {
 		Browser: ingest.BrowserTiers(cfg.TrustedHops, nil), Feed: ingest.FeedLimiter(nil), TrustedHops: cfg.TrustedHops}
 	h := s.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) }),
 		sim.Handlers{Browser: http.HandlerFunc(c.HandleBrowser), Feed: http.HandlerFunc(c.HandleFeed)})
+	time.Sleep(500 * time.Millisecond) // half an hour of the world after serving began
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/dash/sites", nil))
 	if rec.Code != http.StatusTeapot || c.Writer.Queued() == 0 {
@@ -250,6 +251,26 @@ func TestServer(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(refDir, "crawlers.json")); err != nil {
 		t.Error(err)
+	}
+}
+
+// NUI_SIM_START is the world's anchor, not the wall time live mode begins: in the past or the future, the live world
+// starts at the anchor when serving begins, so the behaviours a minute after the start come a minute later.
+func TestServerStartsLiveAtTheAnchor(t *testing.T) {
+	for _, start := range []time.Time{time.Now().Add(-7 * 24 * time.Hour), time.Now().Add(7 * 24 * time.Hour)} {
+		k := sim.DefaultKnobs()
+		k.Start, k.Scale, k.FeedOutage = start, 0.1, 10*time.Minute
+		s, err := NewServer(k, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Wrap(http.NotFoundHandler(), sim.Handlers{})
+		got := s.live.WorldTime(time.Now())
+		s.Close()
+		lens, _ := s.World.Site("lens.example.com")
+		if d := got.Sub(s.World.Anchor); d < 0 || d > 5*time.Second || !s.World.FeedDelivers(lens, got) {
+			t.Errorf("start %v: world time %v after serving began, %v from the anchor", start, got, d)
+		}
 	}
 }
 
