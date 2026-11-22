@@ -21,12 +21,14 @@ import (
 	"github.com/trick77/ship/kit/logging"
 	"github.com/trick77/ship/kit/run"
 	"github.com/trick77/ship/kit/version"
+	"github.com/trick77/toolkit/llmwire"
 
 	"github.com/trick77/nui/backend/internal/app"
 	"github.com/trick77/nui/backend/internal/classify"
 	"github.com/trick77/nui/backend/internal/dash"
 	"github.com/trick77/nui/backend/internal/demo"
 	"github.com/trick77/nui/backend/internal/ingest"
+	"github.com/trick77/nui/backend/internal/llm"
 	"github.com/trick77/nui/backend/internal/refdata"
 	"github.com/trick77/nui/backend/internal/sites"
 	"github.com/trick77/nui/backend/internal/store"
@@ -111,8 +113,17 @@ func serve(cfg app.Config) error {
 	if err != nil {
 		return err
 	}
-	ds := &dash.Server{DB: st, Sites: reg, Ref: ref, Counters: counters, RetentionMonths: cfg.RetentionMonths,
-		Build: version.String()}
+	client, err := llm.FromEnv(cfg.LLMModel, llmwire.Config{})
+	if err != nil {
+		return fmt.Errorf("model: %w", err)
+	}
+	if client == nil {
+		slog.Info("No model configured (LLMWIRE_* key unset): the dashboard shows computed text only")
+	}
+	model := llm.New(st, llm.Options{Client: client, Model: cfg.LLMModel, DailyCalls: int64(cfg.LLMDailyCalls),
+		DailyTokens: int64(cfg.LLMDailyTokens)})
+	ds := &dash.Server{DB: st, Sites: reg, Ref: ref, Counters: counters, Model: model,
+		RetentionMonths: cfg.RetentionMonths, Build: version.String()}
 
 	// Background work runs on its own context: the server drains first, then the writer flushes what the drained
 	// requests queued.
@@ -131,6 +142,7 @@ func serve(cfg app.Config) error {
 		}
 	})
 	start(cls.Run)
+	start(model.Run)
 	start(func(c context.Context) { prune(c, st, cfg) })
 	if cfg.OIDCConfigured() && !cfg.AuthDisabled {
 		start(func(c context.Context) {

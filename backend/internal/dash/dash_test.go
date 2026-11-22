@@ -425,7 +425,8 @@ func TestLists(t *testing.T) {
 }
 
 func TestVisitorsAndDetail(t *testing.T) {
-	model := &fakeModel{readings: map[string]insight.Reading{}}
+	model := &fakeModel{readings: map[string]insight.Reading{}, labels: map[string]string{
+		"python-requests/2.32.3": "Python scraping script"}}
 	r := newRig(t, 3, 8, model)
 	_, body := r.get(t, "visitors", p(feedSite, "sort", "refused", "range", "24h"))
 	rows := listRows(body)
@@ -434,6 +435,9 @@ func TestVisitorsAndDetail(t *testing.T) {
 		t.Fatalf("visitors %v", rows)
 	}
 	scanner := rows[0]["key"].(string)
+	if rows[0]["client_gen"] != "Python scraping script" {
+		t.Errorf("client_gen %v", rows[0]["client_gen"])
+	}
 	if rows[0]["visits"] != nil {
 		t.Errorf("a server-only actor has visits: %v", rows[0]["visits"])
 	}

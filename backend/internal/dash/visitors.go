@@ -132,6 +132,11 @@ type visitorRow struct {
 	Last         any      `json:"last"`
 	Signals      []string `json:"signals"`
 	Does         does     `json:"does"`
+	// ClientGen is the model's label for an unknown automated client's user agent ("Python scraping script"),
+	// null when there is none.
+	ClientGen *string `json:"client_gen"`
+
+	ua string
 }
 
 func (s *Server) handleVisitors(w http.ResponseWriter, r *http.Request, q *query) {
@@ -222,7 +227,7 @@ func (s *Server) handleVisitors(w http.ResponseWriter, r *http.Request, q *query
 func (s *Server) visitorRow(q *query, a *actor, ci classInfo) visitorRow {
 	row := visitorRow{Key: a.key, Display: a.key, Country: a.country, Client: classify.Client(a.ua),
 		Views: a.views, Events: a.events, Last: iso(time.UnixMilli(a.last)), Signals: ci.signals,
-		Class: ci.class}
+		Class: ci.class, ua: a.ua}
 	if row.Class == "" {
 		row.Class = classOf(a.cls)
 	}
@@ -262,6 +267,22 @@ func (s *Server) readRows(ctx context.Context, q *query, rows []visitorRow) {
 		if rd, ok := got[rows[i].Key]; ok && rd.Summary != "" {
 			sum := rd.Summary
 			rows[i].Does.Gen = &sum
+		}
+	}
+	// Unknown automated clients get a label for their user agent (one per distinct value, kept for good).
+	var uas []string
+	for _, r := range rows {
+		if r.Class == "unknown" && r.ua != "" && !slices.Contains(uas, r.ua) {
+			uas = append(uas, r.ua)
+		}
+	}
+	if len(uas) == 0 {
+		return
+	}
+	labels := s.Model.Labels(ctx, q.site.ID, "ua", uas)
+	for i := range rows {
+		if l, ok := labels[rows[i].ua]; ok && rows[i].Class == "unknown" {
+			rows[i].ClientGen = &l
 		}
 	}
 }
