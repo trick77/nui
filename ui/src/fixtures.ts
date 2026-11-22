@@ -164,7 +164,9 @@ function overview(
         : up !== Boolean(opt.lowerBetter)
           ? "good"
           : "bad";
-    if (cmp === "off") prevSeries = null;
+    // As the backend answers with the comparison off: an empty series, a
+    // flat verdict.
+    if (cmp === "off") prevSeries = [];
     return {
       key,
       label,
@@ -173,7 +175,7 @@ function overview(
       value,
       prev: cmp === "off" ? null : prev,
       change: cmp === "off" ? null : opt.rate ? { pp: diff } : { pct: diff },
-      verdict: cmp === "off" ? null : verdict,
+      verdict: cmp === "off" ? "flat" : verdict,
       sub: opt.sub ?? "",
       series: cur,
       prev_series: prevSeries,

@@ -114,7 +114,8 @@ export function OverviewSection({
                       />
                       this period
                     </span>
-                    {sel.prev_series && (
+                    {/* [] with the comparison off: no entry. */}
+                    {sel.prev_series?.length ? (
                       <span>
                         <i
                           className="sw line"
@@ -122,7 +123,7 @@ export function OverviewSection({
                         />
                         {p.prev_label}
                       </span>
-                    )}
+                    ) : null}
                     {sel.median != null && (
                       <span>
                         <i className="sw dash" />

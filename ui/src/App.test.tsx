@@ -156,6 +156,10 @@ describe("dashboard on a domain with a server feed", () => {
     await waitFor(() =>
       expect(lastCall("/api/dash/overview").get("cmp")).toBe("off"),
     );
+    // No legend entry for a comparison that is off.
+    await waitFor(() =>
+      expect(within(panel("Overview")).queryByText(/^prior 7 d$/)).toBeNull(),
+    );
     await waitFor(() =>
       expect(
         screen.queryAllByRole("button", { name: "By change" }),
