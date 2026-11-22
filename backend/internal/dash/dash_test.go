@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/trick77/nui/backend/internal/apix"
 	"github.com/trick77/nui/backend/internal/demo"
 	"github.com/trick77/nui/backend/internal/ingest"
 	"github.com/trick77/nui/backend/internal/insight"
@@ -163,13 +164,38 @@ func TestSeparatorSpacing(t *testing.T) {
 			t.Errorf("%s: no browser client with the separator", ep)
 		}
 	}
-	// A day classified before the en spaces reads with them; its evidence id keeps the old spelling.
+	// A day classified before the en spaces reads with them.
 	if got := respace([]string{"also unknown automated: Chrome · macOS, 3 of 9 events"})[0]; got !=
 		"also unknown automated: Chrome"+sep+"macOS, 3 of 9 events" {
 		t.Errorf("respace %q", got)
 	}
-	if clientFamily("Chrome"+sep+"macOS") != "Chrome · macOS" {
-		t.Error("clientFamily changed a browser's evidence id")
+}
+
+// A client's evidence id and the reading signature hold no separator: however the shown text joins browser and OS,
+// the cached readings stay found.
+func TestClientIDIgnoresSeparator(t *testing.T) {
+	var s Server
+	in := func(client string) (insight.ReadingInput, map[string]string) {
+		return s.readingInput(1, visitorRow{Class: "human", Client: client}, nil, trailResult{})
+	}
+	want, wantFacts := in("Chrome" + apix.Sep + "macOS")
+	if _, ok := wantFacts["client:chrome-macos"]; !ok {
+		t.Errorf("client id: %v", wantFacts)
+	}
+	for _, sep := range []string{" · ", " | ", " ", " - "} {
+		got, facts := in("Chrome" + sep + "macOS")
+		if got.Signature != want.Signature {
+			t.Errorf("%q: signature changed", sep)
+		}
+		if _, ok := facts["client:chrome-macos"]; !ok {
+			t.Errorf("%q: client id %v", sep, facts)
+		}
+	}
+	for c, id := range map[string]string{"curl/8.4.0": "curl", "python-requests/2.32.3": "python-requests",
+		"Googlebot/2.1": "googlebot", "UptimeRobot": "uptimerobot"} {
+		if got := clientFamily(c); got != id {
+			t.Errorf("clientFamily(%q) = %q, want %q", c, got, id)
+		}
 	}
 }
 
