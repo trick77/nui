@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/trick77/ship/kit/httpx"
@@ -19,6 +20,13 @@ const Sep = ensp + "·" + ensp
 
 // ensp is U+2002 by its code point: the raw character is invisible in review.
 const ensp = string(rune(0x2002))
+
+// plainSep is a middle dot between plain spaces: the spelling before Sep, which stored reasons of past days hold and
+// the model writes.
+const plainSep = " · "
+
+// Respace spells every plainSep in s as Sep.
+func Respace(s string) string { return strings.ReplaceAll(s, plainSep, Sep) }
 
 // JSON writes v with status, uncached.
 func JSON(w http.ResponseWriter, status int, v any) { httpx.WriteJSON(w, status, v) }
