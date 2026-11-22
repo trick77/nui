@@ -332,7 +332,9 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
               <dt className="text-muted">Country</dt>
               <dd className="m-0">{countryName(v.country)}</dd>
               <dt className="text-muted">Client</dt>
-              <dd className="m-0">{v.client}</dd>
+              <dd className="m-0" title={v.client_gen ? v.client : undefined}>
+                <GenText gen={v.client_gen} text={v.client} />
+              </dd>
               <dt className="text-muted">Signals</dt>
               <dd className="m-0">{v.signals.join(" · ") || "–"}</dd>
               {feed && v.requests != null && (

@@ -811,6 +811,7 @@ function visitor(key: string, feed: boolean): Visitor | null {
     network_kind: v.network_kind,
     country: v.country,
     client: v.client,
+    client_gen: v.client_gen ?? null,
     signals: v.signals,
     requests: feed ? v.requests : null,
     addresses: v.key.endsWith("/64") ? 3 : 1,

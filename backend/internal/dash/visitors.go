@@ -466,7 +466,12 @@ func (s *Server) readRows(ctx context.Context, q *query, span visitorCursor, row
 			}
 		}
 	}
-	// Unknown automated clients get a label for their user agent (one per distinct value, kept for good).
+	s.labelClients(ctx, q.site.ID, rows)
+}
+
+// labelClients sets the model's label for an unknown automated client's user agent (one per distinct value, kept
+// for good), the same in the table and the visitor detail. The model must be configured.
+func (s *Server) labelClients(ctx context.Context, site int64, rows []visitorRow) {
 	var uas []string
 	for _, r := range rows {
 		if r.Class == "unknown" && r.ua != "" && !slices.Contains(uas, r.ua) {
@@ -476,7 +481,7 @@ func (s *Server) readRows(ctx context.Context, q *query, span visitorCursor, row
 	if len(uas) == 0 {
 		return
 	}
-	labels := s.Model.Labels(ctx, q.site.ID, "ua", uas)
+	labels := s.Model.Labels(ctx, site, "ua", uas)
 	for i := range rows {
 		if l, ok := labels[rows[i].ua]; ok && rows[i].Class == "unknown" {
 			rows[i].ClientGen = &l
@@ -825,8 +830,12 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 	}
 	resp := map[string]any{"key": key, "class": row.Class, "network": row.Network, "network_kind": row.NetworkKind,
 		"country": row.Country, "client": row.Client, "signals": row.Signals, "requests": row.Requests,
-		"addresses": addrs, "hours": hours, "trail": tr.lines, "trail_next": tr.next, "reading": nil}
+		"addresses": addrs, "hours": hours, "trail": tr.lines, "trail_next": tr.next, "reading": nil,
+		"client_gen": nil}
 	if s.Model != nil && s.Model.Configured() {
+		one := []visitorRow{row}
+		s.labelClients(ctx, q.site.ID, one)
+		resp["client_gen"] = one[0].ClientGen
 		// The reading reads the newest trail page, whatever page the user is on.
 		latest := tr
 		if before.ts > 0 {

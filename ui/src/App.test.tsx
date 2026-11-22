@@ -365,6 +365,14 @@ describe("dashboard on a domain with a server feed", () => {
       "title",
       "python-requests/2.32",
     );
+    // The detail names the client as the table does.
+    fireEvent.click(label);
+    const d = await screen.findByRole("region", { name: "Visitor" });
+    const detail = await within(d).findByText("Python scraping script");
+    expect(detail.closest("dd")).toHaveAttribute(
+      "title",
+      "python-requests/2.32",
+    );
   });
 
   it("shows an address without events in the range as empty, not failed", async () => {

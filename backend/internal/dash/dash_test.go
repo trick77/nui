@@ -514,6 +514,10 @@ func TestVisitorsAndDetail(t *testing.T) {
 		t.Fatalf("visitor %d %v", code, d)
 	}
 	noNullLists(t, "visitor", d)
+	// The client reads as in the table.
+	if d["client_gen"] != "Python scraping script" || d["client"] != "python-requests/2.32.3" {
+		t.Errorf("detail client %v / %v", d["client_gen"], d["client"])
+	}
 	reading := d["reading"].(map[string]any)
 	ev := reading["evidence"].([]any)
 	if reading["verdict"] != "Scraping attempt" || reading["suspicious"] != true || len(ev) != 2 ||

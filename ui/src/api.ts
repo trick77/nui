@@ -193,6 +193,8 @@ export type Visitor = {
   network_kind: string;
   country: string;
   client: string;
+  // The model's label for an unknown automated client, as in the table.
+  client_gen?: string | null;
   signals: string[];
   requests: number | null;
   addresses: number;
