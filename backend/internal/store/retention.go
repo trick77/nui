@@ -128,7 +128,7 @@ func (s *Store) EnforceCap(ctx context.Context, maxBytes int64) (int64, error) {
 var ErrVacuumStalled = errors.New("incremental vacuum made no progress")
 
 // vacuumStmt is one vacuum step (a test replaces it with one that does nothing).
-var vacuumStmt = `PRAGMA incremental_vacuum(` + strconv.Itoa(vacuumStep) + `)`
+var vacuumStmt = `PRAGMA incremental_vacuum(` + strconv.Itoa(vacuumStep) + `)` //nolint:gosec // a constant, no input
 
 // maxStalledSteps is how many steps in a row may leave the free pages as many as before (the writer may free a few
 // meanwhile) before Vacuum stops.
