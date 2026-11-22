@@ -479,6 +479,53 @@ describe("capture", () => {
     expect(ev.filter((e) => e.k === "engagement")).toHaveLength(3);
   });
 
+  it("stamps each page's events with its own URL and title", async () => {
+    history.replaceState(null, "", "/a?x=1");
+    document.title = "A";
+    const t = boot();
+    vi.advanceTimersByTime(2000);
+    // Routers set the title after pushState.
+    history.pushState(null, "", "/b");
+    document.title = "B";
+    vi.advanceTimersByTime(2000);
+    history.pushState(null, "", "/c");
+    document.title = "C";
+    vi.advanceTimersByTime(2000);
+    history.pushState(null, "", "/d");
+    // Closed before the router set the title: the view still goes out.
+    document.title = "D";
+    Object.defineProperty(document, "visibilityState", {
+      value: "hidden",
+      configurable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      configurable: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const ev = bodies().flatMap((b) =>
+      b.events.map((e) => ({
+        k: e.k,
+        url: e.url ?? b.ctx.url,
+        title: (e as { title?: string }).title ?? b.ctx.title,
+      })),
+    );
+    const at = (p: string) => location.origin + p;
+    expect(
+      ev.filter((e) => e.k === "page_view" || e.k === "engagement"),
+    ).toEqual([
+      { k: "page_view", url: at("/a?x=1"), title: "A" },
+      { k: "engagement", url: at("/a?x=1"), title: "A" },
+      { k: "page_view", url: at("/b"), title: "B" },
+      { k: "engagement", url: at("/b"), title: "B" },
+      { k: "page_view", url: at("/c"), title: "C" },
+      { k: "engagement", url: at("/c"), title: "C" },
+      { k: "page_view", url: at("/d"), title: "D" },
+    ]);
+    expect(t.state().queued).toBe(0);
+  });
+
   it("gives each page its own budget, within a ceiling per document", async () => {
     const t = boot();
     fetchMock.mockImplementation(() => reply(204));

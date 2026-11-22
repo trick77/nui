@@ -248,6 +248,12 @@ export function start(
   let notBefore = 0;
   let timer: ReturnType<typeof setTimeout> | 0 = 0;
   let inFlight = false;
+  // The latest page view, its title still to be taken (see pageView).
+  let view: Rec | undefined;
+  const settle = () => {
+    if (view) view.ti = clip(doc.title, LIMITS.str);
+    view = undefined;
+  };
 
   const now = () => Date.now();
 
@@ -435,7 +441,13 @@ export function start(
     return true;
   };
 
-  const record = (k: string, p: Props, n?: string) => {
+  // at: the URL and title the event happened on, when the page has moved on.
+  const record = (
+    k: string,
+    p: Props,
+    n?: string,
+    at?: [string, string],
+  ): Rec | undefined => {
     if (disabled) return;
     const t = now();
     if (full(t)) return;
@@ -445,13 +457,14 @@ export function start(
       t,
       k,
       p: fit(p),
-      u: clipURL(loc.href),
-      ti: clip(doc.title, LIMITS.str),
+      u: at ? at[0] : clipURL(loc.href),
+      ti: clip(at ? at[1] : doc.title, LIMITS.str),
     };
     if (n != null) r.n = clip(n, LIMITS.str);
     queue.push(r);
     if (queue.length >= LIMITS.flushAt) flush(false);
     else schedule(LIMITS.flushAfterMs);
+    return r;
   };
 
   // ---- sending
@@ -482,6 +495,7 @@ export function start(
   };
 
   const take = (): { body: string; batch: Rec[] } | null => {
+    settle();
     const c = ctx();
     const url = c.url;
     const head =
@@ -668,14 +682,19 @@ export function start(
     activeSince = isActive() ? t : 0;
   };
   activeSince = isActive() ? now() : 0;
-  const engagement = () => {
+  const engagement = (at?: [string, string]) => {
     tick();
     if (activeMs <= 0 && maxScroll <= 0 && pageInputs <= 0) return;
-    record("engagement", {
-      ms: Math.round(activeMs),
-      scroll: Math.round(maxScroll),
-      inputs: { ...inputs },
-    });
+    record(
+      "engagement",
+      {
+        ms: Math.round(activeMs),
+        scroll: Math.round(maxScroll),
+        inputs: { ...inputs },
+      },
+      undefined,
+      at,
+    );
     activeMs = 0;
     maxScroll = 0;
     pageInputs = 0;
@@ -703,17 +722,27 @@ export function start(
   // a client-side route in the fragment, never the query alone: a search box
   // that writes its text into the URL is one page. Each page has its own
   // budget of events, the document a higher one.
+  // The view is queued at once, so closing the page cannot lose it, and its
+  // title is taken when the page is left or the batch is built: routers set
+  // it after pushState. The page being left is where the URL was before the
+  // change (here), with the title it still shows.
   let lastPage = "";
+  let here = "";
   const pageKey = () =>
     loc.pathname +
     (/^#[/!]/.test(loc.hash) ? loc.hash.replace(/\?[^]*$/, "") : "");
   const pageView = (force: boolean) => {
     const k = pageKey();
+    const was = here;
+    here = clipURL(loc.href);
     if (!force && k === lastPage) return;
-    if (lastPage) engagement();
+    if (lastPage) {
+      settle();
+      engagement([was, doc.title]);
+    }
     lastPage = k;
     pageCount = 0;
-    record("page_view", {});
+    view = record("page_view", {});
   };
   const hist = win.history;
   const orig: [string, unknown][] = [];
