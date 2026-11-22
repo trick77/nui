@@ -14,11 +14,12 @@ dashboard SPA under `/dashboard` (OIDC). `backend/`: Go on ship's kit, embeds th
 - TLS: no certresolver, the server's Traefik holds a wildcard certificate.
 - Schema: `docs/schema.md`, generated (`SCHEMADOC_UPDATE=1 go test ./... -run TestSchemaDoc` in `backend/`).
   Migration 0001 is unreleased until v1 ships: edit it, never add 0002 before the first release.
-- No aggregate tables (user): every figure is computed from raw events at read time. No statement reads more than a
-  day (`readSpan`: month buckets in day pieces, the log and footer counts in windows): a read held for seconds keeps
-  the WAL from restarting while the collector writes (ipverse-core's lesson; a month GROUP BY took 0.8 s native,
-  ~2 s in the WASM driver, on 24 M events). `TestLargeTable` fails any statement whose plan scans `event`. Measured
-  at 24 M events (25 months, ~31k/day): a 12-month page takes ~60 s; the time is many short reads, not one long one.
+- No aggregate tables (user): every figure is computed from raw events at read time. A statement over all of a site's
+  events spans at most a day (`readSpan`: month buckets in day pieces, log and footer counts in windows): a read held
+  for seconds keeps the WAL from restarting while the collector writes (ipverse-core's lesson; a month's actor GROUP
+  BY took 0.8 s native on 24 M events, a day 0.02 s). One address's reads (visitor detail) span the range on the
+  actor index. `TestLargeTable` fails any statement whose plan scans `event`. At 24 M events (25 months, ~31k/day) a
+  12-month page took ~60 s: many short reads, not one long one.
 - Feed: one event's content never refuses the batch, its fields are the product's public clients' (one crafted
   method would blind the feed). Clip to the README's limits, drop and count unusable events; `/api/in` stays strict.
 - Sites are declared in `<data>/sites.json` (`docs/sites.example.json`), never self-registering: a browser can name
