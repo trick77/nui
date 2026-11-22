@@ -147,12 +147,17 @@ func (w *World) volume(d int64) float64 {
 		v = 0.6
 	}
 	if sc := w.scenario("growth"); sc != nil {
-		// Two and a half times the visitors over a year, steadily: a year back the site had 40 % of today's.
-		years := dayStart(d).Add(12*time.Hour).Sub(w.Anchor).Hours() / (365 * 24)
-		v *= math.Pow(2.5, years)
+		// The newcomers double every quarter, steadily: a quarter back the site had half of today's. Noteworthy
+		// compares 90 days with the 90 before, so the visitors rise by some 90 %, the regulars' fixed number and a
+		// seed's luck far from pulling it under the 20 % a trend needs (2.5 times a year rose by 14 to 35 %).
+		quarters := dayStart(d).Add(12*time.Hour).Sub(w.Anchor).Hours() / (growthQuarter * 24)
+		v *= math.Pow(2, quarters)
 	}
 	return v
 }
+
+// growthQuarter is the days the growth scenario's visitors take to double.
+const growthQuarter = 90
 
 // startOn is a visit's start on day d for someone in loc, by the hour weights of their own day.
 func startOn(r rng, d int64, loc locale) time.Time {
