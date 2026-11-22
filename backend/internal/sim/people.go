@@ -189,10 +189,11 @@ func (w *World) people(p *dayPlan, s *Site, d int64) {
 		per := w.newPerson(pr)
 		w.visit(p, s, per, startOn(pr, d, per.loc), referrers[pr.weighted(refWeights)], "", pr)
 	}
-	// A post on a news site: a wave of first-time visitors arriving from it, landing on the page it links.
+	// A post on a news site: a wave of first-time visitors arriving from it, landing on the page it links. Some
+	// three times a week's visitors from search, so it leads the week's referrers however long the history.
 	if sc := w.scenario("referrer-spike"); sc != nil && s.idx == 0 {
 		from, to := sc.start(w.Anchor), sc.end(w.Anchor)
-		for i := range newRng(w.Seed, 6).poisson(60 * w.Scale) {
+		for i := range newRng(w.Seed, 6).poisson(200 * w.Scale) {
 			pr := newRng(w.Seed, 5, int64(i))
 			at := from.Add(time.Duration(pr.Int64N(int64(to.Sub(from)))))
 			if dayOf(at) != d {

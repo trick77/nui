@@ -7,14 +7,15 @@ import (
 	"time"
 )
 
-// Addresses of the scenario actors. All documentation addresses, in the world's hosting networks.
+// Addresses of the scenario actors. All documentation addresses, in the world's hosting networks; the floods all in
+// Kestrel's (64506), so the /48's network spike holds beside the others.
 var (
 	WalkerAddr      = netip.MustParseAddr("203.0.113.5")
-	FloodAddr       = netip.MustParseAddr("203.0.113.77")
+	FloodAddr       = netip.MustParseAddr("192.0.2.77")
 	ProberAddr      = netip.MustParseAddr("192.0.2.66")
 	HammerAddr      = netip.MustParseAddr("192.0.2.99")
 	HeadlessAddr    = netip.MustParseAddr("192.0.2.140")
-	Flood64         = netip.MustParsePrefix("2001:db8:a07:7::/64")
+	Flood64         = netip.MustParsePrefix("2001:db8:b07:7::/64")
 	Flood48         = netip.MustParsePrefix("2001:db8:b03::/48")
 	scannerPrefixes = []netip.Prefix{netip.MustParsePrefix("198.19.128.0/18"), netip.MustParsePrefix("198.19.192.0/19")}
 )
@@ -158,18 +159,22 @@ func (w *World) automation(p *dayPlan, s *Site, d int64) {
 			}
 		}
 	}
+	// A flood outweighs the rest of the site's day: twice the prober's hour and the people's and bots' requests
+	// together (some 450 fixed and 650 per unit of scale with the referrer wave, 800 and 700 allowed), so each
+	// address flood keeps over a quarter of the day's requests, a spike, with the other two floods and the prober
+	// beside it.
+	floodSize := int(math.Round(2 * (1800 + 800 + 700*w.Scale)))
 	for k, f := range []struct {
 		name string
-		n    float64
 		addr func(r rng, i int) netip.Addr
 	}{
-		{"flood-addr", 1500, func(rng, int) netip.Addr { return FloodAddr }},
-		{"flood-64", 1500, func(r rng, _ int) netip.Addr {
+		{"flood-addr", func(rng, int) netip.Addr { return FloodAddr }},
+		{"flood-64", func(r rng, _ int) netip.Addr {
 			b := Flood64.Addr().As16()
 			r.fill(b[8:])
 			return netip.AddrFrom16(b)
 		}},
-		{"flood-48", 2000, func(r rng, i int) netip.Addr {
+		{"flood-48", func(r rng, i int) netip.Addr {
 			// 200 /64s, the 7th and 8th byte numbering them.
 			b := hostIn(netip.PrefixFrom(Flood48.Addr(), 64), 0).As16()
 			b[7] = byte(i % 200) //nolint:gosec // below 200
@@ -182,7 +187,7 @@ func (w *World) automation(p *dayPlan, s *Site, d int64) {
 			continue
 		}
 		from, to := sc.start(w.Anchor), sc.end(w.Anchor)
-		n := int(math.Round(f.n * max(w.Scale, 0.2)))
+		n := floodSize
 		r := newRng(w.Seed, 22, int64(k))
 		for i := range n {
 			at := from.Add(to.Sub(from) * time.Duration(i) / time.Duration(n))
