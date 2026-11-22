@@ -390,7 +390,8 @@ func TestHelpers(t *testing.T) {
 		"Only one address sends requests": false, "More than one client": false, "At least one probe": false,
 		"One request per minute": false, "one probe an hour": false, "one out of the lot": false, "One or more scanners": false,
 		"One in ten requests fails": false, "Twenty-one pages": false, "One hundred probes": false,
-		"One third of the traffic": false,
+		"One third of the traffic": false, "One fifth of requests": false, "one quarter of the probes": false,
+		"One tenth fails": false, "A fourth crawler": false,
 	} {
 		if noFigures(text) != ok {
 			t.Errorf("noFigures(%q) = %v", text, !ok)

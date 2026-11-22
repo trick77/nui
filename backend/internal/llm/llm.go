@@ -342,7 +342,7 @@ func clip(s string, n int) string {
 var figureRE = regexp.MustCompile(`(?i)[0-9%]|\b(zero|two|three|four|five|six|seven|eight|nine|ten|eleven|` +
 	`twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|` +
 	`seventy|eighty|ninety|hundreds?|thousands?|millions?|billions?|dozens?|half|twice|double|triple|` +
-	`percent|per\s+cent|first|second|third)\b`)
+	`percent|per\s+cent|first|second|third|quarters?|(four|fif|six|seven|eigh|nin|ten)ths?)\b`)
 
 // oneRE matches "one" as a quantity: bounded, compared, counted or a rate ("only one", "more than one", "at least
 // one", "one out of", "one or more", "one request per minute", "one probe an hour"). With another number word ("one in ten", "twenty-one", "one
