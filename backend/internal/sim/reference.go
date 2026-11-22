@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/trick77/nui/backend/internal/refdata"
 )
@@ -183,6 +184,18 @@ func OpenReference(dir string) (*Reference, error) {
 		}
 	}
 	return ref, nil
+}
+
+// Stamp dates the reference files at t and loads them again: the dashboard states when its reference data was
+// updated (the files' time), and an export must not carry the wall clock.
+func (r *Reference) Stamp(t time.Time) error {
+	for _, f := range []string{crawlersFile, monitorFile, networksFile, countriesFile} {
+		if err := os.Chtimes(filepath.Join(r.Dir, f), t, t); err != nil {
+			return err
+		}
+	}
+	r.Data.LoadCached()
+	return nil
 }
 
 // role is a bot role, ok false when the loaded list has no service for it (the actor then stays away).

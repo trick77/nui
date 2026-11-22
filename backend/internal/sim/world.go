@@ -203,6 +203,16 @@ func (w *World) plan(d int64) *dayPlan {
 	return p
 }
 
+// EventsPerDay is how many events the world's clients send on the day before its anchor (at least 1): what a live
+// rate is scaled by.
+func (w *World) EventsPerDay() float64 {
+	n := 0
+	for _, q := range w.Requests(w.Anchor.Add(-day), w.Anchor) {
+		n += q.Events()
+	}
+	return max(float64(n), 1)
+}
+
 // FeedDelivers reports whether site's feed delivers at t.
 func (w *World) FeedDelivers(s *Site, t time.Time) bool {
 	return s.Feed && !s.Silent && !w.feedDown(s, t)
