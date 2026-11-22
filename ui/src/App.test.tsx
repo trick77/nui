@@ -124,6 +124,24 @@ describe("dashboard on a domain with a server feed", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
+  it("draws no comparison with the comparison off", async () => {
+    start("/dashboard/?cmp=off");
+    const ov = await screen.findByRole("region", { name: "Overview" });
+    await within(ov).findByText("Visitors per day · all");
+    // The backend sends an empty previous series, not none.
+    expect(lastCall("/api/dash/overview").get("cmp")).toBe("off");
+    fireEvent.mouseMove(within(ov).getByTestId("chart-hit"), {
+      clientX: 500,
+      clientY: 100,
+    });
+    const tip = screen.getByRole("tooltip");
+    expect(tip).toHaveTextContent("Visitors");
+    expect(tip).not.toHaveTextContent(/prior/);
+    // This period and the median, nothing else.
+    expect(tip.querySelectorAll(".tr")).toHaveLength(2);
+    expect(ov.querySelector('[stroke="var(--color-reference)"]')).toBeNull();
+  });
+
   it("keeps range, audience and comparison in the URL", async () => {
     start();
     await screen.findByText("Visitors per day · all");

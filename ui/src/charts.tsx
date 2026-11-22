@@ -23,15 +23,20 @@ function labelStep(n: number, width: number): number {
 
 // A tile's small trend: this period in s1, the previous one grey. The open
 // bucket is left out, it would always read as a drop.
+// The comparison series, or null when there is none: with the comparison
+// off the backend sends an empty one.
+const series = (s: number[] | null | undefined) => (s?.length ? s : null);
+
 export function Spark({
   cur,
-  prev,
+  prev: prevIn,
   open,
 }: {
   cur: number[];
   prev: number[] | null;
   open: boolean;
 }) {
+  const prev = series(prevIn);
   const W = 84;
   const H = 30;
   const n = cur.length;
@@ -82,7 +87,7 @@ export function Spark({
 export function MainChart({
   labels,
   cur,
-  prev,
+  prev: prevIn,
   median,
   kind,
   open,
@@ -98,6 +103,7 @@ export function MainChart({
   title: string;
   prevLabel: string;
 }) {
+  const prev = series(prevIn);
   const ref = useRef<HTMLDivElement>(null);
   const W = Math.max(320, useWidth(ref, 900));
   const id = useId().replace(/:/g, "");
