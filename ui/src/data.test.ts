@@ -307,7 +307,9 @@ describe("shell", () => {
     expect(shell).toContain(
       '<link rel="icon" type="image/svg+xml" href="/icon.svg" />',
     );
-    expect(icon).toMatch(/^<svg [^]*<\/svg>\s*$/);
-    expect(icon.length).toBeLessThan(600);
+    expect(icon).toMatch(/^<!--[^]*-->\s*<svg [^]*<\/svg>\s*$/);
+    // The column chart's strokes.
+    expect(icon).toContain('<path d="M13 17V5"/>');
+    expect(icon.length).toBeLessThan(4096);
   });
 });

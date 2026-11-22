@@ -1,1 +1,49 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#1f1f1e"/><path d="M7 23l6-6 5 4 6-8" fill="none" stroke="#d97757" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24.5" cy="11" r="3" fill="#faf9f5"/></svg>
+<!--
+  nui's icon: a column chart on its axes, on a shaded chip. The chip is the ink
+  and the mark sits on it in the app's own ground colour. Format and
+  construction are ../transmission-ui's ui/icons/icon.svg; read that file for
+  the full argument. What follows is only what differs here.
+
+  THE GLYPH IS lucide's "chart-column" (ISC), copied rather than imported:
+  nothing loads an icon library to draw a static asset. lucide draws it with
+  2-unit strokes, and a 2-unit stroke is the first thing to vanish at 16px, so
+  the four strokes are redrawn here at 3.0 units, the weight transmission-ui
+  measured for the same reason. The geometry is lucide's own: axes from (3,3)
+  down and along to (21,21) with a 2-unit corner, columns at x 8, 13 and 18.
+  The columns stand 5 units apart, so at 3.0 the gap between them is 2 units
+  and stays open; heavier than about 3.4 the gaps close at 16px.
+
+  THE MARK IS PAINTED #1f1f1e (the app's bg token), not knocked through the
+  chip, so it stays dark on orange on every ground the icon lands on.
+
+  Sized off the chip's TRUE bbox, x[3,21] y[3,21], 18 square, centred on
+  (12,12). Coverage is 1.0: the chip spans the canvas.
+
+  THE TRANSFORMS ARE DERIVED, not typed:
+
+    outer: scale = 64*C/18,  translate = 32 - 12*scale
+    inner: scale = k,        translate = 12 - c*k
+    k = 18*fill / max(bbox width, bbox height)
+
+  With round caps at 3.0 the glyph's bbox is x[1.5,22.5] y[1.5,22.5], 21
+  square, centre (12,12). Fill is 0.66, so k = 0.565714 and the inner translate
+  is (5.2114, 5.2114). Change the weight, the fill or the coverage and the
+  transforms have to be recomputed.
+
+  TRANSPARENT CANVAS: only the four corners outside the chip's radius are clear.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <linearGradient id="og" x1="0" y1="0" x2="0.72" y2="1">
+    <stop offset="0" stop-color="#e08a68"/>
+    <stop offset="1" stop-color="#c25f34"/>
+  </linearGradient>
+  <g transform="translate(-10.6667 -10.6667) scale(3.55556)">
+    <rect x="3" y="3" width="18" height="18" rx="4" fill="url(#og)"/>
+    <g transform="translate(5.2114 5.2114) scale(0.565714)" fill="none" stroke="#1f1f1e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 3v16a2 2 0 0 0 2 2h16"/>
+      <path d="M18 17V9"/>
+      <path d="M13 17V5"/>
+      <path d="M8 17v-3"/>
+    </g>
+  </g>
+</svg>

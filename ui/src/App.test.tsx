@@ -80,6 +80,12 @@ describe("sign-in", () => {
     expect(tokenBox()).not.toHaveFocus();
     // The art behind the card, decoration only.
     expect(cover()).toHaveAttribute("alt", "");
+    // The icon's chip beside the wordmark.
+    expect(
+      screen
+        .getByRole("heading", { name: "nui" })
+        .querySelector('img[src="/dashboard/icon.svg"]'),
+    ).not.toBeNull();
   });
 
   it("offers single sign-on alone, the token form alone, or says neither is set up", async () => {
@@ -125,6 +131,8 @@ describe("sign-in", () => {
     expect(calls.filter((c) => c === "/api/me")).toHaveLength(2);
     // The signed-in dashboard never fetches the art.
     expect(cover()).toBeNull();
+    // Nor shows the chip: the header keeps the plain wordmark.
+    expect(document.querySelector('img[src$="icon.svg"]')).toBeNull();
   });
 
   it("says why a token was refused, never echoing it", async () => {

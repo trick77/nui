@@ -55,7 +55,17 @@ export default function App() {
         </>
       )}
       <div className="panel card gate w-full max-w-[420px] text-center">
-        <h1 className="wordmark m-0 mb-3">nui</h1>
+        <h1 className="wordmark m-0 mb-3 flex items-center justify-center gap-2.5">
+          {/* The app icon as the card's chip; the signed-in header keeps
+              the plain wordmark. */}
+          <img
+            src={`${basePath(window.location.pathname)}icon.svg`}
+            alt=""
+            width={30}
+            height={30}
+          />
+          nui
+        </h1>
         {auth.state === "checking" && (
           <p className="m-0 text-[13.5px] text-muted" aria-busy="true">
             Checking your session…

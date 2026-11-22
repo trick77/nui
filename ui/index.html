@@ -4,6 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#1f1f1e" />
+    <!-- public/icon.svg; the build writes the href relative (./icon.svg), the
+         server serves it under /dashboard/. No favicon.ico: the bare host
+         answers 404 outside /dashboard/, /api/ and /nui.js. -->
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <title>nui</title>
   </head>
