@@ -809,9 +809,47 @@ func TestDomainAndSites(t *testing.T) {
 	if first["site"] != plainSite || first["server"] != nil || sts[1].(map[string]any)["server"] == nil {
 		t.Errorf("sites %v", sts)
 	}
-	if source(time.Time{}, time.Now())["state"] != "never" {
-		t.Error("never")
+	if source(time.Time{}, time.Now()) != nil {
+		t.Error("a source that never delivered is not null")
 	}
+}
+
+// A source that never delivered is null in the sites list and the domain footer alike: both, browser only, server
+// only and none yet read apart.
+func TestSourcesNeverDelivered(t *testing.T) {
+	r := newRig(t, 0, 0, nil)
+	feed, _ := r.s.Sites.Lookup(feedSite)
+	check := func(name string, browser, server bool) {
+		t.Helper()
+		_, body := r.get(t, "sites", nil)
+		var row map[string]any
+		for _, s := range body["sites"].([]any) {
+			if s.(map[string]any)["site"] == feedSite {
+				row = s.(map[string]any)
+			}
+		}
+		_, dom := r.get(t, "domain", p(feedSite))
+		src := dom["sources"].(map[string]any)
+		for _, got := range []struct {
+			where string
+			v     any
+			want  bool
+		}{{"sites browser", row["browser"], browser}, {"sites server", row["server"], server},
+			{"domain browser", src["browser"], browser}, {"domain server", src["server"], server}} {
+			if (got.v != nil) != got.want {
+				t.Errorf("%s: %s = %v", name, got.where, got.v)
+			}
+		}
+	}
+	r.s.Counters = ingest.NewCounters(func() time.Time { return r.end })
+	check("none yet", false, false)
+	r.s.Counters.Seen(feed.ID, "server")
+	check("server only", false, true)
+	r.s.Counters.Seen(feed.ID, "browser")
+	check("both", true, true)
+	r.s.Counters = ingest.NewCounters(func() time.Time { return r.end })
+	r.s.Counters.Seen(feed.ID, "browser")
+	check("browser only", true, false)
 }
 
 func TestNoteworthy(t *testing.T) {

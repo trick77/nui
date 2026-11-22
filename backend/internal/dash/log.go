@@ -292,14 +292,13 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 	})
 }
 
-// source is a source's state: receiving within the last hour, idle before, never without any delivery.
+// source is a source's state: receiving within the last hour, idle before, nil (null) when it never delivered.
 func source(last, now time.Time) map[string]any {
-	state := "never"
-	switch {
-	case last.IsZero():
-	case now.Sub(last) <= time.Hour:
-		state = "receiving"
-	default:
+	if last.IsZero() {
+		return nil // never delivered: null, as for a source the site does not have
+	}
+	state := "receiving"
+	if now.Sub(last) > time.Hour {
 		state = "idle"
 	}
 	return map[string]any{"state": state, "last": iso(last)}

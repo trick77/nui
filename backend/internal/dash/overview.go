@@ -243,8 +243,11 @@ func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, err)
 			return
 		}
-		row.Browser = map[string]any{"last": iso(b)}
-		if st.HasFeed {
+		// A source that never delivered is null, like one the site does not have.
+		if !b.IsZero() {
+			row.Browser = map[string]any{"last": iso(b)}
+		}
+		if st.HasFeed && !sv.IsZero() {
 			row.Server = map[string]any{"last": iso(sv)}
 		}
 		rows = append(rows, row)
