@@ -332,8 +332,10 @@ func weekOfSpans(w *World, each func(from, to time.Time)) {
 	}
 }
 
-// The world holds two day plans at most, however it is asked: a week of spans before the anchor and after it, every
-// midnight crossed. The day before a span's is held only in the hours a visit begun on it can reach past midnight.
+// The world holds two day plans at most at any time, however it is asked: a week of spans on each side of the anchor,
+// every midnight crossed; one span of eleven days; the day-long spans LiveEvents asks, from an anchor an hour past
+// midnight, so each reads three days. The day before a span's is held only in the hours a visit begun on it can reach
+// past midnight.
 func TestPlansHeld(t *testing.T) {
 	w := testWorld(t, 0.5, DefaultScenarios)
 	weekOfSpans(w, func(from, to time.Time) {
@@ -347,6 +349,18 @@ func TestPlansHeld(t *testing.T) {
 			}
 		}
 	})
+	long := testWorld(t, 0.5, DefaultScenarios)
+	if long.Requests(anchor.Add(-11*day), anchor); long.most > maxPlans {
+		t.Errorf("a span of eleven days: %d day plans held at once", long.most)
+	}
+	live := testWorld(t, 0.5, DefaultScenarios)
+	live.Anchor = dayStart(dayOf(anchor)).Add(time.Hour)
+	if live.LiveEvents(); live.most > maxPlans {
+		t.Errorf("LiveEvents: %d day plans held at once", live.most)
+	}
+	if w.most > maxPlans {
+		t.Errorf("the week's spans: %d day plans held at once", w.most)
+	}
 }
 
 // The day plans a world holds fit the budget at the largest scale: a world of the default scenarios asked for a week
