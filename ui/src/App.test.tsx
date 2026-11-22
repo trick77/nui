@@ -363,21 +363,23 @@ describe("dashboard on a domain with a server feed", () => {
     const rows = await within(nw).findAllByRole("button");
     expect(rows.length).toBeLessThanOrEqual(5);
     expect(
-      within(nw).getByText("New referrer news.ycombinator.com"),
+      within(nw).getByText("New referrer: news.ycombinator.com"),
     ).not.toHaveClass("gen");
-    fireEvent.mouseMove(rows[0], { clientX: 10, clientY: 10 });
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Safari only");
-    fireEvent.mouseLeave(rows[0]);
+    fireEvent.mouseMove(rows[1], { clientX: 10, clientY: 10 });
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "88.4 % of all requests",
+    );
+    fireEvent.mouseLeave(rows[1]);
     fireEvent.click(rows[1]);
     const detail = await screen.findByRole("region", { name: "Visitor" });
     expect(
       await within(detail).findByText("Scraping attempt"),
     ).toBeInTheDocument();
-    fireEvent.click(rows[4]);
+    fireEvent.click(rows[3]);
     await waitFor(() =>
       expect(window.location.pathname).toBe("/dashboard/log"),
     );
-    expect(window.location.search).toContain("addr=2001");
+    expect(window.location.search).toContain("class=unknown");
   });
 
   it("lists visitors with sorts, filter, search, show all and the detail", async () => {

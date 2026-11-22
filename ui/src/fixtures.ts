@@ -228,64 +228,62 @@ function overview(
 }
 
 function noteworthy(site: string): Noteworthy {
-  const feed = site === "lens.example.com";
+  const feed = SITES.find((s) => s.site === site)?.server != null;
+  // The backend's ids, units and texts; the briefing's lines (gen) first,
+  // the computed facts after them.
   const items: Noteworthy["items"] = [
     {
-      id: "f1",
+      id: 'err:TypeError: cannot read "prefixes"',
       kind: "problem",
       figure: "14",
-      unit: "visitors hit",
-      gen: "Safari breaks on AS pages since the 20.11. deploy",
-      text: 'New JS error: TypeError: cannot read "prefixes"',
-      detail: [
-        'TypeError: cannot read "prefixes"',
-        "Safari only",
-        "since 20.11.",
-      ],
+      unit: "times",
+      gen: "Safari breaks on AS pages since the deploy",
+      text: 'New error: TypeError: cannot read "prefixes"',
+      detail: ['TypeError: cannot read "prefixes"'],
       target: { panel: "errors", filter: {} },
     },
     {
-      id: "f2",
+      id: "spike:addr:198.51.100.7",
       kind: "automation",
-      figure: "2’639",
-      unit: "refused",
+      figure: "2338",
+      unit: "requests from",
       gen: "One operator is walking the IP lookup API",
-      text: "Refused requests from 2 addresses in 2 hosting networks",
-      detail: ["2 addresses", "2 hosting networks", "since 12.11."],
+      text: "198.51.100.7 (AS64510 Example Cloud)",
+      detail: ["88.4 % of all requests, 0 in the prior 7 d"],
       target: { panel: "visitors", filter: { key: "198.51.100.7" } },
     },
     {
-      id: "f3",
-      kind: "people",
-      figure: "+749",
-      unit: "visitors",
-      gen: null,
-      text: "New referrer news.ycombinator.com",
-      detail: ["news.ycombinator.com → /AS:n"],
-      target: { panel: "referrers", filter: {} },
-    },
-    {
-      id: "f4",
+      id: "probe:GET /.env",
       kind: "automation",
       figure: "212",
-      unit: "probes",
-      gen: "Scanners look for secrets and WordPress",
-      text: "New probed paths: /.env, /wp-login.php",
-      detail: ["9 addresses", "all answered 404"],
+      unit: "probes of",
+      gen: "Scanners look for secrets",
+      text: "New probed path: GET /.env",
+      detail: [],
       target: { panel: "probed", filter: {} },
     },
     {
-      id: "f5",
+      id: "trend:auto_share:up",
       kind: "automation",
-      figure: "1’244",
-      unit: "dropped",
-      gen: "A single /48 floods the collector",
-      text: "Rate-limited 1’244 events from 2001:db8:91::/48",
-      detail: ["rate-limited", "spread over 37 /64"],
-      target: { panel: "log", filter: { addr: "2001:db8:91::/48" } },
+      figure: "18.6 %",
+      unit: "unknown automated",
+      gen: "Scripts take a bigger share of the traffic",
+      text: "Unknown automated share up by 4.2 pp",
+      detail: [],
+      target: { panel: "log", filter: { class: "unknown" } },
+    },
+    {
+      id: "ref:news.ycombinator.com",
+      kind: "people",
+      figure: "749",
+      unit: "visitors from",
+      gen: null,
+      text: "New referrer: news.ycombinator.com",
+      detail: [],
+      target: { panel: "referrers", filter: {} },
     },
   ].filter(
-    (f) => feed || f.id === "f1" || f.id === "f3",
+    (f) => feed || f.id.startsWith("err:") || f.id.startsWith("ref:"),
   ) as Noteworthy["items"];
   return {
     headline: feed
@@ -294,7 +292,8 @@ function noteworthy(site: string): Noteworthy {
           text: "6 findings against the prior 7 d",
         }
       : { gen: null, text: "2 findings against the prior 7 d" },
-    as_of: "2026-11-22T12:00:00Z",
+    // The range's closed end: 7 d in Europe/Zurich.
+    as_of: "2026-11-21T23:00:00Z",
     items,
     more: feed ? 1 : 0,
   };
@@ -789,12 +788,27 @@ function visitors(q: URLSearchParams, feed: boolean): Visitors {
           : (v.requests ?? 0);
   rows.sort((a, b) => key(b) - key(a));
   const limit = Number(q.get("limit") || 7);
-  const from = Number(q.get("cursor") || 0);
+  // The backend's keyset cursor: base64url JSON of the range, the last
+  // row's sort value and key.
+  const cursorOf = (v: VisitorRow) =>
+    btoa(
+      JSON.stringify({
+        f: 1794783600000,
+        t: 1795353600000,
+        v: key(v),
+        k: v.key,
+      }),
+    )
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+  const cursor = q.get("cursor") || "";
+  const from = cursor ? rows.findIndex((v) => cursorOf(v) === cursor) + 1 : 0;
   const page = rows.slice(from, from + limit);
   return {
     rows: page,
     total: rows.length,
-    next: from + limit < rows.length ? String(from + limit) : "",
+    next: from + limit < rows.length ? cursorOf(page[page.length - 1]) : "",
   };
 }
 
