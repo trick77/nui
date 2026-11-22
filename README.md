@@ -40,7 +40,7 @@ The Go server embeds the built UI: `npm run build` in `ui/`, then in `backend/`:
 
 ```sh
 mkdir -p data && cp ../docs/sites.example.json data/sites.json
-BACKEND_DATA_DIR=./data BACKEND_AUTH_DISABLED=true go run ./cmd/server -demo 30
+BACKEND_DATA_DIR=./data BACKEND_AUTH_DISABLED=true BACKEND_REFDATA_DISABLED=true go run ./cmd/server -demo 30
 ```
 
 and open <http://localhost:8080/dashboard/>. `-demo 30` fills an empty database with 30 days of simulated traffic

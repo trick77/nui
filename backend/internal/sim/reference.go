@@ -186,6 +186,13 @@ func OpenReference(dir string) (*Reference, error) {
 	return ref, nil
 }
 
+// WorldReference reports whether dir holds the simulator's own reference data: its bots' documentation addresses
+// have no reverse DNS, so a server on it must not verify their claims by rDNS (a lookup would refute them).
+func WorldReference(dir string) bool {
+	b, err := os.ReadFile(filepath.Join(dir, crawlersFile)) //nolint:gosec // the server's own reference directory
+	return err == nil && strings.Contains(string(b), `"Examplebot"`)
+}
+
 // Stamp dates the reference files at t and loads them again: the dashboard states when its reference data was
 // updated (the files' time), and an export must not carry the wall clock.
 func (r *Reference) Stamp(t time.Time) error {

@@ -131,6 +131,11 @@ func serve(cfg app.Config, simulated *simcli.Server) error {
 	ref := refdata.New(refdata.Options{Dir: filepath.Join(cfg.DataDir, "ref")})
 	verifier := refdata.NewVerifier(nil, 3*time.Second)
 	cls := &classify.Classifier{DB: st, Sites: reg, Ref: ref, Verifier: verifier}
+	if sim.WorldReference(filepath.Join(cfg.DataDir, "ref")) {
+		// The simulator's reference data: its bots send from documentation addresses, which have no rDNS to
+		// confirm them by (a lookup would refute what the backfill classed).
+		cls.Verifier = nil
+	}
 	counters := ingest.NewCounters(nil)
 	writer := ingest.NewWriter(st, counters, 0, cls.Enrich, nil)
 	collector := &ingest.Collector{Sites: reg, Writer: writer, Counters: counters,
@@ -302,6 +307,8 @@ func seedDemo(ctx context.Context, st *store.Store, cfg app.Config, days int) er
 		}
 		defer func() { _ = os.RemoveAll(tmp) }()
 		refDir = tmp
+		slog.Warn("Demo traffic is classified with the simulator's reference data, which the refresh then replaces: " +
+			"the classifier's first pass re-decides the last two days (BACKEND_REFDATA_DISABLED=true keeps it)")
 	}
 	stats, err := simcli.Demo(ctx, st, days, refDir, slog.Default())
 	if err != nil {
