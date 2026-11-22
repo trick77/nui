@@ -82,8 +82,9 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
   empty or absent data directory, or one it wrote before (marked by `nui-sim.json`; a second history is refused,
   `-wipe` empties the directory first). Anything else is refused untouched, and so is every run with `PUBLIC_FQDN`
   set. Serve it with `server -demo 1` and `BACKEND_REFDATA_DISABLED=true`. About 25,000 events a second.
-  The largest run is scale 50: about 110,000 events a simulated day, some 5 s of backfill each, and up to 140 MB of
-  day plans in memory (a plan holds a whole day's requests).
+  The largest run is scale 50: about 110,000 events a simulated day, some 5 s of backfill each, and up to 230 MB of
+  day plans in memory (a plan holds a whole day's requests), live as long as it runs: `growth` rises up to the start
+  and keeps its level after.
 - `live -target http://127.0.0.1:8080 [-rate 50] [-speed 120] [-for 10m] [-key domain=key]` sends tracker and feed
   batches to a running server, backing off on 429 as the tracker does and retrying a batch without an answer or with
   a 5xx after a growing wait. It stops with an error when the server fails everything for 30 s or refuses a site's
