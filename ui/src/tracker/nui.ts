@@ -579,20 +579,24 @@ export function start(
   };
 
   // ---- sending
-  const fail = (retryMs: number) => {
-    failures++;
+  // paced: a 429, the collector's pace and not a failure (it charges a
+  // batch by what it stores, so a page with long URLs meets it in normal
+  // use): wait as long as it says, or the own back-off without a
+  // Retry-After, and never switch off for it.
+  const fail = (retryMs: number, paced = false) => {
     backoff = Math.min(
       LIMITS.backoffMaxMs,
       backoff ? backoff * 2 : LIMITS.backoffMs,
     );
-    if (failures >= LIMITS.failures) {
+    if (!paced && ++failures >= LIMITS.failures) {
       disabled = true;
       queue.length = 0;
       return;
     }
+    const ra = retryMs > 0 ? retryMs : 0;
     notBefore =
       now() +
-      Math.min(LIMITS.retryMaxMs, Math.max(backoff, retryMs > 0 ? retryMs : 0));
+      Math.min(LIMITS.retryMaxMs, paced && ra ? ra : Math.max(backoff, ra));
   };
 
   const requeue = (batch: Rec[]) => {
@@ -744,7 +748,7 @@ export function start(
             // no readable headers: the own back-off alone
           }
           requeue(batch);
-          fail(ra);
+          fail(ra, st === 429);
         } else {
           // 400, 413: this batch will never pass; do not resend it. The
           // tracker never builds one over a limit (see take).

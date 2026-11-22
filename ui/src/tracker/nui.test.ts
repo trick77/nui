@@ -428,7 +428,8 @@ describe("sending", () => {
     t.flush();
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(t.state().failures).toBe(1);
+    // The collector's pace, not a failure.
+    expect(t.state().failures).toBe(0);
     expect(t.state().queued).toBe(2);
     await vi.advanceTimersByTimeAsync(60_000);
     t.flush();
@@ -437,6 +438,24 @@ describe("sending", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(t.state().failures).toBe(0);
     expect(t.state().queued).toBe(0);
+  });
+
+  it("never switches itself off for the collector's pace", async () => {
+    const t = boot();
+    fetchMock.mockImplementation(() => reply(429, { "Retry-After": "1" }));
+    for (let i = 0; i < LIMITS.failures * 2; i++) {
+      t.flush();
+      await vi.advanceTimersByTimeAsync(1001);
+    }
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(
+      LIMITS.failures * 2,
+    );
+    expect(t.state().disabled).toBe(false);
+    expect(t.state().queued).toBe(2);
+    fetchMock.mockImplementation(() => reply(204));
+    await vi.advanceTimersByTimeAsync(LIMITS.flushAfterMs);
+    expect(t.state().queued).toBe(0);
+    expect(t.state().dropped).toBe(0);
   });
 
   it("caps every delay, whatever Retry-After says", async () => {
