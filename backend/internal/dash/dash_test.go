@@ -171,31 +171,46 @@ func TestSeparatorSpacing(t *testing.T) {
 	}
 }
 
-// A client's evidence id and the reading signature hold no separator: however the shown text joins browser and OS,
-// the cached readings stay found.
-func TestClientIDIgnoresSeparator(t *testing.T) {
+// A client's family names its evidence id and the reading signature, the keys of cached readings.
+func TestClientFamily(t *testing.T) {
+	// A name without the separator keeps the family it always had, byte for byte: the version cut at the first "/".
+	before := func(c string) string {
+		if i := strings.IndexByte(c, '/'); i > 0 {
+			return c[:i]
+		}
+		return c
+	}
+	for _, c := range []string{"curl/8.4.0", "CURL/8", "Googlebot/2.1", "UptimeRobot", "Go-http-client/1.1",
+		"go_http_client/2", "HeadlessChrome/120", "MJ12bot/v1.4.8", "MJ13bot", "python-requests/2.32.3",
+		"no user agent", "12345", "(weird)", "/x/y", "Chrome-macOS/1.0", "Chrome · macOS"} {
+		if got := clientFamily(c); got != before(c) {
+			t.Errorf("clientFamily(%q) = %q, was %q", c, got, before(c))
+		}
+	}
+	// A browser's parts are joined by browserJoin, not the shown separator: respacing it changes no family.
+	browser := "Chrome" + apix.Sep + "macOS"
+	if got := clientFamily(browser); got != "Chrome+macOS" {
+		t.Errorf("browser family %q", got)
+	}
+	if got := clientFamily("Samsung Internet" + apix.Sep + "Android"); got != "Samsung Internet+Android" {
+		t.Errorf("two-word browser family %q", got)
+	}
+	// Distinct names stay apart; an empty one gets a family of its own.
+	for _, pair := range [][2]string{{"MJ12bot", "MJ13bot"}, {"CURL", "curl"}, {"go_http_client", "Go-http-client"},
+		{"123", "456"}, {"Chrome-macOS/1.0", browser}, {"", "no user agent"}} {
+		a, b := clientFamily(pair[0]), clientFamily(pair[1])
+		if a == b || a == "" || b == "" {
+			t.Errorf("%q and %q: families %q and %q", pair[0], pair[1], a, b)
+		}
+	}
+	if clientFamily("") != clientFamily(" ") || clientFamily("") == "" {
+		t.Errorf("empty family %q", clientFamily(""))
+	}
+	// The reading input carries it as the client's evidence id.
 	var s Server
-	in := func(client string) (insight.ReadingInput, map[string]string) {
-		return s.readingInput(1, visitorRow{Class: "human", Client: client}, nil, trailResult{})
-	}
-	want, wantFacts := in("Chrome" + apix.Sep + "macOS")
-	if _, ok := wantFacts["client:chrome-macos"]; !ok {
-		t.Errorf("client id: %v", wantFacts)
-	}
-	for _, sep := range []string{" · ", " | ", " ", " - "} {
-		got, facts := in("Chrome" + sep + "macOS")
-		if got.Signature != want.Signature {
-			t.Errorf("%q: signature changed", sep)
-		}
-		if _, ok := facts["client:chrome-macos"]; !ok {
-			t.Errorf("%q: client id %v", sep, facts)
-		}
-	}
-	for c, id := range map[string]string{"curl/8.4.0": "curl", "python-requests/2.32.3": "python-requests",
-		"Googlebot/2.1": "googlebot", "UptimeRobot": "uptimerobot"} {
-		if got := clientFamily(c); got != id {
-			t.Errorf("clientFamily(%q) = %q, want %q", c, got, id)
-		}
+	in, facts := s.readingInput(1, visitorRow{Class: "human", Client: browser}, nil, trailResult{})
+	if _, ok := facts["client:Chrome+macOS"]; !ok || in.Signature == "" {
+		t.Errorf("client id %v", facts)
 	}
 }
 
