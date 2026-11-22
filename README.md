@@ -6,6 +6,8 @@ Most analytics tools are a browser script, so they only ever see visitors whose 
 feed from your backend and puts the two together: the people, and everything else that knocks on your door, from
 crawlers and uptime probes to scanners and scripts walking your API.
 
+![The overview: figures with trends, visitors per day against the previous period, and what the model found noteworthy](docs/img/overview.png)
+
 - **The whole picture.** A small browser script reports page views, clicks, errors and web vitals; your backend
   reports every request it serves. Together they give a 360° view of what reaches your product.
 - **Who is doing what.** Every address with its network, country and client, and the trail of what it did. Nothing
@@ -18,6 +20,10 @@ crawlers and uptime probes to scanners and scripts walking your API.
   own. If nui is down, your pages and your backend do not notice.
 - **One container.** A single image behind your reverse proxy, with its database inside and sign-in by OIDC or an
   admin token: `docker compose up -d`.
+
+![Visitors by address, each with what it does, and one opened: a script probing a login for credentials](docs/img/visitor.png)
+
+Both screenshots show simulated traffic.
 
 The name: *nui* is Hawaiian and Māori for "many", for all the data that comes in.
 
