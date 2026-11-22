@@ -57,10 +57,22 @@ func TestLoadConfig_Faults(t *testing.T) {
 		"auth off":    {"BACKEND_AUTH_DISABLED": "true", "PUBLIC_FQDN": "nui.example.com"},
 		"not a bool":  {"BACKEND_AUTH_DISABLED": "maybe"},
 		"not numeric": {"BACKEND_LLM_DAILY_CALLS": "many"},
+		"no sign-in":  {"PUBLIC_FQDN": "nui.example.com"},
+		"short token": {"BACKEND_ADMIN_TOKEN": strings.Repeat("t", MinAdminTokenBytes-1)},
+		"long token":  {"BACKEND_ADMIN_TOKEN": strings.Repeat("t", MaxAdminTokenBytes+1)},
 	} {
 		if _, err := LoadConfig(lookup(vars)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+	_, err := LoadConfig(lookup(map[string]string{"PUBLIC_FQDN": "nui.example.com"}))
+	if err == nil || !strings.Contains(err.Error(), "no sign-in is configured") {
+		t.Errorf("production without sign-in: %v", err)
+	}
+	// The admin token alone is a sign-in.
+	if cfg, err := LoadConfig(lookup(map[string]string{"PUBLIC_FQDN": "nui.example.com",
+		"BACKEND_ADMIN_TOKEN": strings.Repeat("t", MinAdminTokenBytes)})); err != nil || !cfg.TokenConfigured() {
+		t.Errorf("production with a token: %v", err)
 	}
 	if cfg, err := LoadConfig(lookup(map[string]string{"BACKEND_AUTH_DISABLED": "true"})); err != nil || !cfg.AuthDisabled {
 		t.Errorf("local auth off: %v", err)

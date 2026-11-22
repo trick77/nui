@@ -104,7 +104,7 @@ func serve(cfg app.Config) error {
 	collector := &ingest.Collector{Sites: reg, Writer: writer, Counters: counters,
 		Browser: ingest.BrowserTiers(app.TrustedHops, nil), Feed: ingest.FeedLimiter(nil), TrustedHops: app.TrustedHops}
 
-	a, err := newAuth(cfg)
+	a, err := app.NewAuth(cfg)
 	if err != nil {
 		return err
 	}
@@ -209,26 +209,6 @@ func loadSites(ctx context.Context, cfg app.Config, st *store.Store) (*sites.Reg
 		return nil, err
 	}
 	return sites.New(rows)
-}
-
-func newAuth(cfg app.Config) (*app.Auth, error) {
-	key := []byte(cfg.SessionSecret)
-	if len(key) == 0 {
-		slog.Warn("BACKEND_SESSION_SECRET is empty: sessions end with this process")
-		key = auth.RandomKey()
-	}
-	sessions, err := auth.NewSessions(auth.SessionConfig{Name: app.SessionCookie, Key: key, Secure: cfg.Secure(),
-		KeepGroup: cfg.OIDCAdminGroup})
-	if err != nil {
-		return nil, err
-	}
-	if !cfg.OIDCConfigured() && !cfg.AuthDisabled {
-		slog.Warn("OIDC is not configured: the dashboard answers 401 until it is")
-	}
-	if cfg.AuthDisabled {
-		slog.Warn("BACKEND_AUTH_DISABLED: the dashboard is open to anyone reaching this port")
-	}
-	return &app.Auth{Sessions: sessions, Group: cfg.OIDCAdminGroup, Disabled: cfg.AuthDisabled}, nil
 }
 
 // flushCounters writes the collector's counters every half minute.

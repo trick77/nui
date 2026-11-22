@@ -38,11 +38,19 @@ curl -fsSLO https://raw.githubusercontent.com/trick77/nui/master/compose.yaml
 curl -fsSL -o .env https://raw.githubusercontent.com/trick77/nui/master/.env.example
 mkdir -p data
 curl -fsSL -o data/sites.json https://raw.githubusercontent.com/trick77/nui/master/docs/sites.example.json
-# edit .env: PUBLIC_FQDN, the OIDC client, BACKEND_SESSION_SECRET
+# edit .env: PUBLIC_FQDN, the OIDC client and/or BACKEND_ADMIN_TOKEN, BACKEND_SESSION_SECRET
 # edit data/sites.json: your domains (next section)
 sudo chown -R 65532:65532 data
 docker compose pull && docker compose up -d
 ```
+
+### Sign-in
+
+The dashboard signs in with OIDC (`BACKEND_OIDC_*`), with an admin token (`BACKEND_ADMIN_TOKEN`, 32 to 2048 bytes,
+`openssl rand -hex 32`), or with either: the sign-in card offers what is configured. With `PUBLIC_FQDN` set nui
+refuses to start with neither. The token is the way in when the identity provider is down; its session is named
+`admin`. Changing the token signs everyone out (the session key derives from it). Token attempts are spaced a second
+apart per address or IPv6 /64; past a short queue they get a 429 with `Retry-After`.
 
 ### Sites
 

@@ -33,6 +33,9 @@ type Config struct {
 
 	// OIDC: all four of issuer, client id, secret and redirect URL, or none; the group is optional.
 	OIDCIssuer, OIDCClientID, OIDCClientSecret, OIDCRedirectURL, OIDCAdminGroup string
+	// AdminToken signs in with a token from the environment: beside OIDC the way in when the provider is down,
+	// without it the only one. Empty turns token sign-in off.
+	AdminToken string
 	// AuthDisabled serves the dashboard without sign-in, for local development only: refused with PUBLIC_FQDN set.
 	AuthDisabled bool
 
@@ -62,6 +65,7 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 		OIDCClientSecret: r.String("BACKEND_OIDC_CLIENT_SECRET", ""),
 		OIDCRedirectURL:  r.String("BACKEND_OIDC_REDIRECT_URL", ""),
 		OIDCAdminGroup:   r.String("BACKEND_OIDC_ADMIN_GROUP", ""),
+		AdminToken:       r.String("BACKEND_ADMIN_TOKEN", ""),
 		AuthDisabled:     r.Bool("BACKEND_AUTH_DISABLED", false),
 		RefDataDisabled:  r.Bool("BACKEND_REFDATA_DISABLED", false),
 		LLMModel:         r.String("BACKEND_LLM_MODEL", "mimo-v2.6-flash"),
@@ -97,11 +101,31 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 			}
 		}
 	}
+	switch n := len(cfg.AdminToken); {
+	case n > 0 && n < MinAdminTokenBytes:
+		r.Fail("BACKEND_ADMIN_TOKEN is shorter than %d bytes (openssl rand -hex 32)", MinAdminTokenBytes)
+	case n > MaxAdminTokenBytes:
+		// Longer would start a service whose sign-in answers every attempt 413.
+		r.Fail("BACKEND_ADMIN_TOKEN is longer than %d bytes", MaxAdminTokenBytes)
+	}
 	if cfg.AuthDisabled && cfg.PublicFQDN != "" {
 		r.Fail("BACKEND_AUTH_DISABLED is for local development: it is refused with PUBLIC_FQDN set")
 	}
+	if cfg.PublicFQDN != "" && !cfg.AuthDisabled && !cfg.OIDCConfigured() && cfg.AdminToken == "" {
+		r.Fail("no sign-in is configured: set the BACKEND_OIDC_* variables, BACKEND_ADMIN_TOKEN or both")
+	}
 	return cfg, r.Err()
 }
+
+// Bounds of BACKEND_ADMIN_TOKEN. The minimum refuses a guessable token (`openssl rand -hex 32` makes 64); the
+// maximum keeps the longest token inside the sign-in form's body cap, every byte url-encoded as %XX.
+const (
+	MinAdminTokenBytes = 32
+	MaxAdminTokenBytes = 2 << 10
+)
+
+// TokenConfigured reports whether token sign-in is on.
+func (c Config) TokenConfigured() bool { return c.AdminToken != "" }
 
 // OIDCConfigured reports whether sign-in is configured.
 func (c Config) OIDCConfigured() bool { return c.OIDCIssuer != "" }

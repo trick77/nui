@@ -64,9 +64,12 @@ func Build(rt Routes) http.Handler {
 	}
 
 	// The dashboard's API and sign-in keep the CSRF guard (kit's CrossOrigin: a cross-site POST riding the session
-	// cookie is refused).
+	// cookie is refused, the dashboard's own same-origin one passes). Methods and the token form sit outside the
+	// session guard: they are how a caller without a session gets one.
 	if rt.Auth != nil {
 		guarded := http.NewServeMux()
+		guarded.HandleFunc("GET /api/auth/methods", rt.Auth.HandleMethods)
+		guarded.HandleFunc("POST /api/auth/token", rt.Auth.HandleToken)
 		guarded.HandleFunc("GET /api/auth/login", rt.Auth.HandleLogin)
 		guarded.HandleFunc("GET /api/auth/callback", rt.Auth.HandleCallback)
 		guarded.HandleFunc("POST /api/auth/logout", rt.Auth.HandleLogout)
