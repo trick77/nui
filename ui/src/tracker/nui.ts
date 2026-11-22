@@ -15,6 +15,8 @@ type Rec = {
   t: number;
   k: string;
   n?: string;
+  // The session it belongs to: a batch carries one.
+  s: string;
   p: Props;
   // Where the event happened; sent only when it differs from the batch ctx.
   u: string;
@@ -404,12 +406,13 @@ export function start(
     }
   };
 
+  // One session per browser: the id is read back from storage for every
+  // event, so a tab follows the one another tab started.
   const session = (t: number): boolean => {
+    sid = id(STORE_SID) || sid;
     const last = Number(get(STORE_SEEN) || 0);
     let fresh = false;
     if (!sid || !last || t - last > LIMITS.sessionMs) {
-      // Events of the old session leave with the old id.
-      if (queue.length) flush(false);
       sid = randomId(win);
       put(STORE_SID, sid);
       fresh = true;
@@ -456,6 +459,7 @@ export function start(
     const r: Rec = {
       t,
       k,
+      s: sid,
       p: fit(p),
       u: at ? at[0] : clipURL(loc.href),
       ti: clip(at ? at[1] : doc.title, LIMITS.str),
@@ -498,19 +502,24 @@ export function start(
     settle();
     const c = ctx();
     const url = c.url;
+    const s = queue[0].s;
     const head =
       safeJSON({
         v: 1,
         site,
         vid,
-        sid,
+        sid: s,
         sent: now(),
         ctx: c,
       }).slice(0, -1) + ',"events":[';
     let size = utf8Len(head) + 2;
     const parts: string[] = [];
     const batch: Rec[] = [];
-    while (queue.length && batch.length < LIMITS.batchEvents) {
+    while (
+      queue.length &&
+      batch.length < LIMITS.batchEvents &&
+      queue[0].s === s
+    ) {
       const r = queue[0];
       const e: Props = { t: r.t, k: r.k };
       if (r.n != null) e.n = r.n;

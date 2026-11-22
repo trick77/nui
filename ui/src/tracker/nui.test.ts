@@ -159,6 +159,26 @@ describe("sending", () => {
     ).toEqual(["session_start", "custom"]);
   });
 
+  it("follows the session another tab started", async () => {
+    const t = boot();
+    const first = t.state().sid;
+    t.event("before");
+    // Another tab of the browser idled out first and started a new one.
+    const other = "ab".repeat(16);
+    localStorage.setItem("nui.sid", other);
+    localStorage.setItem("nui.seen", String(Date.now()));
+    t.event("after");
+    expect(t.state().sid).toBe(other);
+    t.flush(true);
+    await vi.advanceTimersByTimeAsync(0);
+    // Events leave with the session they were recorded in.
+    const sent = bodies().map((b) => [b.sid, b.events.map((e) => e.n ?? e.k)]);
+    expect(sent).toEqual([
+      [first, ["session_start", "page_view", "before"]],
+      [other, ["after"]],
+    ]);
+  });
+
   it("caps events per minute", async () => {
     const t = boot();
     fetchMock.mockImplementation(() => new Promise(() => {}));
