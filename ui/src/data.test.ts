@@ -204,6 +204,17 @@ describe("api client", () => {
       status: 502,
       message: "Bad Gateway",
     });
+    // A panic's 500 comes from kit's Recover as {"error"}.
+    setFetcher(
+      async () =>
+        new Response(JSON.stringify({ error: "internal server error" }), {
+          status: 500,
+        }),
+    );
+    await expect(api.sites()).rejects.toMatchObject({
+      status: 500,
+      message: "internal server error",
+    });
   });
 
   it("tells the app when the session is gone", async () => {

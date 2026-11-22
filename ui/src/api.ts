@@ -277,8 +277,11 @@ async function getJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
   if (!res.ok) {
     let detail = res.statusText || `HTTP ${res.status}`;
     try {
-      const body = (await res.json()) as { detail?: unknown };
+      // {"detail"} from the API; a panic's 500 from kit's Recover says
+      // {"error"}.
+      const body = (await res.json()) as { detail?: unknown; error?: unknown };
       if (typeof body.detail === "string") detail = body.detail;
+      else if (typeof body.error === "string") detail = body.error;
     } catch {
       // not JSON: keep the status text (an auth proxy's page, say)
     }
