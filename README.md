@@ -53,8 +53,8 @@ only: never together, never with `PUBLIC_FQDN` set.
 `make sim` runs the UI against a simulated world: the real server on a temporary data directory, sign-in off, a
 seeded history backfilled through the real collector and classifier, then advancing live each time the dashboard
 asks; Vite's dev server starts once that server answers on its port (a port in use stops `make sim` with a message)
-and proxies to it, and Ctrl-C stops both. `make sim-server` is the server alone, for curl or a
-second UI. The knobs, each falling back to its default with a warning when it does not parse:
+and proxies to it, and Ctrl-C stops both. `make sim-server` is the server alone, for curl or a second UI. The
+knobs, each falling back to its default with a warning when it does not parse:
 
 | Knob | Default | |
 |---|---|---|
@@ -86,13 +86,12 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
 - `live -target http://127.0.0.1:8080 [-rate 50] [-speed 60] [-for 10m] [-key domain=key]` sends tracker and feed
   batches to a running server, backing off on 429 as the tracker does and retrying a batch without an answer or with
   a 5xx after a growing wait. It stops with an error when the server fails everything for 30 s or refuses a site's
-  batches for good (401: a wrong `-key`, 403: a site its sites file lacks). `-rate` sets the scale for that many events a
-  second, averaged over a simulated week (the day's rhythm and the weekend vary it; at speed 1 at most about 1, raise
-  `-speed` for more). Each browser's address goes in
-  `X-Forwarded-For`, which nui reads with one trusted hop: target the server itself, `server -sim` (it sets
-  `BACKEND_TRUSTED_HOPS=1` whatever the environment says) or one left at the default; at 0 every visitor is the
-  loopback. Without `-key` the feeds use the simulator's own keys, which a `make sim-server` of the same seed has
-  configured.
+  batches for good (401: a wrong `-key`, 403: a site its sites file lacks). `-rate` sets the scale for that many
+  events a second, averaged over a simulated week (the day's rhythm and the weekend vary it; at speed 1 at most about
+  1, raise `-speed` for more). Each browser's address goes in `X-Forwarded-For`, which nui reads with one trusted
+  hop: target the server itself, `server -sim` (it sets `BACKEND_TRUSTED_HOPS=1` whatever the environment says) or
+  one left at the default; at 0 every visitor is the loopback. Without `-key` the feeds use the simulator's own keys,
+  which a `make sim-server` of the same seed has configured.
 - `export -out DIR` writes the dashboard API's answers over a seeded history ending at the UI fixtures' "now", one
   JSON file per request the UI's fixture mode makes, named in `DIR/index.json`.
 
@@ -101,9 +100,9 @@ simulator brings its own (made-up networks, their countries, three made-up bots)
 bot list loaded, its crawlers and probe take a real service's ranges from it. Its reference data is marked
 (`ref/nui-sim-ref.json`) and only its modes (`-sim`, `-demo`) use it, without rDNS verification of the bots; a
 normal start discards it and fetches the real data, always verifies, warns loudly in a directory the simulator
-wrote and refuses one with `PUBLIC_FQDN` set. In a Go test,
-`sim.History(ctx, st, sim.HistoryOptions{...})` backfills a seeded history; its world's `Expectations()` are the
-scenarios' checks, which `simcli.Check` runs against the dashboard.
+wrote and refuses one with `PUBLIC_FQDN` set. In a Go test, `sim.History(ctx, st, sim.HistoryOptions{...})`
+backfills a seeded history; its world's `Expectations()` are the scenarios' checks, which `simcli.Check` runs
+against the dashboard.
 
 ## Running it
 
