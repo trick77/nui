@@ -521,6 +521,8 @@ export function start(
   // Before the first page view there is nothing to close: the view itself
   // starts the session.
   let begun = false;
+  // The session of the document's first page view.
+  let arrival = "";
   let resuming = false;
   const resume = () => {
     if (!begun || resuming || disabled || pre()) return;
@@ -625,6 +627,9 @@ export function start(
     const c = ctx();
     const url = c.url;
     const s = queue[0].s;
+    // The referrer brought the visitor to the document's first session; a
+    // later one is a return, not an arrival from there.
+    if (s !== arrival) delete c.ref;
     const head =
       safeJSON({
         v: 1,
@@ -1251,6 +1256,7 @@ export function start(
     activeSince = liveFrom = 0;
     tick();
     pageView(true);
+    arrival = sid;
     begun = true;
     const n = navEntry();
     if (n && n.responseStart > 0) vital("TTFB", n.responseStart, true);

@@ -280,6 +280,48 @@ describe("sending", () => {
       }
     });
 
+    it("sends the document's referrer with its first session only", async () => {
+      const from = "https://search.example.org/?q=nui";
+      Object.defineProperty(document, "referrer", {
+        configurable: true,
+        value: from,
+      });
+      let t: Tracker;
+      try {
+        // A return: input, or an event of the page's own.
+        for (const later of [
+          () => document.dispatchEvent(new Event("pointerdown")),
+          () => t.event("later"),
+        ]) {
+          tracker?.stop();
+          localStorage.clear();
+          fetchMock.mockClear();
+          vi.spyOn(document, "hasFocus").mockReturnValue(false);
+          t = boot();
+          const first = t.state().sid;
+          t.flush();
+          await vi.advanceTimersByTimeAsync(0);
+          vi.advanceTimersByTime(40 * 60 * 1000);
+          later();
+          history.pushState(null, "", "/next");
+          show("hidden");
+          await vi.advanceTimersByTimeAsync(0);
+          show("visible");
+          const sent = bodies();
+          expect(sent[0].sid).toBe(first);
+          expect(sent[0].ctx.ref).toBe(from);
+          const back = sent.filter((b) => b.sid !== first);
+          expect(back.flatMap((b) => b.events.map((e) => e.k))).toEqual(
+            expect.arrayContaining(["session_start", "page_view"]),
+          );
+          for (const b of back) expect(b.ctx.ref).toBeUndefined();
+          history.replaceState(null, "", "/");
+        }
+      } finally {
+        delete (document as { referrer?: string }).referrer;
+      }
+    });
+
     it("never opens a session for a closing engagement or vital", async () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       const t = boot();
