@@ -77,6 +77,17 @@ describe("format", () => {
     expect(when("2026-11-20T08:00:00Z", new Date(t), "UTC")).toBe(
       "20.11. 08:00",
     );
+    // The same day a year earlier is not today, and says its year.
+    expect(when("2025-11-22T13:19:42Z", new Date(t), "UTC")).toBe(
+      "22.11.2025 13:19",
+    );
+    // Today in UTC, yesterday in the viewer's zone.
+    expect(
+      when("2026-11-22T02:00:00Z", new Date(t), "America/Los_Angeles"),
+    ).toBe("21.11. 18:00");
+    expect(when("2026-11-22T12:00:00Z", new Date(t), "Asia/Tokyo")).toBe(
+      "21:00:00",
+    );
     expect(date(null)).toBe("–");
     expect(when(null)).toBe("–");
     expect(countryName("CH")).toBe("Switzerland");

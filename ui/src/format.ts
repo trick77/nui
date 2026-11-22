@@ -89,15 +89,19 @@ export function clockSec(iso: string | null | undefined, tz?: string): string {
 }
 
 // A moment relative to now as the log and the trail show it: the time
-// today, the date and time before.
+// today, the date and time before, with the year when it is another one.
+// Days and years are the viewer's (tz).
 export function when(
   iso: string | null | undefined,
   now = new Date(),
   tz?: string,
 ): string {
   if (!iso) return "–";
-  const same = dayMonth(iso, tz) === dayMonth(now.toISOString(), tz);
-  return same ? clockSec(iso, tz) : `${dayMonth(iso, tz)} ${clock(iso, tz)}`;
+  const d = date(iso, tz);
+  const today = date(now.toISOString(), tz);
+  if (d === today) return clockSec(iso, tz);
+  const year = d.slice(-4) === today.slice(-4);
+  return `${year ? dayMonth(iso, tz) : d} ${clock(iso, tz)}`;
 }
 
 export function dateTime(iso: string | null | undefined, tz?: string): string {
