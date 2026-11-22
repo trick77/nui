@@ -1,0 +1,277 @@
+import { useRef, useState } from "react";
+import { api, type Log, type LogFilter, type LogRow } from "./api";
+import { num, when } from "./format";
+import { useApi, useMore } from "./hooks";
+import { scopeKey } from "./lists";
+import {
+  CardHead,
+  ClassPill,
+  Empty,
+  ErrorBox,
+  Panel,
+  SectionHead,
+  Skeleton,
+  useDash,
+} from "./ui";
+
+const CLASS_OPTS: [string, string][] = [
+  ["", "Class: any"],
+  ["human", "Humans"],
+  ["bot", "Known bots"],
+  ["monitor", "Uptime probes"],
+  ["unknown", "Unknown automated"],
+];
+const BROWSER_KINDS = [
+  "page_view",
+  "session_start",
+  "engagement",
+  "outbound_click",
+  "download",
+  "form",
+  "search",
+  "js_error",
+  "resource_error",
+  "vital",
+  "custom",
+];
+const STATUS_OPTS: [string, string][] = [
+  ["", "Status: any"],
+  ["2xx", "2xx"],
+  ["3xx", "3xx"],
+  ["4xx", "4xx"],
+  ["5xx", "5xx"],
+];
+
+// A text filter applied after a short pause; follows the URL when a click
+// elsewhere sets it.
+function TextFilter({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [seen, setSeen] = useState(value);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  if (value !== seen) {
+    setSeen(value);
+    setDraft(value);
+  }
+  return (
+    <input
+      className="field w-[230px]"
+      placeholder={label}
+      aria-label={label}
+      value={draft}
+      onChange={(e) => {
+        const v = e.target.value;
+        setDraft(v);
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(() => onChange(v.trim()), 300);
+      }}
+    />
+  );
+}
+
+function Pick({
+  label,
+  value,
+  opts,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  opts: [string, string][];
+  onChange: (v: string) => void;
+}) {
+  return (
+    <select
+      className="select !py-[5px] !text-[13px]"
+      aria-label={label}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {opts.map(([v, l]) => (
+        <option key={v} value={v}>
+          {l}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// Single events, newest first, filtered; domain and range from the filter
+// bar, keyset pagination backwards.
+export function LogPage({
+  filter,
+  onFilter,
+}: {
+  filter: LogFilter;
+  onFilter: (f: LogFilter) => void;
+}) {
+  const { scope, feed, both } = useDash();
+  const { site, range } = scope;
+  const key = scopeKey("log", { site, range, filter });
+  const page = useApi<Log>(key, (s) => api.log(scope, filter, undefined, s));
+  const more = useMore<LogRow>(key);
+  const rows = [...(page.data?.rows ?? []), ...more.items];
+  const next = more.next ?? page.data?.next ?? "";
+  const set = (k: keyof LogFilter, v: string) => {
+    const f = { ...filter };
+    if (v) f[k] = v;
+    else delete f[k];
+    onFilter(f);
+  };
+  const kinds: [string, string][] = [
+    ["", "Kind: any"],
+    ...(feed ? [["request", "request"] as [string, string]] : []),
+    ...BROWSER_KINDS.map((k): [string, string] => [k, k]),
+  ];
+  return (
+    <>
+      <SectionHead
+        id="log"
+        title="Log"
+        lead="Single events, newest first. A busy site fills this in seconds, so it is meant to be filtered."
+        sources={["browser", "server"]}
+      />
+      <Panel label="Log" className="card">
+        <CardHead title="Events">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <TextFilter
+              label="Address or /64"
+              value={filter.addr ?? ""}
+              onChange={(v) => set("addr", v)}
+            />
+            <TextFilter
+              label="Path or event name"
+              value={filter.path ?? ""}
+              onChange={(v) => set("path", v)}
+            />
+            <Pick
+              label="Class"
+              value={filter.class ?? ""}
+              opts={CLASS_OPTS}
+              onChange={(v) => set("class", v)}
+            />
+            <Pick
+              label="Kind"
+              value={filter.kind ?? ""}
+              opts={kinds}
+              onChange={(v) => set("kind", v)}
+            />
+            {feed && (
+              <Pick
+                label="Status"
+                value={filter.status ?? ""}
+                opts={STATUS_OPTS}
+                onChange={(v) => set("status", v)}
+              />
+            )}
+            {Object.keys(filter).length > 0 && (
+              <button
+                type="button"
+                className="link"
+                onClick={() => onFilter({})}
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+        </CardHead>
+        {page.error ? (
+          <ErrorBox error={page.error} />
+        ) : !page.data ? (
+          <Skeleton h={320} label="Loading the log" />
+        ) : !rows.length ? (
+          <Empty>
+            {Object.keys(filter).length
+              ? "No event in this range matches the filter."
+              : "No events in this range yet."}
+          </Empty>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="t">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Address</th>
+                  <th>Class</th>
+                  <th>Kind</th>
+                  <th>What</th>
+                  <th>Client</th>
+                  {both && <th>Source</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i}>
+                    <td className="font-mono text-[12.5px] whitespace-nowrap">
+                      {when(r.t)}
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="link font-mono !text-[12.5px] !text-ink"
+                        title="Only this address"
+                        onClick={() => set("addr", r.addr)}
+                      >
+                        {r.addr}
+                      </button>
+                    </td>
+                    <td>
+                      <ClassPill cls={r.class} />
+                    </td>
+                    <td className="font-mono text-[11.5px] text-ink-dim">
+                      {r.kind}
+                    </td>
+                    <td className="font-mono text-[12.5px] break-all">
+                      {r.what}
+                    </td>
+                    <td className="text-[12px] text-muted">{r.client}</td>
+                    {both && (
+                      <td>
+                        <span
+                          className={`src ${r.source === "server" ? "srv" : ""}`}
+                        >
+                          {r.source}
+                        </span>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="mt-2.5 flex flex-wrap items-center gap-4 border-t border-border-soft px-2.5 pt-2.5 text-[12.5px] text-muted">
+          <span className="mr-auto">
+            {page.data
+              ? `${num(rows.length)} of ${num(page.data.total)} events in this range`
+              : ""}
+          </span>
+          {next && (
+            <button
+              type="button"
+              className="link"
+              disabled={more.busy}
+              onClick={() =>
+                more.load(() =>
+                  api
+                    .log(scope, filter, next)
+                    .then((p) => ({ items: p.rows, next: p.next })),
+                )
+              }
+            >
+              {more.busy ? "Loading…" : "Load earlier →"}
+            </button>
+          )}
+        </div>
+        {more.error && <ErrorBox error={more.error} />}
+      </Panel>
+    </>
+  );
+}

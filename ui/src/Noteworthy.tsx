@@ -1,0 +1,105 @@
+import { api, type FindingKind, type Noteworthy as NW } from "./api";
+import { dateTime, num } from "./format";
+import { useApi } from "./hooks";
+import { scopeKey } from "./lists";
+import {
+  CardHead,
+  Empty,
+  ErrorBox,
+  GenText,
+  Panel,
+  Skeleton,
+  Tip,
+  useDash,
+  useTip,
+} from "./ui";
+
+const KIND: Record<FindingKind, { label: string; color: string }> = {
+  problem: { label: "problem", color: "var(--color-danger-ink)" },
+  automation: { label: "automation", color: "var(--color-s4)" },
+  people: { label: "people", color: "var(--color-s1)" },
+};
+
+// The briefing: one headline, at most five one-line findings. The figure
+// is computed, the statement the model's (✦) or the computed text; the
+// whole line jumps to where the finding leads, the detail is on hover.
+export function Noteworthy() {
+  const { scope, goPanel } = useDash();
+  const { site, range, cmp } = scope;
+  const nw = useApi<NW>(scopeKey("noteworthy", { site, range, cmp }), (s) =>
+    api.noteworthy(scope, s),
+  );
+  const { tip, show, hide } = useTip();
+  return (
+    <Panel id="noteworthy" label="Noteworthy" className="card">
+      <CardHead
+        title="Noteworthy"
+        right={
+          <div className="flex gap-3.5 text-[12px] text-muted">
+            {Object.values(KIND).map((k) => (
+              <span key={k.label}>
+                <i
+                  className="mr-1.5 inline-block h-[11px] w-[3px] rounded-[2px] align-[-1px]"
+                  style={{ background: k.color }}
+                />
+                {k.label}
+              </span>
+            ))}
+          </div>
+        }
+      />
+      {nw.error ? (
+        <ErrorBox error={nw.error} />
+      ) : !nw.data ? (
+        <Skeleton h={260} label="Loading the briefing" />
+      ) : (
+        <>
+          <p className="brief">
+            <GenText gen={nw.data.headline.gen} text={nw.data.headline.text} />
+          </p>
+          {nw.data.items.length === 0 ? (
+            <Empty>Nothing stands out in this range.</Empty>
+          ) : (
+            <ul className="nw">
+              {nw.data.items.slice(0, 5).map((f) => (
+                <li key={f.id}>
+                  <button
+                    type="button"
+                    style={{ ["--c" as string]: KIND[f.kind]?.color }}
+                    aria-label={`${f.figure} ${f.unit}: ${f.gen ?? f.text}`}
+                    onClick={() => {
+                      hide();
+                      goPanel(f.target.panel, f.target.filter);
+                    }}
+                    onMouseMove={(e) =>
+                      show(
+                        e,
+                        f.gen ? f.text : `${f.figure} ${f.unit}`,
+                        f.detail.map((d) => [d, ""] as [string, string]),
+                      )
+                    }
+                    onMouseLeave={hide}
+                  >
+                    <b>{f.figure}</b>
+                    <small>{f.unit}</small>
+                    <span className="say">
+                      <GenText gen={f.gen} text={f.text} />
+                    </span>
+                    <em>→</em>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-2.5 flex gap-4 px-1 text-[12px] text-muted">
+            {nw.data.more > 0 && <span>{num(nw.data.more)} more</span>}
+            {nw.data.as_of && (
+              <span className="ml-auto">as of {dateTime(nw.data.as_of)}</span>
+            )}
+          </div>
+        </>
+      )}
+      <Tip tip={tip} />
+    </Panel>
+  );
+}
