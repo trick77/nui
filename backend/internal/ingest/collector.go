@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/trick77/ship/kit/httpx"
 	"github.com/trick77/ship/kit/ratelimit"
@@ -475,14 +476,12 @@ func (c *Collector) HandleFeed(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusRequestEntityTooLarge, "too many events")
 		return
 	}
-	evs, err := c.feedEvents(site, b.Events)
-	if err != nil {
-		if errors.Is(err, errTooLarge) {
-			fail(http.StatusRequestEntityTooLarge, "a field is over its limit")
-		} else {
-			fail(http.StatusBadRequest, "malformed event: "+err.Error())
-		}
-		return
+	// One event's content never refuses the batch: the sender is a trusted backend, but the fields are its public
+	// clients' (a crafted method or user agent would otherwise blind the feed). Unusable events are dropped and
+	// counted as rejected, the rest is taken.
+	evs, dropped := c.feedEvents(site, b.Events)
+	if dropped > 0 {
+		c.count(site.ID, func(s *store.IngestStat) { s.Rejected += int64(dropped) })
 	}
 	if ok, wait := c.Feed.Take(strconv.FormatInt(site.ID, 10), float64(len(evs)), 0); !ok {
 		c.count(site.ID, func(s *store.IngestStat) { s.RateLimited += int64(len(evs)) })
@@ -518,25 +517,33 @@ type feedEvent struct {
 	Account string `json:"account"`
 }
 
-func (c *Collector) feedEvents(site *sites.Site, in []feedEvent) ([]store.Event, error) {
+// Per-field limits of a feed event in bytes (README, "Server feed"): longer values are clipped, never refused.
+const (
+	feedMethod  = 16
+	feedRoute   = 200
+	feedSF      = 32
+	feedAccount = 128
+)
+
+// feedEvents turns a feed batch into rows: strings clipped to their limits, events without a usable address or
+// with impossible numbers dropped (the count is returned).
+func (c *Collector) feedEvents(site *sites.Site, in []feedEvent) ([]store.Event, int) {
 	now := c.now().UnixMilli()
 	out := make([]store.Event, 0, len(in))
+	dropped := 0
 	for _, e := range in {
 		for _, f := range []struct {
-			v     string
+			v     *string
 			limit int
-		}{{e.UA, maxString}, {e.Method, 16}, {e.Path, maxURL}, {e.Route, 200}, {e.Ref, maxURL}, {e.Lang, maxString},
-			{e.SFSite, 32}, {e.SFMode, 32}, {e.SFDest, 32}, {e.ChUA, maxString}, {e.Account, 128}} {
-			if err := checkString(f.v, f.limit); err != nil {
-				return nil, err
-			}
+		}{{&e.UA, maxString}, {&e.Method, feedMethod}, {&e.Path, maxURL}, {&e.Route, feedRoute}, {&e.Ref, maxURL},
+			{&e.Lang, maxString}, {&e.SFSite, feedSF}, {&e.SFMode, feedSF}, {&e.SFDest, feedSF},
+			{&e.ChUA, maxString}, {&e.Account, feedAccount}} {
+			*f.v = truncate(*f.v, f.limit)
 		}
 		addr, err := netip.ParseAddr(e.IP)
-		if err != nil {
-			return nil, errors.New("ip")
-		}
-		if e.Status < 0 || e.Status > 999 || e.DurMS < 0 || e.Bytes < 0 {
-			return nil, errors.New("status, dur_ms or bytes")
+		if err != nil || e.Status < 0 || e.Status > 999 || e.DurMS < 0 || e.Bytes < 0 {
+			dropped++
+			continue
 		}
 		ts := e.T
 		// The backend's clock dates its own records; one far off is the receive time instead.
@@ -574,7 +581,7 @@ func (c *Collector) feedEvents(site *sites.Site, in []feedEvent) ([]store.Event,
 			DurMS: e.DurMS, Account: e.Account, Props: string(pj),
 		})
 	}
-	return out, nil
+	return out, dropped
 }
 
 // anonVisitor is the visitor id of a client without the script's own: address key and user agent.
@@ -602,9 +609,13 @@ func stripQuery(raw string) string {
 	return raw
 }
 
+// truncate cuts s to at most n bytes on a rune boundary: a clipped string stays valid UTF-8.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n]
 }

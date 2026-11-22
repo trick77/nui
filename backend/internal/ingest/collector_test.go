@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/trick77/nui/backend/internal/sites"
 	"github.com/trick77/nui/backend/internal/store"
@@ -379,6 +380,74 @@ func TestFeed(t *testing.T) {
 	}
 }
 
+// One crafted request of the feeding product's public clients must not blind the feed: over-long fields are clipped
+// on a rune boundary, unusable events dropped and counted, the rest of the batch stored.
+func TestFeed_PoisonedBatch(t *testing.T) {
+	r := newRig(t, 0, true)
+	site := r.siteID(domain)
+	good := `{"t":%d,"ip":"192.0.2.10","ua":"Mozilla/5.0","method":"GET","path":"/","route":"GET /","status":200}`
+	events := []string{
+		good, good,
+		// A method of 40 bytes, a 60-character Sec-Fetch-Site, a route of 300.
+		`{"ip":"192.0.2.11","method":"` + strings.Repeat("M", 40) + `","sf_site":"` + strings.Repeat("s", 60) +
+			`","route":"GET /` + strings.Repeat("r", 300) + `","status":200}`,
+		// A user agent of invalid UTF-8: every byte decodes to U+FFFD, three bytes each.
+		`{"ip":"192.0.2.12","ua":"` + strings.Repeat("\xff", 400) + `","status":200}`,
+		// Two-byte runes across the 512-byte cut, and a 3000-byte path.
+		`{"ip":"192.0.2.13","ua":"` + strings.Repeat("é", 300) + `","path":"/` + strings.Repeat("p", 3000) + `"}`,
+		// Unusable: no address, a bad address, an impossible status, a negative duration.
+		`{"ua":"x"}`, `{"ip":"not-an-ip"}`, `{"ip":"192.0.2.14","status":1000}`, `{"ip":"192.0.2.15","dur_ms":-1}`,
+	}
+	for i := range events {
+		events[i] = strings.ReplaceAll(events[i], "%d", fmt.Sprint(time.Now().UnixMilli()))
+	}
+	body := `{"v":1,"site":"` + domain + `","events":[` + strings.Join(events, ",") + `]}`
+	if w := r.feed(body, feedKey); w.Code != http.StatusNoContent {
+		t.Fatalf("poisoned batch: %d %s", w.Code, w.Body)
+	}
+	waitEvents(t, r.st, 5)
+	rows, err := r.st.DB.Query(`SELECT ip, method, ua, path, template, props FROM event ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	n := 0
+	for rows.Next() {
+		var ip, method, ua, path, tmpl, props string
+		if err := rows.Scan(&ip, &method, &ua, &path, &tmpl, &props); err != nil {
+			t.Fatal(err)
+		}
+		n++
+		if len(method) > feedMethod || len(ua) > maxString || len(path) > maxURL+1 || !utf8.ValidString(ua) {
+			t.Errorf("%s: method %d, ua %d (valid %v), path %d bytes", ip, len(method), len(ua), utf8.ValidString(ua),
+				len(path))
+		}
+		var p map[string]any
+		if err := json.Unmarshal([]byte(props), &p); err != nil {
+			t.Errorf("%s: props %q", ip, props)
+		}
+		if s, _ := p["sf_site"].(string); len(s) > feedSF {
+			t.Errorf("%s: sf_site %d bytes", ip, len(s))
+		}
+		switch ip {
+		case "192.0.2.12":
+			if ua != strings.Repeat("�", maxString/3) {
+				t.Errorf("invalid UTF-8 ua clipped to %q", ua)
+			}
+		case "192.0.2.13":
+			if ua != strings.Repeat("é", maxString/2) {
+				t.Errorf("two-byte ua clipped to %d bytes", len(ua))
+			}
+		}
+	}
+	if n != 5 {
+		t.Errorf("stored %d events, want 5", n)
+	}
+	if s := r.stat(t, site); s.Accepted != 5 || s.Rejected != 4 {
+		t.Errorf("stat %+v, want 5 accepted and 4 rejected", s)
+	}
+}
+
 func TestFeed_Hostile(t *testing.T) {
 	r := newRig(t, 0, true)
 	site := r.siteID(domain)
@@ -394,9 +463,6 @@ func TestFeed_Hostile(t *testing.T) {
 		{"not json", `{"v":`, feedKey, http.StatusBadRequest},
 		{"oversized", big, feedKey, http.StatusRequestEntityTooLarge},
 		{"too many", feedBody(domain, MaxFeedEvents+1, `{"t":1,"ip":"192.0.2.1"}`), feedKey, http.StatusRequestEntityTooLarge},
-		{"bad ip", feedBody(domain, 1, `{"ip":"not-an-ip"}`), feedKey, http.StatusBadRequest},
-		{"bad status", feedBody(domain, 1, `{"ip":"192.0.2.1","status":1000}`), feedKey, http.StatusBadRequest},
-		{"long route", feedBody(domain, 1, `{"ip":"192.0.2.1","route":"`+strings.Repeat("r", 300)+`"}`), feedKey, http.StatusRequestEntityTooLarge},
 	} {
 		if w := r.feed(tt.body, tt.key); w.Code != tt.want {
 			t.Errorf("%s: %d, want %d (%s)", tt.name, w.Code, tt.want, w.Body)
@@ -407,7 +473,7 @@ func TestFeed_Hostile(t *testing.T) {
 			}
 		}
 	}
-	if s := r.stat(t, site); s.Accepted != 0 || s.Rejected < 7 {
+	if s := r.stat(t, site); s.Accepted != 0 || s.Rejected != 5 {
 		t.Errorf("stat %+v", s)
 	}
 	// Flooding one key: the burst passes, then 429 with Retry-After.

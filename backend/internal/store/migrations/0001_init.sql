@@ -49,7 +49,8 @@ CREATE INDEX event_site_actor ON event (site_id, ip_key, ts);
 
 -- Collector counters per site and hour (unix hour). site_id 0 holds what arrived without a site the collector
 -- could trust (no Origin, unknown domain). accepted, rate_limited and dropped count events; rejected and
--- unknown_domain count requests (a refused body is never parsed into events). accepted_server is the part of
+-- unknown_domain count requests (a refused body is never parsed into events), rejected also the feed events dropped
+-- from an accepted batch (no usable address, impossible numbers). accepted_server is the part of
 -- accepted that came through the feed: when a source last delivered, without scanning events.
 CREATE TABLE ingest_stat (
     site_id         INTEGER NOT NULL,

@@ -60,6 +60,26 @@ docker compose run --rm nui -new-feed-key
 The key goes to the product's feed emitter (`Authorization: Bearer <key>` on `POST /api/feed`), the hash into
 `sites.json`.
 
+### Server feed
+
+`POST /api/feed` takes `{"v": 1, "site": "<domain>", "events": [...]}` as JSON, at most 256 KiB and 500 events per
+batch, rate-limited per key. The batch as a whole is refused only for bad JSON (400), a wrong key (401), another
+site's name (400), its size or event count (413) or the rate (429). One event's content never refuses the batch:
+strings over their limit are clipped (on a character boundary), and an event without a parseable `ip` or with an
+impossible `status` (outside 0-999), `dur_ms` or `bytes` (negative) is dropped and counted as rejected in the
+dashboard's footer, the rest is stored.
+
+| Field | Limit (bytes) |
+|---|---|
+| `method` | 16 |
+| `sf_site`, `sf_mode`, `sf_dest` | 32 |
+| `account` | 128 |
+| `route` | 200 |
+| `ua`, `lang`, `ch_ua` | 512 |
+| `path`, `ref` | 2048 (query and fragment dropped) |
+
+Send only these fields, never raw request headers: they can carry credentials.
+
 On a page, include the script:
 
 ```html
