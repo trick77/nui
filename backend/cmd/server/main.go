@@ -97,7 +97,8 @@ func serve(cfg app.Config) error {
 	}
 
 	ref := refdata.New(refdata.Options{Dir: filepath.Join(cfg.DataDir, "ref")})
-	cls := &classify.Classifier{DB: st, Sites: reg, Ref: ref, Verifier: refdata.NewVerifier(nil, 3*time.Second)}
+	verifier := refdata.NewVerifier(nil, 3*time.Second)
+	cls := &classify.Classifier{DB: st, Sites: reg, Ref: ref, Verifier: verifier}
 	counters := ingest.NewCounters(nil)
 	writer := ingest.NewWriter(st, counters, 0, cls.Enrich, nil)
 	collector := &ingest.Collector{Sites: reg, Writer: writer, Counters: counters,
@@ -155,6 +156,7 @@ func serve(cfg app.Config) error {
 		}
 	})
 	start(model.Run)
+	start(verifier.Run)
 	start(func(c context.Context) {
 		st.RunRetention(c, store.RetentionOptions{Months: cfg.RetentionMonths, MaxBytes: int64(cfg.MaxDBMB) << 20})
 	})

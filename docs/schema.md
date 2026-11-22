@@ -35,7 +35,8 @@ Checks:
 
 Go types:
 
-- `classify.actorDay` (internal/classify): actorDay is one actor's day as the pass weighs it, sums over its events.
+- `classify.actorDay` (internal/classify): actorDay is one actor's day as the pass weighs it: its address, network and its most frequent user agents.
+- `classify.uaDay` (internal/classify): uaDay is one user agent's part of an actor's day, sums over its events: the pass weighs every client of a shared address on its own.
 - `dash.actor` (internal/dash): actor is one address key's events summed over a range.
 - `store.Event` (internal/store): Event is one row the batch writer inserts: a browser event or a server request.
 

@@ -140,7 +140,8 @@ func (s *Store) ActorClasses(ctx context.Context, siteID, day int64) (map[string
 }
 
 // SetActorClass stores an actor-day's class and stamps it on that actor-day's events, in one short transaction.
-func (s *Store) SetActorClass(ctx context.Context, a ActorClass) error {
+// byUA are the user agents whose events get a class of their own (a curl request behind an address of people).
+func (s *Store) SetActorClass(ctx context.Context, a ActorClass, byUA map[string]string) error {
 	reasons, err := json.Marshal(nonNil(a.Reasons))
 	if err != nil {
 		return err
@@ -162,6 +163,12 @@ func (s *Store) SetActorClass(ctx context.Context, a ActorClass) error {
 		`UPDATE event SET cls = ? WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ? AND cls != ?`,
 		ClassCode(a.Class), a.SiteID, a.IPKey, from, from+dayMS, ClassCode(a.Class)); err != nil {
 		return err
+	}
+	for ua, class := range byUA {
+		if _, err := tx.ExecContext(ctx, `UPDATE event SET cls = ? WHERE site_id = ? AND ip_key = ? AND ts >= ?
+			AND ts < ? AND ua = ?`, ClassCode(class), a.SiteID, a.IPKey, from, from+dayMS, ua); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

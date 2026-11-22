@@ -146,6 +146,16 @@ func TestPass(t *testing.T) {
 	if err := r.c.Pass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	// The rDNS checks are pending after the first pass (the pass never waits for DNS); once answered, the next pass
+	// decides those actors again without new events.
+	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	if got := classes["157.55.39.1"]; got.Class != "unknown" || got.Reasons[0] != "claims Bingbot, rDNS check pending" {
+		t.Errorf("before the rDNS answer: %+v", got)
+	}
+	r.c.Verifier.Work(t.Context())
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	classes, err := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
 	if err != nil {
 		t.Fatal(err)
@@ -153,20 +163,24 @@ func TestPass(t *testing.T) {
 	for key, want := range map[string]string{
 		"192.0.2.1":      "human|script beacon,engaged,assets loaded",
 		"66.249.66.1":    "bot|Googlebot address range",
-		"203.0.113.5":    "unknown|claims Googlebot, address is not Googlebot's",
+		"203.0.113.5":    "unknown|claims Googlebot, address is not Googlebot's,no script beacon,no assets",
 		"157.55.39.1":    "bot|Bingbot, rDNS confirmed",
-		"157.55.39.2":    "unknown|claims Bingbot, address is not Bingbot's",
+		"157.55.39.2":    "unknown|claims Bingbot, address is not Bingbot's,no script beacon,no assets",
 		"69.162.124.230": "monitor|UptimeRobot address range",
 		"198.51.100.20":  "bot|client is UAOnly",
 		"198.51.100.7":   "unknown|client curl/8.4.0",
-		"198.51.100.8":   "unknown|no script beacon,no assets,missing browser headers",
-		"198.51.100.9":   "unknown|navigator.webdriver set",
-		"198.51.100.10":  "unknown|no user agent",
+		// This feed carries the fetch metadata: a browser without it is none.
+		"198.51.100.8":  "unknown|missing browser headers,no script beacon,no assets",
+		"198.51.100.9":  "unknown|navigator.webdriver set",
+		"198.51.100.10": "unknown|no user agent",
 	} {
 		a := classes[key]
 		if got := a.Class + "|" + strings.Join(a.Reasons, ","); got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
+	}
+	if len(r.c.recheck) != 0 {
+		t.Errorf("rechecks left: %v", r.c.recheck)
 	}
 	// The pass stamped the events, and new events of a known actor get the class at once.
 	var pending int
@@ -222,6 +236,76 @@ func TestPass_LateEvent(t *testing.T) {
 	var cls int
 	if err := r.st.DB.QueryRow(`SELECT cls FROM event WHERE ip = '198.51.100.77'`).Scan(&cls); err != nil || cls == store.ClsPending {
 		t.Errorf("late event cls = %d, %v", cls, err)
+	}
+}
+
+// A shared address is weighed per client: people behind a NAT stay human with one curl among them, the curl part
+// counted as automated on its own events; a script does not turn human by adding one browser request.
+func TestPass_SharedAddressAndPace(t *testing.T) {
+	r := newRig(t, true)
+	if err := r.st.AddStats(t.Context(), []store.IngestStat{{SiteID: r.site.ID, Hour: r.now.Unix() / 3600,
+		Accepted: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	const nat = "192.0.2.80"
+	var evs []store.Event
+	for _, ua := range []string{browserUA, "Mozilla/5.0 (Windows NT 10.0) Chrome/142 Safari/537.36",
+		"Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"} {
+		evs = append(evs, req(nat, ua, "document", "/", 200, ""), req(nat, ua, "script", "/assets/a.js", 200, ""),
+			store.Event{Source: "browser", Kind: "page_view", IP: nat, UA: ua},
+			store.Event{Source: "browser", Kind: "engagement", IP: nat, UA: ua})
+	}
+	for range 3 {
+		evs = append(evs, req(nat, "curl/8.4.0", "", "/api/v1/ip/1", 200, ""))
+	}
+	// A script with one browser request, its user agent sorting after the script's.
+	for range 40 {
+		evs = append(evs, req("192.0.2.81", "Go-http-client/1.1", "", "/api/v1/ip/1", 200, ""))
+	}
+	evs = append(evs, req("192.0.2.81", browserUA, "document", "/", 200, ""))
+	// 150 API requests 10 ms apart with a browser's user agent and headers, no page, asset or beacon.
+	for i := range 150 {
+		e := req("192.0.2.82", browserUA, "empty", "/api/v1/ip/1", 200, "")
+		e.TS = r.now.UnixMilli() - int64(i)*10
+		evs = append(evs, e)
+	}
+	// One request with a browser's user agent and none of the headers every browser sends.
+	evs = append(evs, req("192.0.2.83", browserUA, "document", "/", 200, `{}`))
+	// A real browser blocking the tracker: page and assets with its headers, no beacon. A person.
+	evs = append(evs, req("192.0.2.84", browserUA, "document", "/", 200, ""),
+		req("192.0.2.84", browserUA, "style", "/assets/a.css", 200, ""))
+	r.insert(t, evs...)
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	for key, want := range map[string]string{
+		nat: "human|script beacon,engaged,assets loaded," +
+			"also unknown automated: curl/8.4.0, 3 of 15 events (client curl/8.4.0)",
+		"192.0.2.81": "unknown|client Go-http-client/1.1,no script beacon,no assets,rapid requests",
+		"192.0.2.82": "unknown|API only, no page loaded,rapid requests",
+		"192.0.2.83": "unknown|missing browser headers,no script beacon,no assets",
+		"192.0.2.84": "human|assets loaded,no script beacon",
+	} {
+		a := classes[key]
+		if got := a.Class + "|" + strings.Join(a.Reasons, ","); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	// On the events: the people human, the curl part automated.
+	var people, auto int
+	if err := r.st.DB.QueryRow(`SELECT SUM(cls = ?), SUM(cls = ?) FROM event WHERE ip_key = ?`,
+		store.ClsHuman, store.ClsUnknown, nat).Scan(&people, &auto); err != nil || people != 12 || auto != 3 {
+		t.Errorf("NAT events: %d human, %d unknown, %v", people, auto, err)
+	}
+	// New events from the NAT: a new automation client is not stamped human, a browser is.
+	for ua, want := range map[string]int{"python-requests/2.32": store.ClsUnknown, "curl/8.4.0": store.ClsUnknown,
+		"Mozilla/5.0 (iPhone) Mobile Safari/604.1": store.ClsHuman} {
+		e := store.Event{SiteID: r.site.ID, TS: r.now.UnixMilli(), IP: nat, IPKey: nat, UA: ua}
+		r.c.Enrich(&e)
+		if e.Cls != want {
+			t.Errorf("new %q from the NAT: %d, want %d", ua, e.Cls, want)
+		}
 	}
 }
 

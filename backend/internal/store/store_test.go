@@ -61,6 +61,7 @@ func TestEventsAndActorClass(t *testing.T) {
 		{SiteID: id, TS: ts, Source: "browser", Kind: "page_view", IP: "192.0.2.1", IPKey: "192.0.2.1"},
 		{SiteID: id, TS: ts + 1, Source: "server", Kind: "request", IP: "192.0.2.1", IPKey: "192.0.2.1"},
 		{SiteID: id, TS: ts + 2, Source: "server", Kind: "request", IP: "192.0.2.2", IPKey: "192.0.2.2"},
+		{SiteID: id, TS: ts + 3, Source: "server", Kind: "request", IP: "192.0.2.1", IPKey: "192.0.2.1", UA: "curl/8"},
 	}
 	if err := st.InsertEvents(t.Context(), evs); err != nil {
 		t.Fatal(err)
@@ -68,13 +69,15 @@ func TestEventsAndActorClass(t *testing.T) {
 	if err := st.InsertEvents(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
+	// The actor's class on its events, one client's own class on that client's.
 	if err := st.SetActorClass(t.Context(), ActorClass{SiteID: id, IPKey: "192.0.2.1", Day: day, Class: "unknown",
-		Reasons: []string{"no script beacon"}}); err != nil {
+		Reasons: []string{"no script beacon"}}, map[string]string{"curl/8": "bot"}); err != nil {
 		t.Fatal(err)
 	}
-	var n int
-	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE cls = ?`, ClsUnknown).Scan(&n); err != nil || n != 2 {
-		t.Fatalf("classified events = %d, %v", n, err)
+	var n, b int
+	if err := st.DB.QueryRow(`SELECT SUM(cls = ?), SUM(cls = ?) FROM event`, ClsUnknown, ClsBot).Scan(&n, &b); err != nil ||
+		n != 2 || b != 1 {
+		t.Fatalf("classified events = %d unknown, %d bot, %v", n, b, err)
 	}
 	got, err := st.ActorClasses(t.Context(), id, day)
 	if err != nil || got["192.0.2.1"].Class != "unknown" || got["192.0.2.1"].Reasons[0] != "no script beacon" {

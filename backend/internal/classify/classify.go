@@ -2,17 +2,20 @@
 // automated, with the reasons the dashboard shows. Two steps: an instant guess when an event is written (the bot
 // list and the client string, nothing that needs history), and a periodic pass over the recent window that weighs
 // the actor's whole day (script beacon, assets, headers, network) and stamps the result on its events.
+//
+// An address is often shared (an office, a carrier's NAT): the pass weighs each of its user agents on its own. The
+// actor's class follows the majority of its events; the clients that differ keep their own class on their own events,
+// so one curl request behind a NAT of people is counted as automated without making the people automated, and a
+// script cannot hide behind one browser request.
 package classify
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/netip"
 	"regexp"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +31,20 @@ import (
 const Every = 5 * time.Minute
 
 const dayMS = int64(24 * time.Hour / time.Millisecond)
+
+// maxUAs is how many of an actor-day's user agents the pass weighs one by one, the most frequent; the rest (a
+// client rotating its user agent) is stamped with the actor's class.
+const maxUAs = 64
+
+// Thresholds of the pace signals: an actor with at least apiOnlyRequests requests and no page, asset or beacon only
+// calls the API; one whose requests average under rapidGap apart is no person reading.
+const (
+	apiOnlyRequests = 20
+	rapidGap        = 500 * time.Millisecond
+)
+
+// maxRecheck bounds the actor-days waiting for an rDNS answer.
+const maxRecheck = 10_000
 
 // automationUA matches clients that are no browser: HTTP libraries, command-line tools, headless and scripted
 // browsers, scanners, and the generic bot words a crawler not on the list still uses.
@@ -47,10 +64,25 @@ type Classifier struct {
 
 	mu    sync.Mutex
 	today int64
-	known map[int64]map[string]int // site → ip_key → cls, today's
+	known map[int64]map[string]knownActor // site → ip_key → today's class
 	// lastID is the newest event id the last pass covered. By id, not time: the feed may date a record up to an hour
 	// back and the browser's events are back-dated by their client offset, and a time window would miss them.
 	lastID int64
+	// recheck are the actor-days decided while an rDNS answer was pending: the next pass decides them again even
+	// without new events.
+	recheck map[actorKey]bool
+}
+
+// knownActor is an actor's class today and the classes of its clients that differ from it.
+type knownActor struct {
+	cls int
+	ua  map[string]int
+}
+
+type actorKey struct {
+	site int64
+	key  string
+	day  int64
 }
 
 func (c *Classifier) now() time.Time {
@@ -79,15 +111,22 @@ func (c *Classifier) Enrich(e *store.Event) {
 		}
 		e.Country = c.Ref.Countries().Lookup(a)
 	}
+	inst := c.instant(a, e.UA)
 	c.mu.Lock()
-	cls, ok := c.known[e.SiteID][e.IPKey]
+	k, ok := c.known[e.SiteID][e.IPKey]
 	sameDay := e.TS/dayMS == c.today
 	c.mu.Unlock()
-	if ok && sameDay {
-		e.Cls = cls
-		return
+	switch {
+	case !ok || !sameDay:
+		e.Cls = inst
+	case k.ua[e.UA] != 0:
+		e.Cls = k.ua[e.UA]
+	case k.cls == store.ClsHuman && inst != store.ClsPending:
+		// A new automated client behind an address of people: its own class, not theirs.
+		e.Cls = inst
+	default:
+		e.Cls = k.cls
 	}
-	e.Cls = c.instant(a, e.UA)
 }
 
 // instant is the class an event gets before the pass sees its actor: the bot list by address (authoritative lists
@@ -125,6 +164,9 @@ func (c *Classifier) Run(ctx context.Context) {
 // today), for each day it was active, and stamps the class on that day's events.
 func (c *Classifier) Pass(ctx context.Context) error {
 	now := c.now()
+	if c.Verifier != nil {
+		c.Verifier.StartPass()
+	}
 	c.mu.Lock()
 	after := c.lastID
 	c.mu.Unlock()
@@ -134,7 +176,7 @@ func (c *Classifier) Pass(ctx context.Context) error {
 	}
 	since := (now.UnixMilli()/dayMS - 1) * dayMS
 	today := now.UnixMilli() / dayMS
-	known := map[int64]map[string]int{}
+	known := map[int64]map[string]knownActor{}
 	for _, s := range c.Sites.All() {
 		got, err := c.passSite(ctx, s, after, upto, since, today)
 		if err != nil {
@@ -148,11 +190,11 @@ func (c *Classifier) Pass(ctx context.Context) error {
 	}
 	c.today = today
 	if c.known == nil {
-		c.known = map[int64]map[string]int{}
+		c.known = map[int64]map[string]knownActor{}
 	}
 	for site, m := range known {
 		if c.known[site] == nil {
-			c.known[site] = map[string]int{}
+			c.known[site] = map[string]knownActor{}
 		}
 		for k, v := range m {
 			c.known[site][k] = v
@@ -163,9 +205,17 @@ func (c *Classifier) Pass(ctx context.Context) error {
 	return nil
 }
 
-func (c *Classifier) passSite(ctx context.Context, s *sites.Site, after, upto, since, today int64) (map[string]int, error) {
+// siteFacts is what the pass knows about a site beyond one actor.
+type siteFacts struct {
+	// feed: the site has a server feed. script: its script delivered in the last week, so a missing beacon is a
+	// signal. fetchMeta: its feed carries the fetch metadata a browser always sends, so a request without it is
+	// none of a browser's.
+	feed, script, fetchMeta bool
+}
+
+func (c *Classifier) passSite(ctx context.Context, s *sites.Site, after, upto, since, today int64) (map[string]knownActor, error) {
 	// Which actors moved since the last pass, on which days: the ids written since (a rowid range), or on the
-	// first pass yesterday and today.
+	// first pass yesterday and today; and the ones waiting for an rDNS answer.
 	q, args := `SELECT DISTINCT ip_key, ts / ? FROM event WHERE id > ? AND id <= ? AND site_id = ?`,
 		[]any{dayMS, after, upto, s.ID}
 	if after == 0 {
@@ -176,43 +226,75 @@ func (c *Classifier) passSite(ctx context.Context, s *sites.Site, after, upto, s
 	if err != nil {
 		return nil, err
 	}
-	type kd struct {
-		key string
-		day int64
-	}
-	var moved []kd
+	seen := map[actorKey]bool{}
+	var moved []actorKey
 	for rows.Next() {
-		var x kd
+		x := actorKey{site: s.ID}
 		if err := rows.Scan(&x.key, &x.day); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
+		seen[x] = true
 		moved = append(moved, x)
 	}
 	_ = rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	scriptSite, err := c.hasBrowser(ctx, s.ID)
-	if err != nil {
+	c.mu.Lock()
+	for k := range c.recheck {
+		if k.site == s.ID && !seen[k] {
+			moved = append(moved, k)
+		}
+	}
+	c.mu.Unlock()
+	f := siteFacts{feed: s.HasFeed}
+	if f.script, err = c.hasBrowser(ctx, s.ID); err != nil {
 		return nil, err
 	}
-	out := map[string]int{}
+	if s.HasFeed {
+		if f.fetchMeta, err = c.hasFetchMeta(ctx, s.ID); err != nil {
+			return nil, err
+		}
+	}
+	out := map[string]knownActor{}
 	for _, m := range moved {
 		a, err := c.actorDay(ctx, s.ID, m.key, m.day)
 		if err != nil {
 			return nil, err
 		}
-		class, reasons := c.Decide(ctx, a, s.HasFeed, scriptSite)
-		if err := c.DB.SetActorClass(ctx, store.ActorClass{SiteID: s.ID, IPKey: m.key, Day: m.day, Class: class,
-			Reasons: reasons}); err != nil {
+		if len(a.uas) == 0 {
+			c.setRecheck(m, false)
+			continue
+		}
+		d := c.Decide(a, f)
+		c.setRecheck(m, d.pending)
+		if err := c.DB.SetActorClass(ctx, store.ActorClass{SiteID: s.ID, IPKey: m.key, Day: m.day, Class: d.class,
+			Reasons: d.reasons}, d.byUA); err != nil {
 			return nil, err
 		}
 		if m.day == today {
-			out[m.key] = store.ClassCode(class)
+			k := knownActor{cls: store.ClassCode(d.class), ua: map[string]int{}}
+			for ua, cl := range d.byUA {
+				k.ua[ua] = store.ClassCode(cl)
+			}
+			out[m.key] = k
 		}
 	}
 	return out, nil
+}
+
+func (c *Classifier) setRecheck(k actorKey, pending bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case !pending:
+		delete(c.recheck, k)
+	case c.recheck == nil:
+		c.recheck = map[actorKey]bool{k: true}
+	case len(c.recheck) < maxRecheck:
+		c.recheck[k] = true
+	}
 }
 
 // hasBrowser reports whether the site's script delivered in the last week: only then is a missing beacon a signal.
@@ -223,10 +305,19 @@ func (c *Classifier) hasBrowser(ctx context.Context, site int64) (bool, error) {
 	return ok, err
 }
 
+// hasFetchMeta reports whether the site's feed carried Sec-Fetch-Mode in the last day: only then is a request
+// without it and without Accept-Language evidence (a product's emitter may not send these fields at all).
+func (c *Classifier) hasFetchMeta(ctx context.Context, site int64) (bool, error) {
+	var ok bool
+	err := c.DB.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM event WHERE site_id = ? AND ts >= ?
+		AND source = 'server' AND props LIKE '%"sf_mode"%')`, site, c.now().Add(-24*time.Hour).UnixMilli()).Scan(&ok)
+	return ok, err
+}
+
+// actorDay reads an actor's day per user agent, the most frequent first.
 func (c *Classifier) actorDay(ctx context.Context, site int64, key string, day int64) (actorDay, error) {
 	a := actorDay{key: key}
-	var webdriver sql.NullInt64
-	err := c.DB.DB.QueryRowContext(ctx, `SELECT MIN(ip), COALESCE(MAX(ua), ''),
+	rows, err := c.DB.DB.QueryContext(ctx, `SELECT ua, COUNT(*),
 		SUM(source = 'browser'), SUM(source = 'server'),
 		SUM(source = 'server' AND name = 'document'),
 		SUM(source = 'server' AND (name IN ('script', 'style', 'image', 'font') OR path LIKE '/assets/%')),
@@ -234,160 +325,256 @@ func (c *Classifier) actorDay(ctx context.Context, site int64, key string, day i
 		MAX(source = 'browser' AND props LIKE '%"webdriver":true%'),
 		SUM(source = 'server' AND props NOT LIKE '%"sf_mode"%'),
 		SUM(source = 'server' AND props NOT LIKE '%"lang"%'),
-		COUNT(DISTINCT ua), MAX(asn), SUM(kind = 'engagement'), SUM(kind = 'page_view')
-		FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?`,
-		site, key, day*dayMS, (day+1)*dayMS).Scan(&a.ip, &a.ua, &a.browser, &a.server, &a.docs, &a.assets,
-		&a.refused, &webdriver, &a.noFetch, &a.noLang, &a.uas, &a.asn, &a.engaged, &a.pageView)
-	a.webdriver = webdriver.Int64 == 1
-	return a, err
+		SUM(kind = 'engagement'), SUM(kind = 'page_view'),
+		COALESCE(MIN(CASE WHEN source = 'server' THEN ts END), 0),
+		COALESCE(MAX(CASE WHEN source = 'server' THEN ts END), 0),
+		MIN(ip), MAX(asn)
+		FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?
+		GROUP BY ua ORDER BY COUNT(*) DESC, ua LIMIT ?`,
+		site, key, day*dayMS, (day+1)*dayMS, maxUAs)
+	if err != nil {
+		return a, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var g uaDay
+		var ip string
+		var asn int64
+		if err := rows.Scan(&g.ua, &g.n, &g.browser, &g.server, &g.docs, &g.assets, &g.refused, &g.webdriver,
+			&g.noFetch, &g.noLang, &g.engaged, &g.pageView, &g.first, &g.last, &ip, &asn); err != nil {
+			return a, err
+		}
+		if a.ip == "" {
+			a.ip = ip
+		}
+		a.asn = max(a.asn, asn)
+		a.uas = append(a.uas, g)
+	}
+	return a, rows.Err()
 }
 
-// Decide weighs an actor-day: the bot list first (address, confirmed by rDNS where the list is not
-// authoritative, or the client string), then strong automation signals (one suffices) and weak ones (two do).
-func (c *Classifier) Decide(ctx context.Context, a actorDay, feed, script bool) (string, []string) {
+// decision is the pass's verdict on an actor-day.
+type decision struct {
+	class   string
+	reasons []string
+	// byUA are the clients whose class differs from the actor's, stamped on their own events.
+	byUA map[string]string
+	// pending: an rDNS answer was not known yet; the next pass decides again.
+	pending bool
+}
+
+// clientVerdict is one user agent's own evidence: a class when it alone is conclusive ("" when it looks like a
+// person's browser), and the reason.
+type clientVerdict struct {
+	class, reason string
+	pending       bool
+}
+
+// Decide weighs an actor-day: the bot list by address first (authoritative, or confirmed by rDNS), then every
+// client on its own (a bot list's client string, an automation client, a scripted browser, a browser without the
+// headers every browser sends), then the majority. People in the majority are weighed further by weak signals
+// (two make them automated too); clients that differ from the majority keep their own class.
+func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 	addr, _ := netip.ParseAddr(a.ip)
 	var bots *refdata.Bots
 	var nets *refdata.Networks
 	if c.Ref != nil {
 		bots, nets = c.Ref.Bots(), c.Ref.Networks()
 	}
-	confirm := func(p *refdata.Provider) bool {
-		return c.Verifier != nil && c.Verifier.Confirm(ctx, a.ip, p.RdnsPatterns)
-	}
+	pending := false
 	if p, ok := bots.ByIP(addr); ok {
 		if p.Authoritative {
-			return p.Class, []string{p.Name + " address range"}
+			return decision{class: p.Class, reasons: []string{p.Name + " address range"}}
 		}
-		if confirm(p) {
-			return p.Class, []string{p.Name + ", rDNS confirmed"}
+		confirmed, wait := c.check(a.ip, p)
+		if confirmed {
+			return decision{class: p.Class, reasons: []string{p.Name + ", rDNS confirmed"}}
+		}
+		pending = wait
+	}
+	var people uaDay // the people's clients summed
+	verdicts := make([]clientVerdict, len(a.uas))
+	var total, automated int64
+	for i, g := range a.uas {
+		v := c.clientVerdict(a.ip, g, f, bots)
+		verdicts[i] = v
+		pending = pending || v.pending
+		total += g.n
+		if v.class != "" {
+			automated += g.n
+			continue
+		}
+		people = addDay(people, g)
+	}
+	weak := c.weakSignals(people, f, nets, addr)
+	d := decision{byUA: map[string]string{}, pending: pending}
+	if automated*2 < total || (automated*2 == total && people.engaged > 0) {
+		// Mostly people: human unless their own traffic looks automated too.
+		d.class = "human"
+		if len(weak) >= 2 && people.engaged == 0 {
+			d.class = "unknown"
+		}
+		if d.class == "human" {
+			d.reasons = append(goodSignals(people), weak...)
+		} else {
+			d.reasons = weak
+		}
+		for i, v := range verdicts {
+			if v.class != "" && v.class != d.class {
+				d.byUA[a.uas[i].ua] = v.class
+			}
+			if v.class != "" {
+				// The automated part stays visible on the people's row: what, which client, how much.
+				d.reasons = append(d.reasons, fmt.Sprintf("also %s: %s, %d of %d events (%s)", classPhrase[v.class],
+					Client(a.uas[i].ua), a.uas[i].n, total, v.reason))
+			}
+		}
+		return d
+	}
+	// Mostly automated: the class of the largest automated part, its reasons first.
+	byClass := map[string]int64{}
+	for i, v := range verdicts {
+		if v.class != "" {
+			byClass[v.class] += a.uas[i].n
 		}
 	}
-	if p, ok := bots.ByUA(a.ua); ok {
+	for cl, n := range byClass {
+		if d.class == "" || n > byClass[d.class] || (n == byClass[d.class] && cl > d.class) {
+			d.class = cl
+		}
+	}
+	for i, v := range verdicts {
+		switch {
+		case v.class != "" && !slices.Contains(d.reasons, v.reason):
+			d.reasons = append(d.reasons, v.reason)
+		case v.class == "" && (a.uas[i].browser > 0 || a.uas[i].assets > 0 || a.uas[i].engaged > 0):
+			// A person's browser behind an automated address keeps its own class.
+			d.byUA[a.uas[i].ua] = "human"
+		}
+		if v.class != "" && v.class != d.class {
+			d.byUA[a.uas[i].ua] = v.class
+		}
+	}
+	if d.class == "unknown" {
+		d.reasons = append(d.reasons, c.weakSignals(sumDays(a.uas), f, nets, addr)...)
+	}
+	return d
+}
+
+// check asks the verifier for a provider's rDNS, from its cache: confirmed, or pending an answer.
+func (c *Classifier) check(ip string, p *refdata.Provider) (confirmed, pending bool) {
+	if c.Verifier == nil {
+		return false, false
+	}
+	return c.Verifier.Check(ip, p.RdnsPatterns)
+}
+
+// clientVerdict is one user agent's own, conclusive evidence.
+func (c *Classifier) clientVerdict(ip string, g uaDay, f siteFacts, bots *refdata.Bots) clientVerdict {
+	if p, ok := bots.ByUA(g.ua); ok {
 		switch {
 		case !p.HasRanges:
-			return p.Class, []string{"client is " + p.Name}
-		case !p.Authoritative && confirm(p):
-			return p.Class, []string{p.Name + ", rDNS confirmed"}
-		default:
-			return "unknown", []string{"claims " + p.Name + ", address is not " + p.Name + "'s"}
+			return clientVerdict{class: p.Class, reason: "client is " + p.Name}
+		case !p.Authoritative:
+			confirmed, pending := c.check(ip, p)
+			switch {
+			case confirmed:
+				return clientVerdict{class: p.Class, reason: p.Name + ", rDNS confirmed"}
+			case pending:
+				return clientVerdict{class: "unknown", reason: "claims " + p.Name + ", rDNS check pending", pending: true}
+			}
 		}
+		return clientVerdict{class: "unknown", reason: "claims " + p.Name + ", address is not " + p.Name + "'s"}
 	}
-	var strong, weak, good []string
 	switch {
-	case a.webdriver:
-		strong = append(strong, "navigator.webdriver set")
-	case a.ua == "":
-		strong = append(strong, "no user agent")
-	case automationUA.MatchString(a.ua):
-		strong = append(strong, "client "+Client(a.ua))
+	case g.webdriver:
+		return clientVerdict{class: "unknown", reason: "navigator.webdriver set"}
+	case g.ua == "":
+		return clientVerdict{class: "unknown", reason: "no user agent"}
+	case automationUA.MatchString(g.ua):
+		return clientVerdict{class: "unknown", reason: "client " + Client(g.ua)}
+	case f.fetchMeta && g.server > 0 && g.browser == 0 && g.noFetch == g.server && g.noLang == g.server &&
+		looksLikeBrowser(g.ua):
+		// Every browser sends Accept-Language, and every current one Sec-Fetch-Mode; this feed carries both.
+		return clientVerdict{class: "unknown", reason: "missing browser headers"}
 	}
-	if feed {
-		if script && a.docs > 0 && a.browser == 0 {
+	return clientVerdict{}
+}
+
+// weakSignals are the hints that a person's browser is none: each alone is common, two together are not.
+func (c *Classifier) weakSignals(g uaDay, f siteFacts, nets *refdata.Networks, addr netip.Addr) []string {
+	var weak []string
+	if f.feed {
+		if f.script && g.docs > 0 && g.browser == 0 {
 			weak = append(weak, "no script beacon")
 		}
-		if a.docs > 0 && a.assets == 0 {
+		if g.docs > 0 && g.assets == 0 {
 			weak = append(weak, "no assets")
 		}
-		if a.server >= 3 && a.noFetch == a.server && a.noLang == a.server && looksLikeBrowser(a.ua) {
+		if !f.fetchMeta && g.server >= 3 && g.noFetch == g.server && g.noLang == g.server && looksLikeBrowser(g.ua) {
 			weak = append(weak, "missing browser headers")
 		}
-		if a.server >= 10 && a.refused*2 >= a.server {
+		if g.server >= 10 && g.refused*2 >= g.server {
 			weak = append(weak, "mostly refused")
+		}
+		if g.server >= apiOnlyRequests && g.docs == 0 && g.assets == 0 && g.browser == 0 {
+			weak = append(weak, "API only, no page loaded")
+		}
+		if g.server >= apiOnlyRequests && g.last > g.first &&
+			time.Duration(g.last-g.first)*time.Millisecond/time.Duration(g.server-1) < rapidGap {
+			weak = append(weak, "rapid requests")
 		}
 	}
 	if as, ok := nets.Lookup(addr); ok && refdata.NetworkKind(as.Category) == "hosting" {
 		weak = append(weak, "hosting network")
 	}
-	if a.browser > 0 {
+	return weak
+}
+
+func goodSignals(g uaDay) []string {
+	var good []string
+	if g.browser > 0 {
 		good = append(good, "script beacon")
 	}
-	if a.engaged > 0 {
+	if g.engaged > 0 {
 		good = append(good, "engaged")
 	}
-	if a.assets > 0 {
+	if g.assets > 0 {
 		good = append(good, "assets loaded")
 	}
-	switch {
-	case len(strong) > 0:
-		return "unknown", slices.Concat(strong, weak)
-	case len(weak) >= 2 && a.engaged == 0:
-		return "unknown", weak
-	}
-	return "human", slices.Concat(good, weak)
+	return good
 }
 
-func looksLikeBrowser(ua string) bool {
-	return strings.HasPrefix(ua, "Mozilla/")
+// addDay sums two user agents' days; the user agent is the larger one's (a browser test looks at it).
+func addDay(a, b uaDay) uaDay {
+	if b.n > a.n {
+		a.ua = b.ua
+	}
+	a.n += b.n
+	a.browser += b.browser
+	a.server += b.server
+	a.docs += b.docs
+	a.assets += b.assets
+	a.refused += b.refused
+	a.webdriver = a.webdriver || b.webdriver
+	a.noFetch += b.noFetch
+	a.noLang += b.noLang
+	a.engaged += b.engaged
+	a.pageView += b.pageView
+	if a.first == 0 || (b.first != 0 && b.first < a.first) {
+		a.first = b.first
+	}
+	a.last = max(a.last, b.last)
+	return a
 }
 
-var productRE = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9._-]*)(?:/([0-9][0-9A-Za-z._-]*))?`)
-
-// Client is a short client name for a user agent: browser and OS for a browser, the product token for anything
-// else ("curl/8.4.0").
-func Client(ua string) string {
-	if ua == "" {
-		return "no user agent"
+func sumDays(gs []uaDay) uaDay {
+	var s uaDay
+	for _, g := range gs {
+		s = addDay(s, g)
 	}
-	if looksLikeBrowser(ua) && !automationUA.MatchString(ua) {
-		b, o, _ := ParseUA(ua)
-		return b + " · " + o
-	}
-	if m := productRE.FindStringSubmatch(ua); m != nil {
-		if m[2] != "" {
-			return m[1] + "/" + m[2]
-		}
-		return m[1]
-	}
-	if len(ua) > 40 {
-		return ua[:40]
-	}
-	return ua
+	return s
 }
 
-// ParseUA reads browser, operating system and device class from a user agent, coarse on purpose.
-func ParseUA(ua string) (browser, os, device string) {
-	l := strings.ToLower(ua)
-	switch {
-	case strings.Contains(l, "edg/"):
-		browser = "Edge"
-	case strings.Contains(l, "opr/") || strings.Contains(l, "opera"):
-		browser = "Opera"
-	case strings.Contains(l, "samsungbrowser"):
-		browser = "Samsung Internet"
-	case strings.Contains(l, "firefox/") || strings.Contains(l, "fxios"):
-		browser = "Firefox"
-	case strings.Contains(l, "chrome/") || strings.Contains(l, "crios"):
-		browser = "Chrome"
-	case strings.Contains(l, "safari/"):
-		browser = "Safari"
-	default:
-		browser = "Other"
-	}
-	switch {
-	case strings.Contains(l, "iphone") || strings.Contains(l, "ipad") || strings.Contains(l, "ipod"):
-		os = "iOS"
-	case strings.Contains(l, "android"):
-		os = "Android"
-	case strings.Contains(l, "windows"):
-		os = "Windows"
-	case strings.Contains(l, "cros"):
-		os = "ChromeOS"
-	case strings.Contains(l, "mac os x") || strings.Contains(l, "macintosh"):
-		os = "macOS"
-	case strings.Contains(l, "linux"):
-		os = "Linux"
-	default:
-		os = "Other"
-	}
-	switch {
-	case strings.Contains(l, "ipad") || strings.Contains(l, "tablet"):
-		device = "Tablet"
-	case strings.Contains(l, "mobi") || strings.Contains(l, "iphone") || strings.Contains(l, "android"):
-		device = "Mobile"
-	case browser == "Other" && os == "Other":
-		device = "Other"
-	default:
-		device = "Desktop"
-	}
-	return browser, os, device
-}
+// classPhrase names a class in a reason.
+var classPhrase = map[string]string{"unknown": "unknown automated", "bot": "known bot", "monitor": "uptime probe"}

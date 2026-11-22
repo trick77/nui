@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -438,22 +439,83 @@ func TestVerifier(t *testing.T) {
 	}
 	v := NewVerifier(r, time.Second)
 	pats := []string{"*.search.msn.com"}
-	if !v.Confirm(t.Context(), "157.55.39.1", pats) {
+	// The first ask never waits for DNS: it is pending, the lookup runs off the caller's path.
+	for _, ip := range []string{"157.55.39.1", "157.55.39.2", "198.51.100.1"} {
+		if ok, pending := v.Check(ip, pats); ok || !pending {
+			t.Errorf("%s: first check %v %v, want pending", ip, ok, pending)
+		}
+	}
+	if r.calls != 0 {
+		t.Error("Check looked up on the caller's path")
+	}
+	v.Work(t.Context())
+	check := func(ip string, p []string) bool {
+		ok, pending := v.Check(ip, p)
+		if pending {
+			t.Errorf("%s still pending", ip)
+		}
+		return ok
+	}
+	if !check("157.55.39.1", pats) {
 		t.Error("real bingbot not confirmed")
 	}
-	if v.Confirm(t.Context(), "157.55.39.2", pats) {
+	if check("157.55.39.2", pats) {
 		t.Error("spoofed PTR confirmed")
 	}
-	if v.Confirm(t.Context(), "198.51.100.1", pats) || v.Confirm(t.Context(), "bad", pats) ||
-		v.Confirm(t.Context(), "157.55.39.1", nil) {
+	if check("198.51.100.1", pats) || check("bad", pats) || check("157.55.39.1", nil) {
 		t.Error("confirmed without evidence")
 	}
 	calls := r.calls
-	v.Confirm(t.Context(), "157.55.39.1", pats)
+	check("157.55.39.1", pats)
 	if r.calls != calls {
 		t.Error("verdict not cached")
 	}
 	if NewVerifier(nil, time.Second).r == nil {
 		t.Error("default resolver")
+	}
+}
+
+// A claimant rotating addresses inside one network gets that network's daily budget of lookups, no more; a pass
+// queues at most LookupsPerPass; other networks are unaffected.
+func TestVerifier_Budgets(t *testing.T) {
+	r := &fakeResolver{}
+	v := NewVerifier(r, time.Second)
+	pats := []string{"*.googlebot.com"}
+	pending := 0
+	for i := range 200 {
+		v.StartPass()
+		if _, p := v.Check(fmt.Sprintf("2001:db8:7:%x::1", i), pats); p {
+			pending++
+		}
+		v.Work(t.Context())
+	}
+	if pending != lookupsPerNetwork || r.calls != lookupsPerNetwork {
+		t.Errorf("one /48: %d pending, %d lookups, want %d", pending, r.calls, lookupsPerNetwork)
+	}
+	if _, p := v.Check("2001:db8:8::1", pats); !p {
+		t.Error("another /48 refused")
+	}
+	// One pass: at most LookupsPerPass queued, the rest pending for a later pass.
+	v2 := NewVerifier(r, time.Second)
+	queued := 0
+	for i := range 100 {
+		v2.Check(fmt.Sprintf("10.%d.0.1", i), pats)
+	}
+	queued = len(v2.queue)
+	if queued != LookupsPerPass {
+		t.Errorf("one pass queued %d", queued)
+	}
+	// Run answers until its context ends.
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { v2.Run(ctx); close(done) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(v2.queue) > 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if len(v2.queue) != 0 {
+		t.Error("Run left lookups queued")
 	}
 }

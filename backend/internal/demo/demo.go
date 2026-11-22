@@ -71,7 +71,7 @@ func Generate(ctx context.Context, st *store.Store, o Options) (int, error) {
 	if o.Classes {
 		for k, c := range g.classes {
 			if err := st.SetActorClass(ctx, store.ActorClass{SiteID: o.SiteID, IPKey: k.key, Day: k.day,
-				Class: c.class, Reasons: c.reasons}); err != nil {
+				Class: c.class, Reasons: c.reasons}, nil); err != nil {
 				return g.n, err
 			}
 		}
