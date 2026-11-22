@@ -25,8 +25,9 @@ type Knobs struct {
 	// The awkward behaviours, live from a minute after the start. FeedOutage (NUI_SIM_FEED_OUTAGE, minutes): the
 	// first feed site's emitter is down that long. Flood (NUI_SIM_FLOOD: addr, 64 or 48): a flood for ten minutes.
 	// LateFeed (NUI_SIM_LATE_FEED, minutes or "never"): the last feed site's feed has not delivered yet and starts
-	// then; -1 is off. SlowMS (NUI_SIM_SLOW_MS): every dashboard answer waits that long. EmptySite
-	// (NUI_SIM_EMPTY_SITE): one more site, configured, that never delivers.
+	// that long after the start (0: at the start); LateFeedOff and LateFeedNever are no delay. SlowMS
+	// (NUI_SIM_SLOW_MS): every dashboard answer waits that long. EmptySite (NUI_SIM_EMPTY_SITE): one more site,
+	// configured, that never delivers.
 	FeedOutage time.Duration
 	Flood      string
 	LateFeed   time.Duration
@@ -34,10 +35,16 @@ type Knobs struct {
 	EmptySite  bool
 }
 
+// LateFeed's values that are no delay: unset, and a feed that never delivers. Zero is a delay, the start itself.
+const (
+	LateFeedOff   time.Duration = -1
+	LateFeedNever time.Duration = math.MaxInt64
+)
+
 // DefaultKnobs are the knobs without any environment.
 func DefaultKnobs() Knobs {
 	return Knobs{Seed: 1, Scale: 1, Speed: 1, Port: 8080, Days: 30, Scenarios: DefaultScenarios, Classify: true,
-		LateFeed: -1}
+		LateFeed: LateFeedOff}
 }
 
 // Limit is a numeric knob's range, the same for its NUI_SIM_* variable and its flag.
@@ -94,7 +101,7 @@ func (k Knobs) Validate() error {
 			return fmt.Errorf("%s %v: %w", c.name, c.v, err)
 		}
 	}
-	if k.LateFeed != -1 {
+	if k.LateFeed != LateFeedOff && k.LateFeed != LateFeedNever {
 		if err := minutesLimit.Check(k.LateFeed.Minutes()); err != nil {
 			return fmt.Errorf("late feed minutes %v: %w", k.LateFeed.Minutes(), err)
 		}
@@ -184,7 +191,7 @@ func ReadKnobs(getenv func(string) string, warn func(string)) Knobs {
 	switch raw := strings.TrimSpace(getenv("NUI_SIM_LATE_FEED")); raw {
 	case "":
 	case "never":
-		k.LateFeed = 0
+		k.LateFeed = LateFeedNever
 	default:
 		if m := num("NUI_SIM_LATE_FEED", -1, minutesLimit); m >= 0 {
 			k.LateFeed = time.Duration(m * float64(time.Minute))
@@ -222,9 +229,9 @@ func (k Knobs) World(ref *Reference, now time.Time) (*World, error) {
 		live("flood-"+k.Flood, time.Minute, 11*time.Minute)
 	}
 	switch {
-	case k.LateFeed == 0:
+	case k.LateFeed == LateFeedNever:
 		live("late-feed", 1000*day, 1001*day)
-	case k.LateFeed > 0:
+	case k.LateFeed >= 0:
 		live("late-feed", k.LateFeed, 1000*day)
 	}
 	sites := DefaultSites()
