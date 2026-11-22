@@ -48,7 +48,7 @@ to `/nui.js`, `/api/in`, `/api/feed` or `sites.json` updates it in the same comm
   Local data: `BACKEND_DATA_DIR=./data BACKEND_AUTH_DISABLED=true BACKEND_REFDATA_DISABLED=true go run ./cmd/server
   -demo 30` (needs `./data/sites.json`; auth-off is refused with `PUBLIC_FQDN` set).
 - Gate: `make check` (= ship check; `make hooks` once per clone).
-- Commit subjects + PR titles: Go style `area: what` (`backend: …`, `ui: …`, `deploy: …`, `repo: …`), gated by ship; release notes list them by area.
+- Commit subjects + PR titles: Go style `area: what` (`backend: …`, `ui: …`, `deploy: …`, `repo: …`, `sim: …`), gated by ship; release notes list them by area.
 - Fresh clone: `ship hooks` before the first push (check, conform and init install it too); without the pre-push hook a push skips the gate.
 - Prod: `compose.yaml` pulls `ghcr.io/trick77/nui` behind Traefik; `./data` owned by `65532:65532`.
 - Release: Actions "Release" by hand (bump input); the first one `bump=minor`. Never dispatch Release yourself.
