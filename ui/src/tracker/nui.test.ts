@@ -401,12 +401,16 @@ describe("sending", () => {
     const props: Record<string, string> = {};
     for (let i = 0; i < 7; i++) props["k" + i] = "y".repeat(500);
     for (let i = 0; i < 30; i++) t.event("big", props);
-    // The 20th event already flushed one batch.
-    const before = fetchMock.mock.calls.length;
+    // The 20th event already flushed one batch, still unanswered here.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     t.flush(true);
+    // Beside it, what fits the keepalive quota of 64 KiB in flight.
+    const sizes = fetchMock.mock.calls.map((c) =>
+      utf8Len((c[1] as RequestInit).body as string),
+    );
+    expect(sizes.length).toBeGreaterThan(1);
+    expect(sizes.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(64 * 1024);
     await vi.advanceTimersByTimeAsync(0);
-    // Two at once at most: the keepalive quota is 64 KiB in flight.
-    expect(fetchMock.mock.calls.length - before).toBe(2);
     expect(t.state().queued).toBeGreaterThan(0);
     await vi.advanceTimersByTimeAsync(LIMITS.flushAfterMs * 3);
     expect(t.state().queued).toBe(0);
@@ -418,6 +422,59 @@ describe("sending", () => {
       );
     }
     expect(kinds().filter((k) => k === "custom")).toHaveLength(30);
+  });
+
+  it("budgets the final flush against what is still in flight", async () => {
+    const t = boot();
+    const props: Record<string, string> = {};
+    for (let i = 0; i < 7; i++) props["k" + i] = "y".repeat(500);
+    // A normal batch near its 31 KiB bound that the collector never answers.
+    let answer: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((r) => (answer = r)),
+    );
+    for (let i = 0; i < 19; i++) t.event("big", props);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 19; i++) t.event("big", props);
+    // Leaving: the browser refuses whatever would pass 64 KiB in flight.
+    const refused: number[] = [];
+    let inFlight = utf8Len(
+      (fetchMock.mock.calls[0][1] as RequestInit).body as string,
+    );
+    fetchMock.mockImplementation((_u: string, init: RequestInit) => {
+      const n = utf8Len(init.body as string);
+      if (inFlight + n > 64 * 1024) {
+        refused.push(n);
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
+      inFlight += n;
+      return reply(204).then((r) => {
+        inFlight -= n;
+        return r;
+      });
+    });
+    t.flush(true);
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refused).toEqual([]);
+    expect(t.state().failures).toBe(0);
+    // A refusal by the quota (the host page's own requests used it up) is
+    // no failure of the collector: the batch waits for a later request.
+    fetchMock.mockImplementation(() =>
+      Promise.reject(new TypeError("Failed to fetch")),
+    );
+    t.event("late");
+    const queued = t.state().queued;
+    t.flush(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.state().failures).toBe(0);
+    expect(t.state().queued).toBe(queued);
+    answer(new Response(null, { status: 204 }));
+    inFlight = 0;
+    fetchMock.mockImplementation(() => reply(204));
+    await vi.advanceTimersByTimeAsync(LIMITS.flushAfterMs * 10);
+    expect(t.state().queued).toBe(0);
+    expect(t.state().dropped).toBe(0);
   });
 
   it("honours Retry-After on 429 and sends again later", async () => {
@@ -1335,7 +1392,6 @@ describe("collector limits", () => {
     });
     document.title = odd;
     const t = boot();
-    fetchMock.mockImplementation(() => new Promise(() => {}));
     // Props just within 4 KiB: as sent, and as Go stores them.
     const big: Record<string, string> = {};
     for (let i = 0; i < 4; i++) big["k" + i] = LS.repeat(150);

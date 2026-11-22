@@ -29,6 +29,8 @@ type Rec = {
 export const LIMITS = {
   // The collector rejects a body over 32 KiB: stay below it with room.
   batchBytes: 31 * 1024,
+  // The keepalive bodies a browser lets a page have in flight together.
+  quota: 64 * 1024,
   batchEvents: 50,
   // Strings under the keys url, ref, src and href; every other string str.
   url: 2048,
@@ -292,7 +294,9 @@ export function start(
   // end of the visit would be lost, and with a failed first batch its start.
   let asked = 0;
   let timer: ReturnType<typeof setTimeout> | 0 = 0;
-  let inFlight = false;
+  // Body bytes of the requests not yet answered: browsers refuse a
+  // keepalive request once those in flight would pass 64 KiB together.
+  let carried = 0;
   // The latest page view, its title still to be taken (see pageView).
   let view: Rec | undefined;
   const settle = () => {
@@ -615,7 +619,8 @@ export function start(
     queue.unshift(...batch.slice(0, room));
   };
 
-  const take = (): { body: string; batch: Rec[] } | null => {
+  // The next batch, its body at most room bytes; null when nothing fits.
+  const take = (room: number): [string, Rec[]] | null => {
     settle();
     const c = ctx();
     const url = c.url;
@@ -684,13 +689,15 @@ export function start(
         }
         break;
       }
+      // Within the limits but not within what the browser has left: it
+      // waits for a later request.
+      if (size + w > room) break;
       size += w;
       stored += cost;
       parts.push(j);
       batch.push(queue.shift()!);
     }
-    if (!batch.length) return null;
-    return { body: head + parts.join(",") + "]}", batch };
+    return batch.length ? [head + parts.join(",") + "]}", batch] : null;
   };
 
   const deliver = (body: string, batch: Rec[], final: boolean) => {
@@ -713,7 +720,8 @@ export function start(
       } else fail(0);
       return;
     }
-    inFlight = !final;
+    const n = utf8Len(body);
+    carried += n;
     let p: Promise<Response>;
     try {
       p = f.call(win, endpoint, {
@@ -724,14 +732,14 @@ export function start(
         mode: "cors",
       });
     } catch {
-      inFlight = false;
+      carried -= n;
       requeue(batch);
       fail(0);
       return;
     }
     p.then(
       (res) => {
-        inFlight = false;
+        carried -= n;
         const st = res.status;
         // An answer's body unread holds its request's bytes against the
         // browser's 64 KiB keepalive quota: two refused batches left so
@@ -773,17 +781,24 @@ export function start(
           schedule(Math.max(LIMITS.flushAfterMs, notBefore - now()));
       },
       () => {
-        inFlight = false;
+        carried -= n;
         requeue(batch);
-        fail(0);
-        if (queue.length && !disabled) schedule(Math.max(0, notBefore - now()));
+        // A final send shares the browser's keepalive quota with what the
+        // host page sends as it closes: refused there, it is the browser's
+        // refusal, not the collector's failure. It goes again later.
+        if (!final) fail(0);
+        if (queue.length && !disabled)
+          schedule(
+            Math.max(final ? LIMITS.flushAfterMs : 0, notBefore - now()),
+          );
       },
     ).catch(() => {});
   };
 
   const flush = (final: boolean) => {
     if (disabled || !queue.length) return;
-    if (inFlight && !final) return;
+    // In normal operation one request at a time; its answer sends the rest.
+    if (carried && !final) return;
     if (now() < (final ? asked : notBefore)) {
       if (!final) schedule(notBefore - now());
       return;
@@ -792,17 +807,18 @@ export function start(
       clearTimeout(timer);
       timer = 0;
     }
-    // One request in normal operation. A final flush sends two at most:
-    // browsers cap the keepalive bodies in flight at 64 KiB together, and
-    // a third batch would be refused and count as a failure.
-    let rounds = final ? 2 : 1;
-    while (rounds-- > 0 && queue.length && !disabled) {
-      const b = take();
-      if (!b) return;
-      deliver(b.body, b.batch, final);
-      if (inFlight) break;
+    // A final flush sends two batches at most, within what the browser's
+    // keepalive quota has left beside the requests still in flight: a
+    // batch over it would be refused.
+    for (
+      let rounds = final ? 2 : 1;
+      rounds-- > 0 && queue.length && !disabled;
+    ) {
+      const b = take(LIMITS.quota - carried);
+      if (!b) break;
+      deliver(b[0], b[1], final);
     }
-    if (queue.length && !disabled) schedule(LIMITS.flushAfterMs);
+    if (queue.length && !disabled && !carried) schedule(LIMITS.flushAfterMs);
   };
 
   // ---- capture
