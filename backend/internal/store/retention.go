@@ -106,7 +106,7 @@ func (s *Store) EnforceCap(ctx context.Context, maxBytes int64) (int64, error) {
 			break
 		}
 		res, err := s.DB.ExecContext(ctx, `DELETE FROM event WHERE id IN (SELECT id FROM event WHERE site_id = ?
-			ORDER BY ts LIMIT `+strconv.Itoa(retentionChunk)+`)`, site)
+			ORDER BY ts LIMIT ?)`, site, retentionChunk)
 		if err != nil {
 			return total, err
 		}

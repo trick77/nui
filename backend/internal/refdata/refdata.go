@@ -123,7 +123,7 @@ func (n *Networks) ByASN(asn int64) (AS, bool) {
 
 // Countries is one load of the country data.
 type Countries struct {
-	Codes   []string
+	Codes    []string
 	Names    map[string]string
 	table    PrefixTable
 	Updated  time.Time

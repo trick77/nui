@@ -543,7 +543,7 @@ func TestBrowser_StoredBytesPerToken(t *testing.T) {
 	for i := range 7 {
 		p = append(p, fmt.Sprintf(`"k%d":"%s"`, i, strings.Repeat("<", 500)))
 	}
-	lt := strings.Replace(batch(domain, 8, ""), `"p":{}`, `"p":{`+strings.Join(p, ",")+`}`, -1)
+	lt := strings.ReplaceAll(batch(domain, 8, ""), `"p":{}`, `"p":{`+strings.Join(p, ",")+`}`)
 	if w := r.browser(lt, "198.51.100.31", ""); w.Code != http.StatusNoContent {
 		t.Fatalf("< batch: %d", w.Code)
 	}
