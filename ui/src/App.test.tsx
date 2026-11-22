@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setFetcher } from "./api";
 import App from "./App";
+import { MainChart, StackChart } from "./charts";
 import { type FixtureOptions, TRAIL_NEXT, fixtureFetch } from "./fixtures";
 
 let calls: string[] = [];
@@ -1316,5 +1317,48 @@ describe("log page", () => {
     expect(within(log).queryByRole("combobox", { name: "Status" })).toBeNull();
     expect(within(log).queryByText("Source")).toBeNull();
     expect(within(log).queryByRole("option", { name: "request" })).toBeNull();
+  });
+});
+
+describe("main chart", () => {
+  it("labels a count's axis with whole numbers only", () => {
+    const axis = (cur: number[], kind: "sum" | "rate") => {
+      const { container, unmount } = render(
+        <MainChart
+          labels={cur.map((_, i) => `${i}`)}
+          cur={cur}
+          prev={null}
+          median={null}
+          kind={kind}
+          open={false}
+          title="t"
+          prevLabel="p"
+        />,
+      );
+      const texts = [...container.querySelectorAll("text[text-anchor=end]")];
+      const out = texts.map((t) => t.textContent);
+      unmount();
+      return out;
+    };
+    // An empty range: 0 and 1, not a rounded 0.5 printed as a second 1.
+    expect(axis([0, 0, 0], "sum")).toEqual(["0", "1"]);
+    expect(axis([0, 4, 3], "sum")).toEqual(["0", "5"]);
+    expect(axis([0, 8, 3], "sum")).toEqual(["0", "5", "10"]);
+    // A rate keeps its half-way label.
+    expect(axis([0, 0.4, 0.2], "rate")).toHaveLength(3);
+    // The requests by class, stacked: the same for its counts.
+    const zero = [0, 0];
+    const { container } = render(
+      <StackChart
+        labels={["a", "b"]}
+        series={{ human: zero, bot: zero, monitor: zero, unknown: zero }}
+        open={false}
+      />,
+    );
+    expect(
+      [...container.querySelectorAll("text[text-anchor=end]")].map(
+        (t) => t.textContent,
+      ),
+    ).toEqual(["0", "1"]);
   });
 });

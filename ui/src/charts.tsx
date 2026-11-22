@@ -207,9 +207,14 @@ export function MainChart({
                 y2={y(v)}
                 stroke={f ? "var(--color-grid-minor)" : "var(--color-axis)"}
               />
-              <text x={L - 8} y={y(v) + 3.5} textAnchor="end">
-                {fmt(v)}
-              </text>
+              {/* A count's half-way line between whole numbers (0.5 of
+                  an empty range's 1, 2.5 of 5) would print rounded, a
+                  wrong figure: the line stays, its label goes. */}
+              {(kind !== "sum" || Number.isInteger(v)) && (
+                <text x={L - 8} y={y(v) + 3.5} textAnchor="end">
+                  {fmt(v)}
+                </text>
+              )}
             </g>
           );
         })}
@@ -410,9 +415,12 @@ export function StackChart({
                 y2={yy}
                 stroke={f ? "var(--color-grid-minor)" : "var(--color-axis)"}
               />
-              <text x={L - 8} y={yy + 3.5} textAnchor="end">
-                {num(hi * f)}
-              </text>
+              {/* Counts: no label where half-way is no whole number. */}
+              {Number.isInteger(hi * f) && (
+                <text x={L - 8} y={yy + 3.5} textAnchor="end">
+                  {num(hi * f)}
+                </text>
+              )}
             </g>
           );
         })}
