@@ -855,6 +855,8 @@ export function start(
   let activeMs = 0;
   let maxScroll = 0;
   let pageInputs = 0;
+  // The page's input counts; the context carries the document's.
+  let pageIn = { pointer: 0, key: 0, touch: 0, scroll: 0 };
   const isActive = () => {
     try {
       return doc.visibilityState === "visible" && doc.hasFocus();
@@ -888,7 +890,7 @@ export function start(
       {
         ms: Math.round(activeMs),
         scroll: Math.round(maxScroll),
-        inputs: { ...inputs },
+        inputs: pageIn,
       },
       undefined,
       at,
@@ -896,6 +898,7 @@ export function start(
     activeMs = 0;
     maxScroll = 0;
     pageInputs = 0;
+    pageIn = { pointer: 0, key: 0, touch: 0, scroll: 0 };
   };
   // The scroll depth is measured at most once a frame, and when the
   // engagement is taken; never in the scroll handler: the page's height
@@ -915,6 +918,7 @@ export function start(
     // First: input that resumes an expired session belongs to the new one.
     touch();
     if (inputs[k] < 1e6) inputs[k]++;
+    if (pageIn[k] < 1e6) pageIn[k]++;
     pageInputs++;
     if (k === "scroll" && !scrolled) {
       scrolled = true;

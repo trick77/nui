@@ -1163,6 +1163,39 @@ describe("capture", () => {
     expect(cls).toHaveLength(1);
   });
 
+  it("counts each page's own input in its engagement", async () => {
+    boot();
+    document.dispatchEvent(new Event("pointerdown"));
+    document.dispatchEvent(new Event("pointerdown"));
+    vi.advanceTimersByTime(1000);
+    history.pushState(null, "", "/b");
+    document.dispatchEvent(new KeyboardEvent("keydown"));
+    Object.defineProperty(document, "visibilityState", {
+      value: "hidden",
+      configurable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      configurable: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const eng = bodies()
+      .flatMap((b) => b.events)
+      .filter((e) => e.k === "engagement");
+    expect(eng.map((e) => e.p.inputs)).toEqual([
+      { pointer: 2, key: 0, touch: 0, scroll: 0 },
+      { pointer: 0, key: 1, touch: 0, scroll: 0 },
+    ]);
+    // The context keeps the document's totals.
+    expect(bodies().at(-1)!.ctx.inputs).toEqual({
+      pointer: 2,
+      key: 1,
+      touch: 0,
+      scroll: 0,
+    });
+  });
+
   it("measures the scroll depth at most once a frame, never in the handler", async () => {
     const reads = { n: 0 };
     const height = (el: Element, h: number) =>
