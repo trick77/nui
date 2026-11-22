@@ -303,6 +303,9 @@ func scratchHistory(ctx context.Context, k sim.Knobs, log *slog.Logger) (*store.
 	return st, w, cleanup, nil
 }
 
+// checkWorld is Check (tests replace it).
+var checkWorld = Check
+
 // checkCmd plays every selected scenario with the baseline alone and checks what it says the dashboard shows.
 func checkCmd(ctx context.Context, k sim.Knobs, log *slog.Logger, out io.Writer) error {
 	sc, err := sim.Scenarios(k.Scenarios)
@@ -320,18 +323,24 @@ func checkCmd(ctx context.Context, k sim.Knobs, log *slog.Logger, out io.Writer)
 		if err != nil {
 			return err
 		}
-		fails, err := Check(ctx, st, w)
+		fails, err := checkWorld(ctx, st, w)
 		cleanup()
 		if err != nil {
 			return err
 		}
+		// Every failure counts, the baseline's in this run included: its expectations were checked too.
 		for _, f := range fails {
-			if f.Expectation.Scenario == s.Name {
-				failed++
-				_, _ = fmt.Fprintln(out, "FAIL", f)
+			_, _ = fmt.Fprintln(out, "FAIL", f)
+		}
+		failed += len(fails)
+		own := 0
+		for _, e := range w.Expectations() {
+			if e.Scenario == s.Name {
+				own++
 			}
 		}
-		_, _ = fmt.Fprintf(out, "%s: %d expectations checked\n", s.Name, len(w.Expectations()))
+		_, _ = fmt.Fprintf(out, "%s: %d expectations checked (%d its own, %d the baseline's), %d failed\n", s.Name,
+			len(w.Expectations()), own, len(w.Expectations())-own, len(fails))
 	}
 	if failed > 0 {
 		return fmt.Errorf("%d expectations not met", failed)
