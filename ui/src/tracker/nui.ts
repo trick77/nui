@@ -465,7 +465,8 @@ export function start(
   // anything counts as activity: an event, input, visible and focused time.
   // liveFrom is where the current visible, focused stretch began: one that
   // began within a live session keeps it alive up to now. A closing event
-  // (engagement, vital) never opens a session nor extends an expired one.
+  // (engagement, vital) never opens a session nor extends an expired one;
+  // activity after the session expired starts a new one there (resume).
   let liveFrom = 0;
   let touched = 0;
   const alive = (t: number): boolean => {
@@ -485,16 +486,39 @@ export function start(
       put(STORE_SID, sid);
       fresh = true;
     }
-    if (live || fresh) put(STORE_SEEN, String(t));
-    touched = t;
+    if (live || fresh) {
+      put(STORE_SEEN, String(t));
+      touched = t;
+    }
     return fresh;
   };
   // Input keeps the session alive; storage at most every few seconds.
+  // Input after the session expired starts a new one (resume); the end of a
+  // visible, focused stretch (force) only records how long it lived.
   const touch = (force?: boolean) => {
     const t = now();
     if (!force && t - touched < 5000) return;
     touched = t;
-    if (sid && alive(t)) put(STORE_SEEN, String(t));
+    if (!sid) return;
+    if (alive(t)) put(STORE_SEEN, String(t));
+    else if (!force) resume();
+  };
+  // Activity on a page whose session expired: what the page holds so far
+  // goes out as a closing engagement of the expired session, then a new
+  // session starts here, with its session_start, and takes what follows.
+  // Before the first page view there is nothing to close: the view itself
+  // starts the session.
+  let begun = false;
+  let resuming = false;
+  const resume = () => {
+    if (!begun || resuming || disabled || pre()) return;
+    resuming = true;
+    try {
+      engagement();
+      record("session_start", {});
+    } finally {
+      resuming = false;
+    }
   };
 
   // Checked before any work for an event: once a cap is reached, a host page
@@ -801,7 +825,11 @@ export function start(
     if (activeSince) activeMs += t - activeSince;
     activeSince = isActive() ? t : 0;
     if (activeSince) {
-      if (!liveFrom) liveFrom = t;
+      if (!liveFrom) {
+        liveFrom = t;
+        // A visible, focused stretch begins: activity, as input is.
+        if (sid && !alive(t)) resume();
+      }
     } else if (liveFrom) {
       // The stretch ends: the session was alive until now.
       touch(true);
@@ -834,9 +862,10 @@ export function start(
     if (d > maxScroll) maxScroll = d;
   };
   const count = (k: keyof typeof inputs) => () => {
+    // First: input that resumes an expired session belongs to the new one.
+    touch();
     if (inputs[k] < 1e6) inputs[k]++;
     pageInputs++;
-    touch();
     if (k === "scroll") scrolled();
   };
   on(doc, "pointerdown", count("pointer"), { capture: true, passive: true });
@@ -1158,6 +1187,7 @@ export function start(
     activeSince = liveFrom = 0;
     tick();
     pageView(true);
+    begun = true;
     const n = navEntry();
     if (n && n.responseStart > 0) vital("TTFB", n.responseStart, true);
     sendFCP();

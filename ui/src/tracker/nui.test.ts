@@ -235,6 +235,51 @@ describe("sending", () => {
       expect(t.state().sid).not.toBe(sid);
     });
 
+    it("starts a new session where activity resumes after it expired", async () => {
+      for (const resume of [
+        () => window.dispatchEvent(new Event("scroll")),
+        () => document.dispatchEvent(new Event("pointerdown")),
+        () => document.dispatchEvent(new KeyboardEvent("keydown")),
+        () => {
+          vi.spyOn(document, "hasFocus").mockReturnValue(true);
+          window.dispatchEvent(new Event("focus"));
+        },
+      ]) {
+        tracker?.stop();
+        localStorage.clear();
+        fetchMock.mockClear();
+        vi.spyOn(document, "hasFocus").mockReturnValue(false);
+        const t = boot();
+        const old = t.state().sid;
+        // Read before the absence: it belongs to the old session.
+        window.dispatchEvent(new Event("scroll"));
+        vi.advanceTimersByTime(40 * 60 * 1000);
+        resume();
+        const fresh = t.state().sid;
+        expect(fresh).not.toBe(old);
+        vi.advanceTimersByTime(10_000);
+        document.dispatchEvent(new Event("pointerdown"));
+        show("hidden");
+        await vi.advanceTimersByTimeAsync(0);
+        show("visible");
+        const s = sessions().filter(
+          ([, k]) => k === "session_start" || k === "engagement",
+        );
+        expect(s).toEqual([
+          [old, "session_start"],
+          [old, "engagement"],
+          [fresh, "session_start"],
+          [fresh, "engagement"],
+        ]);
+        const engaged = bodies()
+          .flatMap((b) => b.events)
+          .filter((e) => e.k === "engagement");
+        // The resuming input counts for the new session, not the old.
+        expect(engaged[0].p.inputs).toMatchObject({ scroll: 1, pointer: 0 });
+        expect(t.state().sid).toBe(fresh);
+      }
+    });
+
     it("never opens a session for a closing engagement or vital", async () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       const t = boot();
