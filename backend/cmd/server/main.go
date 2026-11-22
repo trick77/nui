@@ -9,10 +9,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -175,8 +177,18 @@ func loadSites(ctx context.Context, cfg app.Config, st *store.Store) (*sites.Reg
 	if err != nil {
 		return nil, err
 	}
-	if len(cs) == 0 {
-		slog.Warn("No sites configured: the collector refuses every event", "sites_file", cfg.SitesFile)
+	switch _, statErr := os.Stat(cfg.SitesFile); {
+	case errors.Is(statErr, fs.ErrNotExist):
+		slog.Warn("Sites file missing: the collector refuses every event and the dashboard lists no domain until it "+
+			"exists (docs/sites.example.json in the repo, restart after writing it)", "sites_file", cfg.SitesFile)
+	case len(cs) == 0:
+		slog.Warn("Sites file lists no site: the collector refuses every event", "sites_file", cfg.SitesFile)
+	default:
+		domains := make([]string, 0, len(cs))
+		for _, c := range cs {
+			domains = append(domains, c.Domain)
+		}
+		slog.Info("Sites loaded", "sites_file", cfg.SitesFile, "domains", strings.Join(domains, ","))
 	}
 	rows, err := st.SyncSites(ctx, sites.Rows(cs))
 	if err != nil {
