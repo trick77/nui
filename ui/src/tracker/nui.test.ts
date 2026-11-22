@@ -787,12 +787,17 @@ describe("capture", () => {
     document.body.innerHTML =
       '<a id="o1" href="https://auth.example.org/x?y=1#token=SECRET">a</a>' +
       '<a id="o2" href="https://other.example.org/#/r/1">b</a>' +
-      '<a id="d1" href="/f.pdf#page=SECRET">c</a>';
+      '<a id="d1" href="/f.pdf#page=SECRET">c</a>' +
+      '<form id="f" action="/reset?u=1#code=SECRET"><input id="i"></form>';
     for (const id of ["o1", "o2", "d1"])
       document
         .getElementById(id)!
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    document
+      .getElementById("i")!
+      .dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
     const ev = await flushed(t);
+    expect(ev.find((e) => e.k === "form")!.p.action).toBe("/reset?u=1");
     const bs = bodies();
     expect(JSON.stringify(bs)).not.toMatch(/SECRET/);
     const views = ev.filter((e) => e.k === "page_view");

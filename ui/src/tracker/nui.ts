@@ -898,7 +898,8 @@ export function start(
   const formInfo = (f: HTMLFormElement): Props => ({
     id: clip(f.getAttribute("id"), 64),
     name: clip(f.getAttribute("name"), 64),
-    action: f.getAttribute("action"),
+    // A URL without its fragment, then held to 512 bytes as "action".
+    action: clipURL(f.getAttribute("action")),
   });
   on(
     doc,
