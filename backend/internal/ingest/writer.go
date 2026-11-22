@@ -18,27 +18,44 @@ import (
 
 // Writer limits.
 const (
-	// DefaultQueueEvents bounds the events waiting for the writer, about 20 MB at worst-case row sizes.
+	// DefaultQueueEvents and DefaultQueueBytes bound what waits for the writer, events and memory: an event's
+	// weight is its stored size (store.Event.Size) plus eventMemory for the row struct and its string headers.
+	// 32 MiB of queue is about 50,000 typical events, or 2,000 at the collector's largest.
 	DefaultQueueEvents = 20_000
+	DefaultQueueBytes  = 32 << 20
+	eventMemory        = 256
 	// writeBatch is the most events one insert transaction takes; the writer also commits every flushEvery.
 	writeBatch = 1000
 	flushEvery = 250 * time.Millisecond
+	// writeTimeout bounds one flush, its retries included; drainTimeout the last flush at shutdown. Neither is the
+	// context shutdown cancels: a write under way finishes, and what was accepted is written.
+	writeTimeout = 10 * time.Second
+	drainTimeout = 5 * time.Second
+	// writeAttempts is how often a failed chunk is tried before its events are dropped and counted.
+	writeAttempts = 3
 )
 
 // Writer is the bounded queue and its one writer goroutine.
 type Writer struct {
-	st       *store.Store
-	ch       chan []store.Event
-	queued   atomic.Int64
-	max      int64
-	enrich   func(*store.Event)
-	counters *Counters
-	log      *slog.Logger
-	done     chan struct{}
+	st          *store.Store
+	ch          chan []store.Event
+	queued      atomic.Int64
+	queuedBytes atomic.Int64
+	max         int64
+	maxBytes    int64
+	enrich      func(*store.Event)
+	counters    *Counters
+	log         *slog.Logger
+	done        chan struct{}
+	// insert writes one chunk: the store's, a failing one in tests.
+	insert func(context.Context, []store.Event) error
+	// retryWait is the pause before the second attempt, doubled before each further one.
+	retryWait time.Duration
 }
 
-// NewWriter returns a writer for st holding at most maxEvents queued (DefaultQueueEvents when 0). enrich, when not
-// nil, runs on every event in the writer goroutine (network, country, first class), never in the request.
+// NewWriter returns a writer for st holding at most maxEvents queued (DefaultQueueEvents when 0) and
+// DefaultQueueBytes of them. enrich, when not nil, runs on every event in the writer goroutine (network, country,
+// first class), never in the request.
 func NewWriter(st *store.Store, counters *Counters, maxEvents int, enrich func(*store.Event), log *slog.Logger) *Writer {
 	if maxEvents <= 0 {
 		maxEvents = DefaultQueueEvents
@@ -46,19 +63,31 @@ func NewWriter(st *store.Store, counters *Counters, maxEvents int, enrich func(*
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Writer{st: st, ch: make(chan []store.Event, maxEvents), max: int64(maxEvents), enrich: enrich,
-		counters: counters, log: log, done: make(chan struct{})}
+	return &Writer{st: st, ch: make(chan []store.Event, maxEvents), max: int64(maxEvents),
+		maxBytes: DefaultQueueBytes, enrich: enrich, counters: counters, log: log, done: make(chan struct{}),
+		insert: st.InsertEvents, retryWait: 200 * time.Millisecond}
 }
 
-// Enqueue hands a batch to the writer, or reports false when the queue holds no room for all of it: the caller
-// counts the events as dropped.
+// weight is what a batch counts against the queue's byte bound.
+func weight(evs []store.Event) int64 {
+	var n int64
+	for i := range evs {
+		n += int64(evs[i].Size() + eventMemory)
+	}
+	return n
+}
+
+// Enqueue hands a batch to the writer, or reports false when the queue holds no room for all of it, in events or
+// bytes: the caller counts the events as dropped.
 func (w *Writer) Enqueue(evs []store.Event) bool {
 	n := int64(len(evs))
 	if n == 0 {
 		return true
 	}
-	if w.queued.Add(n) > w.max {
+	b := weight(evs)
+	if w.queued.Add(n) > w.max || w.queuedBytes.Add(b) > w.maxBytes {
 		w.queued.Add(-n)
+		w.queuedBytes.Add(-b)
 		return false
 	}
 	select {
@@ -66,6 +95,7 @@ func (w *Writer) Enqueue(evs []store.Event) bool {
 		return true
 	default:
 		w.queued.Add(-n)
+		w.queuedBytes.Add(-b)
 		return false
 	}
 }
@@ -73,30 +103,29 @@ func (w *Writer) Enqueue(evs []store.Event) bool {
 // Queued is the number of events waiting.
 func (w *Writer) Queued() int64 { return w.queued.Load() }
 
-// Run writes until ctx ends, then drains what is queued (bounded by a few seconds) and returns.
+// QueuedBytes is the weight of the events waiting.
+func (w *Writer) QueuedBytes() int64 { return w.queuedBytes.Load() }
+
+// Run writes until ctx ends, then drains what is queued (bounded by drainTimeout) and returns. Writes never use
+// ctx itself: a flush under way when it ends completes instead of rolling back.
 func (w *Writer) Run(ctx context.Context) {
 	defer close(w.done)
 	tick := time.NewTicker(flushEvery)
 	defer tick.Stop()
+	base := context.WithoutCancel(ctx)
 	var pending []store.Event
-	flush := func(fctx context.Context) {
+	flush := func(limit time.Duration) {
 		if len(pending) == 0 {
 			return
 		}
+		fctx, cancel := context.WithTimeout(base, limit)
 		w.write(fctx, pending)
+		cancel()
 		pending = pending[:0]
 	}
 	for {
 		select {
-		case evs := <-w.ch:
-			pending = append(pending, evs...)
-			if len(pending) >= writeBatch {
-				flush(ctx)
-			}
-		case <-tick.C:
-			flush(ctx)
 		case <-ctx.Done():
-			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		drain:
 			for {
 				select {
@@ -106,9 +135,19 @@ func (w *Writer) Run(ctx context.Context) {
 					break drain
 				}
 			}
-			flush(dctx)
-			cancel()
+			flush(drainTimeout)
 			return
+		default:
+		}
+		select {
+		case evs := <-w.ch:
+			pending = append(pending, evs...)
+			if len(pending) >= writeBatch {
+				flush(writeTimeout)
+			}
+		case <-tick.C:
+			flush(writeTimeout)
+		case <-ctx.Done():
 		}
 	}
 }
@@ -117,7 +156,10 @@ func (w *Writer) Run(ctx context.Context) {
 func (w *Writer) Done() <-chan struct{} { return w.done }
 
 func (w *Writer) write(ctx context.Context, evs []store.Event) {
-	defer w.queued.Add(-int64(len(evs)))
+	defer func() {
+		w.queued.Add(-int64(len(evs)))
+		w.queuedBytes.Add(-weight(evs))
+	}()
 	if w.enrich != nil {
 		for i := range evs {
 			w.enrich(&evs[i])
@@ -125,7 +167,7 @@ func (w *Writer) write(ctx context.Context, evs []store.Event) {
 	}
 	for start := 0; start < len(evs); start += writeBatch {
 		chunk := evs[start:min(start+writeBatch, len(evs))]
-		if err := w.st.InsertEvents(ctx, chunk); err != nil {
+		if err := w.insertRetry(ctx, chunk); err != nil {
 			w.log.Error("Event batch write failed, events dropped", "events", len(chunk), logging.Err(err))
 			bySite := map[int64]int64{}
 			for _, e := range chunk {
@@ -135,6 +177,27 @@ func (w *Writer) write(ctx context.Context, evs []store.Event) {
 				w.counters.Add(site, func(s *store.IngestStat) { s.Dropped += n; s.Accepted -= n })
 			}
 		}
+	}
+}
+
+// insertRetry writes a chunk, trying again after a failure (a lock held past the busy timeout, a full disk that
+// retention is freeing) up to writeAttempts times within ctx.
+func (w *Writer) insertRetry(ctx context.Context, chunk []store.Event) error {
+	wait := w.retryWait
+	var err error
+	for attempt := 1; ; attempt++ {
+		if err = w.insert(ctx, chunk); err == nil || attempt == writeAttempts {
+			return err
+		}
+		w.log.Warn("Event batch write failed, retrying", "events", len(chunk), "attempt", attempt, logging.Err(err))
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return err
+		case <-t.C:
+		}
+		wait *= 2
 	}
 }
 

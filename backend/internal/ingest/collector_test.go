@@ -684,6 +684,103 @@ func TestFeed_PerEvent(t *testing.T) {
 	}
 }
 
+// The queue is bounded in bytes as well as events: a few large events fill it.
+func TestWriter_QueueBytes(t *testing.T) {
+	r := newRig(t, 0, false)
+	w := r.c.Writer
+	big := store.Event{SiteID: 1, Props: strings.Repeat("x", 1<<20)}
+	n := 0
+	for w.Enqueue([]store.Event{big}) {
+		n++
+		if n > 100 {
+			t.Fatal("no byte bound")
+		}
+	}
+	if want := DefaultQueueBytes / weight([]store.Event{big}); int64(n) != want {
+		t.Errorf("queued %d 1 MiB events, want %d", n, want)
+	}
+	if w.QueuedBytes() > DefaultQueueBytes || w.Queued() != int64(n) {
+		t.Errorf("queued %d events, %d bytes", w.Queued(), w.QueuedBytes())
+	}
+	// A refused batch leaves nothing behind.
+	before := w.QueuedBytes()
+	if w.Enqueue([]store.Event{big}) || w.QueuedBytes() != before {
+		t.Error("refused batch counted")
+	}
+}
+
+// Shutdown during a write: the write under way completes and the queue is drained; nothing is dropped.
+func TestWriter_ShutdownDuringWrite(t *testing.T) {
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "nui.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	rows, err := st.SyncSites(t.Context(), []store.Site{{Domain: domain, Kind: "site", PathRules: "[]"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	site := rows[domain].ID
+	ctx, cancel := context.WithCancel(context.Background())
+	inWrite := make(chan struct{})
+	var once sync.Once
+	counters := NewCounters(nil)
+	// The first enriched event stops the world: shutdown begins while its write is under way.
+	w := NewWriter(st, counters, 0, func(*store.Event) {
+		once.Do(func() { close(inWrite); cancel(); time.Sleep(50 * time.Millisecond) })
+	}, quiet())
+	go w.Run(ctx)
+	ev := store.Event{SiteID: site, TS: time.Now().UnixMilli(), Source: "browser", Kind: "page_view", IP: "192.0.2.1",
+		IPKey: "192.0.2.1"}
+	w.Enqueue([]store.Event{ev, ev, ev})
+	<-inWrite
+	w.Enqueue([]store.Event{ev, ev})
+	<-w.Done()
+	var n int
+	_ = st.DB.QueryRow(`SELECT COUNT(*) FROM event`).Scan(&n)
+	if n != 5 {
+		t.Errorf("stored %d of 5 events", n)
+	}
+	for _, s := range counters.Pending() {
+		if s.Dropped != 0 {
+			t.Errorf("dropped %+v", s)
+		}
+	}
+}
+
+// A failed chunk is retried; only one that keeps failing is dropped and counted.
+func TestWriter_Retry(t *testing.T) {
+	r := newRig(t, 0, false)
+	w := r.c.Writer
+	w.retryWait = time.Millisecond
+	fails := 2
+	var calls int
+	w.insert = func(ctx context.Context, evs []store.Event) error {
+		calls++
+		if calls <= fails {
+			return fmt.Errorf("database is locked")
+		}
+		return r.st.InsertEvents(ctx, evs)
+	}
+	ev := store.Event{SiteID: r.siteID(domain), TS: 1, Source: "browser", Kind: "page_view", IP: "192.0.2.1",
+		IPKey: "192.0.2.1"}
+	w.Enqueue([]store.Event{ev})
+	w.write(t.Context(), []store.Event{ev})
+	if calls != 3 {
+		t.Errorf("%d attempts", calls)
+	}
+	waitEvents(t, r.st, 1)
+	// Failing every attempt: dropped and counted after writeAttempts.
+	calls, fails = 0, 100
+	w.write(t.Context(), []store.Event{ev, ev})
+	if calls != writeAttempts {
+		t.Errorf("%d attempts, want %d", calls, writeAttempts)
+	}
+	if s := r.stat(t, r.siteID(domain)); s.Dropped != 2 {
+		t.Errorf("stat %+v", s)
+	}
+}
+
 func TestCounters_Flush(t *testing.T) {
 	r := newRig(t, 0, false)
 	r.c.Counters.Add(1, func(s *store.IngestStat) { s.Accepted += 3 })
