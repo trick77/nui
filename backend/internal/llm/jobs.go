@@ -53,7 +53,9 @@ func briefSchema(ids []string) map[string]any {
 			"lines": map[string]any{"type": "array", "maxItems": 5, "items": map[string]any{
 				"type": "object", "additionalProperties": false, "required": []string{"ids", "text"},
 				"properties": map[string]any{
-					"ids": map[string]any{"type": "array", "minItems": 1, "maxItems": 4,
+					// As many as are offered: a line covers every related finding of its kind (five probed
+					// paths of one scanner are one line, not four and a stray).
+					"ids": map[string]any{"type": "array", "minItems": 1, "maxItems": len(ids),
 						"items": map[string]any{"type": "string", "enum": ids}},
 					"text": map[string]any{"type": "string", "description": "about nine words, no figures"},
 				},
@@ -65,8 +67,9 @@ func briefSchema(ids []string) map[string]any {
 const briefPrompt = `You brief the owner of a website about its analytics. The data holds the period's headline ` +
 	`figures (for context only, they cannot be cited) and a list of findings, each with an id. Choose the findings ` +
 	`that matter most for someone who wants to act (at most five), most important first. A line cites findings by ` +
-	`their id, only ids from the findings list; you may merge findings that are clearly one thing (one operator, ` +
-	`one cause) into one line by listing several ids. For each line write one short statement of about nine words ` +
+	`their id, only ids from the findings list; findings of one kind that are clearly one thing (one operator, ` +
+	`one cause) go into one line that lists all of their ids, however many; a finding of another kind gets a line ` +
+	`of its own. For each line write one short statement of about nine words ` +
 	`saying what it means. Also write a headline of about eight words for the whole period.`
 
 func (s *Service) brief(ctx context.Context, in insight.BriefingInput) error {

@@ -162,7 +162,7 @@ func noNullLists(t *testing.T, where string, v any) {
 func listKey(k string) bool {
 	switch k {
 	case "rows", "items", "tiles", "series", "prev_series", "labels", "signals", "detail", "trail", "hours",
-		"sites", "evidence", "related", "ip_version", "browsers", "os", "devices":
+		"sites", "evidence", "related", "ip_version", "browsers", "os", "devices", "ids":
 		return true
 	}
 	return false
@@ -1009,18 +1009,59 @@ func TestNoteworthy(t *testing.T) {
 		{IDs: []string{facts[1].ID, facts[0].ID}, Text: "one operator"},
 	}}
 	_, body = r.get(t, "noteworthy", p(feedSite))
+	noNullLists(t, "noteworthy", body)
 	first := body["items"].([]any)[0].(map[string]any)
 	if first["id"] != facts[1].ID || first["gen"] != "one operator" || body["headline"].(map[string]any)["gen"] != "Quiet week, one noisy script." {
 		t.Errorf("briefed %v", body)
 	}
-	det := first["detail"].([]any)
-	if len(det) == 0 || det[len(det)-1] != facts[0].Text {
-		t.Errorf("merged detail %v", det)
+	// Merged when of one kind (TestNoteItemsMerge has the figures), else apart.
+	covered := first["ids"].([]any)
+	if merged := len(covered) == 2 && covered[1] == facts[0].ID; merged != (facts[0].Kind == facts[1].Kind) {
+		t.Errorf("ids %v for kinds %s, %s", covered, facts[1].Kind, facts[0].Kind)
 	}
 	for _, x := range body["items"].([]any)[1:] {
-		if x.(map[string]any)["id"] == facts[0].ID {
+		if x.(map[string]any)["id"] == facts[0].ID && len(covered) == 2 {
 			t.Error("a merged fact shows twice")
 		}
+	}
+}
+
+// A briefing line covers every related finding of one kind it names; its figure describes the group (the sum of
+// counted events) or is left out, never the first finding's alone.
+func TestNoteItemsMerge(t *testing.T) {
+	var facts []insight.Fact
+	for i, path := range []string{"/.env", "/.git/config", "/wp-login.php", "/.aws/credentials", "/phpinfo.php"} {
+		facts = append(facts, insight.Fact{ID: "probe:GET " + path, Kind: "automation", Figure: num(float64(10 + i)),
+			Unit: "probes of", Text: "New probed path: GET " + path})
+	}
+	facts = append(facts,
+		insight.Fact{ID: "ref:a.example", Kind: "people", Figure: "4", Unit: "visitors from", Text: "a.example"},
+		insight.Fact{ID: "ref:b.example", Kind: "people", Figure: "3", Unit: "visitors from", Text: "b.example"},
+		insight.Fact{ID: "spike:addr:192.0.2.1", Kind: "automation", Figure: "900", Unit: "requests from",
+			Text: "192.0.2.1"})
+	ids := func(fs ...insight.Fact) []string {
+		var out []string
+		for _, f := range fs {
+			out = append(out, f.ID)
+		}
+		return out
+	}
+	items, _ := noteItems(facts, &insight.Briefing{Lines: []insight.BriefLine{
+		{IDs: ids(facts[:5]...), Text: "Someone hunts for leaked config"},
+		{IDs: append(ids(facts[5:7]...), facts[0].ID), Text: "Two new referrers"}, // a used id is not taken twice
+		{IDs: []string{facts[7].ID, facts[5].ID}, Text: "One busy script"},        // another kind stays apart
+	}})
+	probes, refs, spike := items[0], items[1], items[2]
+	if probes.Figure != "60" || probes.Unit != "probes of" || len(probes.IDs) != 5 || len(probes.Detail) != 5 ||
+		probes.Detail[4] != "14 probes of New probed path: GET /phpinfo.php" ||
+		probes.Text != "New probed path: GET /.env, and 4 related" {
+		t.Errorf("probes %+v", probes)
+	}
+	if refs.Figure != "" || refs.Unit != "" || len(refs.IDs) != 2 {
+		t.Errorf("visitors do not add up: %+v", refs)
+	}
+	if spike.Figure != "900" || len(spike.IDs) != 1 || *spike.Gen != "One busy script" {
+		t.Errorf("single %+v", spike)
 	}
 }
 

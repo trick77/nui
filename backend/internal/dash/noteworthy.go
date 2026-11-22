@@ -41,6 +41,33 @@ type noteItem struct {
 	Text   string         `json:"text"`
 	Detail []string       `json:"detail"`
 	Target insight.Target `json:"target"`
+	// IDs are the findings the item covers: its own, and on a briefing line the related ones merged into it.
+	IDs []string `json:"ids"`
+}
+
+// summable are the units whose figures add up across findings: counts of events. Visitors from several referrers
+// may be the same people, shares and changes do not add at all.
+var summable = map[string]bool{"requests from": true, "probes of": true, "times": true, "events refused": true}
+
+// mergedItem is one briefing line over several findings of one kind: the figure describes the group (the sum when
+// the findings count the same events, none otherwise), the detail names every finding with its own figure.
+func mergedItem(group []insight.Fact, gen string) noteItem {
+	lead := group[0]
+	it := noteItem{ID: lead.ID, Kind: lead.Kind, Gen: &gen, Target: lead.Target, Detail: []string{},
+		Text: fmt.Sprintf("%s, and %d related", lead.Text, len(group)-1)}
+	var sum float64
+	same := summable[lead.Unit]
+	for _, f := range group {
+		it.IDs = append(it.IDs, f.ID)
+		it.Detail = append(it.Detail, strings.TrimSpace(f.Figure+" "+f.Unit+" "+f.Text))
+		v, err := strconv.ParseFloat(f.Figure, 64)
+		same = same && err == nil && f.Unit == lead.Unit
+		sum += v
+	}
+	if same {
+		it.Figure, it.Unit = num(sum), lead.Unit
+	}
+	return it
 }
 
 func (s *Server) handleNoteworthy(w http.ResponseWriter, r *http.Request, q *query) {
@@ -87,27 +114,26 @@ func noteItems(facts []insight.Fact, b *insight.Briefing) ([]noteItem, int) {
 	items := []noteItem{}
 	if b != nil {
 		for _, l := range b.Lines {
-			var lead *insight.Fact
-			detail := []string{}
+			// The findings of the lead's kind the line names; one of another kind keeps its own item.
+			var group []insight.Fact
 			for _, id := range l.IDs {
 				f, ok := byID[id]
-				if !ok || used[id] {
+				if !ok || used[id] || (len(group) > 0 && f.Kind != group[0].Kind) {
 					continue
 				}
 				used[id] = true
-				if lead == nil {
-					lead = &f
-					detail = append(detail, f.Detail...)
-					continue
-				}
-				detail = append(detail, f.Text)
-			}
-			if lead == nil {
-				continue
+				group = append(group, f)
 			}
 			gen := l.Text
-			items = append(items, noteItem{ID: lead.ID, Kind: lead.Kind, Figure: lead.Figure, Unit: lead.Unit,
-				Gen: &gen, Text: lead.Text, Detail: detail, Target: lead.Target})
+			switch len(group) {
+			case 0:
+			case 1:
+				f := group[0]
+				items = append(items, noteItem{ID: f.ID, Kind: f.Kind, Figure: f.Figure, Unit: f.Unit, Gen: &gen,
+					Text: f.Text, Detail: nonNil(f.Detail), Target: f.Target, IDs: []string{f.ID}})
+			default:
+				items = append(items, mergedItem(group, gen))
+			}
 		}
 	}
 	for _, f := range facts {
@@ -115,7 +141,7 @@ func noteItems(facts []insight.Fact, b *insight.Briefing) ([]noteItem, int) {
 			continue
 		}
 		items = append(items, noteItem{ID: f.ID, Kind: f.Kind, Figure: f.Figure, Unit: f.Unit, Text: f.Text,
-			Detail: nonNil(f.Detail), Target: f.Target})
+			Detail: nonNil(f.Detail), Target: f.Target, IDs: []string{f.ID}})
 	}
 	more := 0
 	if len(items) > maxItems {

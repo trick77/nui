@@ -87,6 +87,30 @@ func TestFromEnv_NotConfigured(t *testing.T) {
 	}
 }
 
+// A line may cover every related finding offered: five probed paths of one scanner are one line, kept whole.
+func TestBriefing_LineCoversAllRelated(t *testing.T) {
+	ids := []string{"probe:GET /.env", "probe:GET /.git/config", "probe:GET /wp-login.php", "probe:GET /.aws/x",
+		"probe:GET /phpinfo.php"}
+	lines := briefSchema(ids)["properties"].(map[string]any)["lines"].(map[string]any)
+	idsSchema := lines["items"].(map[string]any)["properties"].(map[string]any)["ids"].(map[string]any)
+	if idsSchema["maxItems"] != len(ids) {
+		t.Errorf("ids maxItems %v, want every offered id", idsSchema["maxItems"])
+	}
+	r := newRig(t, 10)
+	in := briefingInput("h5")
+	in.Facts = nil
+	for _, id := range ids {
+		in.Facts = append(in.Facts, insight.Fact{ID: id, Kind: "automation", Figure: "3", Unit: "probes of", Text: id})
+	}
+	r.s.Briefing(t.Context(), in)
+	r.srv.SetReply(`{"headline":"A scanner hunts for secrets","lines":[{"ids":["` + strings.Join(ids, `","`) +
+		`"],"text":"Someone hunts for leaked config"}]}`)
+	r.s.Drain(t.Context())
+	if b := r.s.Briefing(t.Context(), in); b == nil || len(b.Lines) != 1 || len(b.Lines[0].IDs) != len(ids) {
+		t.Errorf("briefing %+v", b)
+	}
+}
+
 // The briefing shows only for the fact-id set it was written for, never stale; its lines and headline hold no
 // figure; a figure's key is no citable id. The replies replay what the real model wrote in its first run.
 func TestBriefing(t *testing.T) {
