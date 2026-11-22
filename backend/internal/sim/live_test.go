@@ -320,6 +320,78 @@ func TestSendBacksOff(t *testing.T) {
 	}
 }
 
+// A request without an answer or with a 5xx comes again after a back-off, as a real client's would.
+func TestSendRetriesFailures(t *testing.T) {
+	w := testWorld(t, 1, "baseline")
+	var mu sync.Mutex
+	failed := map[string]bool{} // the first event of each failed batch
+	var back, delivered int
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		var b struct {
+			Events []json.RawMessage `json:"events"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &b)
+		key := r.URL.Path + string(b.Events[0])
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case failed[key]:
+			back++
+		case len(failed) < 3:
+			failed[key] = true
+			rw.WriteHeader(http.StatusServiceUnavailable)
+			return
+		case len(failed) < 5:
+			failed[key] = true
+			conn, _, _ := rw.(http.Hijacker).Hijack()
+			_ = conn.Close() // no answer at all
+			return
+		}
+		delivered++
+		rw.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	s, err := Send(t.Context(), NewLive(w, time.Now(), 3600), SendOptions{Target: srv.URL, For: time.Second,
+		Every: 20 * time.Millisecond, Backoff: func(int) time.Duration { return 50 * time.Millisecond }})
+	mu.Lock()
+	defer mu.Unlock()
+	if err != nil || s.Failed != 5 || s.Retried != 5 || back != 5 || delivered == 0 {
+		t.Errorf("stats %v, %v; %d failed batches back", s, err, back)
+	}
+}
+
+// A target failing everything is given up after a while; one refusing a site's batches for good (a wrong key, an
+// unknown site) at once, with what it means.
+func TestSendGivesUp(t *testing.T) {
+	w := testWorld(t, 1, "baseline")
+	down := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		rw.WriteHeader(http.StatusBadGateway)
+	}))
+	defer down.Close()
+	began := time.Now()
+	_, err := Send(t.Context(), NewLive(w, time.Now(), 3600), SendOptions{Target: down.URL, For: 10 * time.Second,
+		Every: 20 * time.Millisecond, GiveUp: 300 * time.Millisecond, Backoff: func(int) time.Duration { return 10 * time.Millisecond }})
+	if err == nil || !strings.Contains(err.Error(), "giving up") || time.Since(began) > 5*time.Second {
+		t.Errorf("a target answering 502: %v after %v", err, time.Since(began))
+	}
+	wrongKey := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/feed" {
+			rw.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		rw.WriteHeader(http.StatusNoContent)
+	}))
+	defer wrongKey.Close()
+	began = time.Now()
+	_, err = Send(t.Context(), NewLive(w, time.Now(), 3600), SendOptions{Target: wrongKey.URL, For: 10 * time.Second,
+		Every: 20 * time.Millisecond})
+	if err == nil || !strings.Contains(err.Error(), "/api/feed") || !strings.Contains(err.Error(), "feed key is wrong") ||
+		time.Since(began) > 5*time.Second {
+		t.Errorf("a wrong key: %v after %v", err, time.Since(began))
+	}
+}
+
 // Live traffic into the server's own collector as the dashboard is asked, the answers slowed.
 func TestWrap(t *testing.T) {
 	w := testWorld(t, 1, "baseline")

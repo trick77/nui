@@ -30,9 +30,10 @@ type Stats struct {
 	// Refused counts the answers other than 204 by status; Retried the requests sent again after a 429.
 	Refused map[int]int
 	Retried int
-	// Skipped counts the requests a live delivery left out at its time budget.
-	Skipped int
-	Elapsed time.Duration
+	// Skipped counts the requests a live delivery left out at its time budget; Failed the sends over HTTP that got
+	// no answer or a 5xx (also counted in Refused).
+	Skipped, Failed int
+	Elapsed         time.Duration
 }
 
 // Rate is the accepted events per second of wall time.
@@ -48,6 +49,9 @@ func (s Stats) String() string {
 		s.Elapsed.Round(time.Millisecond), s.Rate(), s.Refused, s.Retried)
 	if s.Skipped > 0 {
 		out += fmt.Sprintf(", skipped %d", s.Skipped)
+	}
+	if s.Failed > 0 {
+		out += fmt.Sprintf(", failed %d", s.Failed)
 	}
 	return out
 }

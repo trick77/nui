@@ -219,6 +219,12 @@ func TestLiveCommand(t *testing.T) {
 	if code, _, _ := run(t, nil, "live", "-target", srv.URL, "-key", "nope.example.com=k"); code != 1 {
 		t.Errorf("a key for no site: %d", code)
 	}
+	// A wrong key is refused for good: the run stops, non-zero, and says so.
+	code, _, errs = run(t, map[string]string{"NUI_SIM_SPEED": "3600"}, "live", "-target", srv.URL, "-for", "20s",
+		"-key", "lens.example.com=wrong-key")
+	if code != 1 || !strings.Contains(errs, "feed key is wrong") {
+		t.Errorf("a wrong key: %d %s", code, errs)
+	}
 }
 
 func TestServer(t *testing.T) {
