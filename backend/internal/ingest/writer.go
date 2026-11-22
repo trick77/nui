@@ -31,6 +31,8 @@ const (
 	// context shutdown cancels: a write under way finishes, and what was accepted is written.
 	writeTimeout = 10 * time.Second
 	drainTimeout = 5 * time.Second
+	// StopTime is the longest Run takes to return once its context ends: the write under way, then the drain.
+	StopTime = writeTimeout + drainTimeout
 	// writeAttempts is how often a failed chunk is tried before its events are dropped and counted.
 	writeAttempts = 3
 )

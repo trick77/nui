@@ -172,18 +172,46 @@ func serve(cfg app.Config) error {
 		Browser: http.HandlerFunc(collector.HandleBrowser), Feed: http.HandlerFunc(collector.HandleFeed), Dash: ds, Auth: a,
 		Ready: []httpx.Check{{Name: "db", Run: st.Ping}}}))
 	slog.Info("listening", "addr", cfg.Addr, "sites", len(reg.All()))
-	err = httpx.Serve(ctx, srv, 10*time.Second)
-	stopBG()
-	wg.Wait()
-	if ferr := counters.Flush(context.Background(), st); ferr != nil {
+	err = httpx.Serve(ctx, srv, httpDrain)
+	if !stopWithin(stopBG, &wg, bgStop) {
+		slog.Warn("background work still running at the shutdown budget, the writer's tail may be lost")
+	}
+	fctx, cancel := context.WithTimeout(context.Background(), counterFlush)
+	if ferr := counters.Flush(fctx, st); ferr != nil {
 		slog.Warn("final counter flush failed", logging.Err(ferr))
 	}
+	cancel()
 	// Past the drain deadline Shutdown cut the remaining connections; the process still exits as asked.
 	if errors.Is(err, context.DeadlineExceeded) {
 		slog.Warn("shutdown deadline passed, open connections cut")
 		return nil
 	}
 	return err
+}
+
+// The shutdown budget, in order: the HTTP drain (requests in flight finish and queue their events), the background
+// stop (the writer's write under way and its drain of the queue, ingest.StopTime, plus a margin for the rest), the
+// final counter flush. Their sum stays under compose.yaml's stop_grace_period, after which Docker kills the process.
+const (
+	httpDrain      = 10 * time.Second
+	bgStop         = ingest.StopTime + 2*time.Second
+	counterFlush   = 3 * time.Second
+	shutdownBudget = httpDrain + bgStop + counterFlush
+)
+
+// stopWithin cancels the background work and waits for it at most limit; false when it did not stop in time.
+func stopWithin(stop func(), wg *sync.WaitGroup, limit time.Duration) bool {
+	stop()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	t := time.NewTimer(limit)
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		return false
+	}
 }
 
 func loadSites(ctx context.Context, cfg app.Config, st *store.Store) (*sites.Registry, error) {
