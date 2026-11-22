@@ -35,12 +35,10 @@ func run(t *testing.T, vars map[string]string, args ...string) (int, string, str
 
 // The export answers every request with valid JSON, the same bytes for the same seed, and names them in its index.
 func TestExport(t *testing.T) {
-	// Two ranges keep the test short (the long ones read a year a day at a time); the command exports all five.
-	exportRanges = []string{"24h", "7d"}
-	t.Cleanup(func() { exportRanges = nil })
+	t.Parallel()
+	// The ranges exported are the package's tests' (TestMain).
 	vars := map[string]string{"NUI_SIM_DAYS": "3", "NUI_SIM_SCALE": "0.3", "NUI_SIM_SCENARIOS": "api-walker"}
 	if raceOn {
-		exportRanges = []string{"24h"}
 		vars["NUI_SIM_DAYS"], vars["NUI_SIM_SCALE"] = "1", "0.1"
 	}
 	dirs := []string{filepath.Join(t.TempDir(), "a"), filepath.Join(t.TempDir(), "b")}
