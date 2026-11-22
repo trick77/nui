@@ -156,6 +156,20 @@ func TestRequestsWithinLimits(t *testing.T) {
 	}
 }
 
+// BenchmarkBackfill reports the backfill's rate at a larger scale, without the classifier (go test -bench).
+func BenchmarkBackfill(b *testing.B) {
+	for b.Loop() {
+		w := testWorld(b, 40, "all")
+		st := testStore(b, w)
+		s, err := Backfill(b.Context(), st, w, BackfillOptions{Days: 2})
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportMetric(s.Rate(), "events/s")
+		b.ReportMetric(float64(s.Events), "events")
+	}
+}
+
 // A small scale is a handful of events, fast.
 func TestSmallScale(t *testing.T) {
 	start := time.Now()
