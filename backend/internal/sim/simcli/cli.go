@@ -221,18 +221,13 @@ func liveCmd(ctx context.Context, k sim.Knobs, target string, rate float64, dur 
 	if err != nil {
 		return err
 	}
+	now := time.Now()
 	if rate > 0 {
-		k.Scale = 1
-		w, err := k.World(ref, time.Now())
-		if err != nil {
+		if k.Scale, err = k.ScaleFor(ref, now, rate); err != nil {
 			return err
 		}
-		k.Scale = rate * 86400 / (w.EventsPerDay() * k.Speed)
-		if err := sim.ScaleLimit.Check(k.Scale); err != nil {
-			return fmt.Errorf("-rate %v at speed %v needs scale %.3g: %w (change -speed)", rate, k.Speed, k.Scale, err)
-		}
 	}
-	w, err := k.World(ref, time.Now())
+	w, err := k.World(ref, now)
 	if err != nil {
 		return err
 	}

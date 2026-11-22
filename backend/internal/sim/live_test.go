@@ -98,6 +98,45 @@ func TestKnobs(t *testing.T) {
 	}
 }
 
+// A rate means what it says: the scale it sets sends that many events a second of wall time over the live week, the
+// actors that do not scale included; one out of reach says so.
+func TestScaleFor(t *testing.T) {
+	ref, err := OpenReference(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ rate, speed float64 }{{0.05, 1}, {2, 60}, {50, 1200}, {1, 60}}
+	if !raceOn {
+		cases = append(cases, struct{ rate, speed float64 }{20, 60})
+	}
+	for _, c := range cases {
+		k := DefaultKnobs()
+		k.Speed = c.speed
+		s, err := k.ScaleFor(ref, anchor, c.rate)
+		if err != nil {
+			t.Fatalf("rate %v at speed %v: %v", c.rate, c.speed, err)
+		}
+		k.Scale = s
+		w, err := k.World(ref, anchor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := float64(w.LiveEvents()) / (liveWeek.Seconds() / c.speed)
+		if math.Abs(got-c.rate) > 0.1*c.rate {
+			t.Errorf("rate %v at speed %v: scale %.3g sends %.3g events a second", c.rate, c.speed, s, got)
+		}
+	}
+	k := DefaultKnobs()
+	k.Speed = 3600
+	if _, err := k.ScaleFor(ref, anchor, 0.01); err == nil || !strings.Contains(err.Error(), "fixed actors") {
+		t.Errorf("a rate below the fixed actors': %v", err)
+	}
+	k.Speed = 1
+	if _, err := k.ScaleFor(ref, anchor, 100); err == nil || !strings.Contains(err.Error(), "-speed") {
+		t.Errorf("a rate beyond the largest scale: %v", err)
+	}
+}
+
 func TestLiveTick(t *testing.T) {
 	w := testWorld(t, 1, "baseline")
 	start := time.Now()
