@@ -883,6 +883,67 @@ describe("capture", () => {
     expect(cls).toHaveLength(1);
   });
 
+  it("waits for a prerendered page to be shown, and times vitals from then", async () => {
+    type Entry = { name?: string; startTime: number };
+    class FakePO {
+      static supportedEntryTypes = ["paint", "largest-contentful-paint"];
+      static all: FakePO[] = [];
+      type = "";
+      constructor(public cb: (l: { getEntries: () => Entry[] }) => void) {
+        FakePO.all.push(this);
+      }
+      observe(o: { type: string }) {
+        this.type = o.type;
+      }
+      disconnect() {}
+    }
+    const emit = (type: string, entries: Entry[]) =>
+      FakePO.all
+        .filter((o) => o.type === type)
+        .forEach((o) => o.cb({ getEntries: () => entries }));
+    vi.stubGlobal("PerformanceObserver", FakePO);
+    vi.spyOn(performance, "getEntriesByType").mockReturnValue([
+      { type: "navigate", responseStart: 500, activationStart: 2000 },
+    ] as unknown as PerformanceEntryList);
+    Object.defineProperty(document, "prerendering", {
+      value: true,
+      configurable: true,
+    });
+    (win as { nui?: unknown }).nui = { q: [["early", {}]] };
+    try {
+      const t = boot();
+      emit("paint", [{ name: "first-contentful-paint", startTime: 300 }]);
+      emit("largest-contentful-paint", [{ startTime: 2600 }]);
+      t.event("during");
+      window.dispatchEvent(new ErrorEvent("error", { message: "x" }));
+      window.dispatchEvent(new Event("pagehide"));
+      t.flush(true);
+      await vi.advanceTimersByTimeAsync(LIMITS.flushAfterMs * 2);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(t.state().queued).toBe(0);
+
+      Object.defineProperty(document, "prerendering", {
+        value: false,
+        configurable: true,
+      });
+      document.dispatchEvent(new Event("prerenderingchange"));
+      vi.advanceTimersByTime(1000);
+      window.dispatchEvent(new Event("pagehide"));
+      await vi.advanceTimersByTimeAsync(0);
+      const ev = bodies().flatMap((b) => b.events);
+      expect(ev.map((e) => e.n ?? e.k)).toEqual(
+        expect.arrayContaining(["session_start", "page_view", "early"]),
+      );
+      expect(ev.map((e) => e.n)).not.toContain("during");
+      const vitals = Object.fromEntries(
+        ev.filter((e) => e.k === "vital").map((e) => [e.p.name, e.p.value]),
+      );
+      expect(vitals).toMatchObject({ TTFB: 0, FCP: 0, LCP: 600 });
+    } finally {
+      delete (document as { prerendering?: boolean }).prerendering;
+    }
+  });
+
   it("takes custom events, including those queued before it loaded", async () => {
     (win as { nui?: unknown }).nui = {
       q: [["copy_prefix_list", { asn: 15169 }]],

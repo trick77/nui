@@ -294,17 +294,21 @@ export function start(
   // ---- context, sent with every batch
   const inputs = { pointer: 0, key: 0, touch: 0, scroll: 0 };
   let uach: Props | undefined;
-  const navType = (() => {
+  const navEntry = () => {
     try {
-      const e = win.performance.getEntriesByType(
-        "navigation",
-      )[0] as PerformanceNavigationTiming;
-      return e ? e.type : "";
+      return win.performance.getEntriesByType("navigation")[0] as
+        | (PerformanceNavigationTiming & { activationStart?: number })
+        | undefined;
     } catch {
-      return "";
+      return undefined;
     }
-  })();
-  const visAtLoad = doc.visibilityState;
+  };
+  const navType = navEntry()?.type || "";
+  // A page the browser prerenders reports nothing until it is shown: the
+  // visitor may never open it.
+  const pre = () =>
+    !!(doc as Document & { prerendering?: boolean }).prerendering;
+  let visAtLoad = doc.visibilityState;
   try {
     const d = (nav as Navigator & { userAgentData?: UAData }).userAgentData;
     if (d) {
@@ -473,7 +477,7 @@ export function start(
     n?: string,
     at?: [string, string],
   ): Rec | undefined => {
-    if (disabled) return;
+    if (disabled || pre()) return;
     const t = now();
     if (full(t)) return;
     if (
@@ -819,6 +823,7 @@ export function start(
   // Leaving or hiding the page: engagement, the vitals, then out.
   let vitalsSent = false;
   const hidden = () => {
+    if (pre()) return;
     engagement();
     if (!vitalsSent) {
       vitalsSent = true;
@@ -956,13 +961,34 @@ export function start(
       // unsupported
     }
   };
-  const vital = (name: string, value: number) => {
-    if (value > 0 || name === "CLS")
-      record("vital", { name, value: Math.round(value * 1000) / 1000 });
+  // Callers send only vitals that exist. Times since navigation start count
+  // from activation for a prerendered page, never below 0.
+  const vital = (name: string, value: number, shifted?: boolean) =>
+    record("vital", {
+      name,
+      value:
+        Math.round(
+          Math.max(
+            0,
+            value - (shifted ? navEntry()?.activationStart || 0 : 0),
+          ) * 1000,
+        ) / 1000,
+    });
+  // First paint is kept: during prerendering it is sent on activation.
+  let fcp = 0;
+  let fcpSent = false;
+  const sendFCP = () => {
+    if (fcp && !fcpSent && !pre()) {
+      fcpSent = true;
+      vital("FCP", fcp, true);
+    }
   };
   observe("paint", (l) => {
     for (const e of l)
-      if (e.name === "first-contentful-paint") vital("FCP", e.startTime);
+      if (e.name === "first-contentful-paint") {
+        fcp = e.startTime;
+        sendFCP();
+      }
   });
   observe("largest-contentful-paint", (l) => {
     for (const e of l) lcp = e.startTime;
@@ -987,7 +1013,7 @@ export function start(
     { durationThreshold: 40 },
   );
   const vitalsFinal = () => {
-    if (lcp) vital("LCP", lcp);
+    if (lcp) vital("LCP", lcp, true);
     if (inp) vital("INP", inp);
     vital("CLS", cls);
   };
@@ -1043,17 +1069,21 @@ export function start(
     }
   }
 
-  // ---- first page view, time to first byte
-  pageView(true);
-  try {
-    const n = win.performance.getEntriesByType(
-      "navigation",
-    )[0] as PerformanceNavigationTiming;
-    if (n && n.responseStart > 0) vital("TTFB", n.responseStart);
-  } catch {
-    // no navigation timing
-  }
-  for (const a of pending.slice(0, LIMITS.batchEvents)) guard(() => replay(a));
+  // ---- first page view, time to first byte; for a prerendered page once
+  // it is shown, its time counted from then.
+  const begin = () => {
+    visAtLoad = doc.visibilityState;
+    activeSince = liveFrom = 0;
+    tick();
+    pageView(true);
+    const n = navEntry();
+    if (n && n.responseStart > 0) vital("TTFB", n.responseStart, true);
+    sendFCP();
+    for (const a of pending.slice(0, LIMITS.batchEvents))
+      guard(() => replay(a));
+  };
+  if (pre()) on(doc, "prerenderingchange", begin, { once: true });
+  else begin();
   return api;
 }
 
