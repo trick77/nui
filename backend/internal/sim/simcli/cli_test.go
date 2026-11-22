@@ -256,7 +256,9 @@ func TestServer(t *testing.T) {
 // sim live against server -sim: each browser's address, its one X-Forwarded-For entry, is the caller the server
 // reads, also where the environment trusts no proxy (a local run's BACKEND_TRUSTED_HOPS=0).
 func TestServerReadsSimulatedAddresses(t *testing.T) {
-	s, err := NewServer(sim.DefaultKnobs(), time.Now())
+	k := sim.DefaultKnobs()
+	k.Start, k.Scale = anchor, 3 // the afternoon: the half hour below has visitors
+	s, err := NewServer(k, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

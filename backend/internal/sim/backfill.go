@@ -30,6 +30,8 @@ type Stats struct {
 	// Refused counts the answers other than 204 by status; Retried the requests sent again after a 429.
 	Refused map[int]int
 	Retried int
+	// Skipped counts the requests a live delivery left out at its time budget.
+	Skipped int
 	Elapsed time.Duration
 }
 
@@ -42,8 +44,12 @@ func (s Stats) Rate() float64 {
 }
 
 func (s Stats) String() string {
-	return fmt.Sprintf("%d events in %d requests, %s (%.0f events/s), refused %v, retried %d", s.Events, s.Requests,
+	out := fmt.Sprintf("%d events in %d requests, %s (%.0f events/s), refused %v, retried %d", s.Events, s.Requests,
 		s.Elapsed.Round(time.Millisecond), s.Rate(), s.Refused, s.Retried)
+	if s.Skipped > 0 {
+		out += fmt.Sprintf(", skipped %d", s.Skipped)
+	}
+	return out
 }
 
 // SitesFile is the world's sites as a sites file declares them (feed keys as their hashes).
@@ -255,10 +261,10 @@ func (b *backfill) send(q *Request) (int, time.Duration) {
 	return rec.Code, retryAfter(rec.Header().Get("Retry-After"))
 }
 
-// retryAfter reads a Retry-After in seconds, a second when there is none.
+// retryAfter reads a Retry-After in seconds, a second when there is none, an hour at most.
 func retryAfter(v string) time.Duration {
 	if s, err := strconv.Atoi(v); err == nil && s > 0 {
-		return time.Duration(s) * time.Second
+		return time.Duration(min(s, 3600)) * time.Second
 	}
 	return time.Second
 }

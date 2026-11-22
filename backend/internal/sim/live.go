@@ -19,6 +19,12 @@ type Live struct {
 	// MaxGap is the longest wall-clock gap a tick catches up on: after a longer idle spell the world skips ahead
 	// instead of sending the missed time's traffic at once (the collector would date it all now).
 	MaxGap time.Duration
+	// MaxSpan is the most world time one tick hands out, whatever the speed: beyond it the world skips ahead. An
+	// hour of the largest world is some ten thousand events.
+	MaxSpan time.Duration
+	// Budget is the wall time one delivery may take: what is left after it is skipped, so a dashboard request that
+	// advances the world never waits long.
+	Budget time.Duration
 
 	mu      sync.Mutex
 	start   time.Time // the wall time the run began
@@ -31,18 +37,35 @@ func NewLive(w *World, start time.Time, speed float64) *Live {
 	if SpeedLimit.Check(speed) != nil {
 		speed = 1
 	}
-	return &Live{World: w, Speed: speed, MaxGap: 2 * time.Minute, start: start, cursor: w.Anchor}
+	return &Live{World: w, Speed: speed, MaxGap: 2 * time.Minute, MaxSpan: time.Hour, Budget: time.Second,
+		start: start, cursor: w.Anchor}
 }
 
-// WorldTime is the world's time at wall time t.
+// maxWorld bounds world time's distance from the anchor, within a time.Duration's range: at the largest speed a
+// month of wall time would overflow it, and world time would run backwards.
+const maxWorld = 200 * 365 * day
+
+// scaled is d times f, saturated at ±maxWorld.
+func scaled(d time.Duration, f float64) time.Duration {
+	x := float64(d) * f
+	switch {
+	case !(x < float64(maxWorld)):
+		return maxWorld
+	case x < -float64(maxWorld):
+		return -maxWorld
+	}
+	return time.Duration(x)
+}
+
+// WorldTime is the world's time at wall time t. It stops at maxWorld past the anchor.
 func (l *Live) WorldTime(t time.Time) time.Time {
-	return l.World.Anchor.Add(time.Duration(float64(t.Sub(l.start)) * l.Speed))
+	return l.World.Anchor.Add(scaled(t.Sub(l.start), l.Speed))
 }
 
 // Clock states world times as the wall clock's milliseconds: what a request says when it is sent live.
 func (l *Live) Clock() Clock {
 	return func(t time.Time) int64 {
-		return l.start.Add(time.Duration(float64(t.Sub(l.World.Anchor)) / l.Speed)).UnixMilli()
+		return l.start.Add(scaled(t.Sub(l.World.Anchor), 1/l.Speed)).UnixMilli()
 	}
 }
 
@@ -55,7 +78,7 @@ func (l *Live) Tick(now time.Time) []*Request {
 		return nil
 	}
 	from := l.cursor
-	if gap := time.Duration(float64(l.MaxGap) * l.Speed); to.Sub(from) > gap {
+	if gap := min(scaled(l.MaxGap, l.Speed), l.MaxSpan); to.Sub(from) > gap {
 		from = to.Add(-gap)
 	}
 	l.cursor = to
@@ -78,7 +101,7 @@ func (l *Live) Retry(q *Request, wait time.Duration) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// From now, not from the last tick: the wait is the server's, counted from its answer.
-	q.At = l.WorldTime(time.Now()).Add(time.Duration(float64(wait) * l.Speed))
+	q.At = l.WorldTime(time.Now()).Add(scaled(wait, l.Speed))
 	heap.Push(&l.retries, q)
 	return true
 }
@@ -93,7 +116,12 @@ type Handlers struct {
 func (l *Live) Deliver(ctx context.Context, h Handlers, reqs []*Request) Stats {
 	st := Stats{Refused: map[int]int{}}
 	clock := l.Clock()
-	for _, q := range reqs {
+	deadline := time.Now().Add(l.Budget)
+	for i, q := range reqs {
+		if l.Budget > 0 && time.Now().After(deadline) {
+			st.Skipped = len(reqs) - i
+			break
+		}
 		r := httptest.NewRequestWithContext(ctx, http.MethodPost, q.Path(), bytes.NewReader(q.Body(clock)))
 		r.Header = q.Header()
 		r.RemoteAddr = netip.AddrPortFrom(q.Addr(), 40000).String()

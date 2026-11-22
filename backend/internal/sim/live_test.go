@@ -155,9 +155,9 @@ func TestLiveTick(t *testing.T) {
 		l.Clock()(anchor.Add(time.Hour)) != start.Add(time.Minute).UnixMilli() {
 		t.Error("world time and wall time do not map")
 	}
-	// After an idle spell the world skips ahead: only the last MaxGap's traffic.
+	// After an idle spell the world skips ahead: only the last MaxGap's traffic, at most MaxSpan of it.
 	c := l.Tick(start.Add(time.Hour))
-	if want := w.Requests(l.WorldTime(start.Add(time.Hour)).Add(-2*time.Hour), l.WorldTime(start.Add(time.Hour))); len(c) != len(want) {
+	if want := w.Requests(l.WorldTime(start.Add(time.Hour)).Add(-time.Hour), l.WorldTime(start.Add(time.Hour))); len(c) != len(want) {
 		t.Errorf("after idling %d requests, want the gap's %d", len(c), len(want))
 	}
 	// A refused request comes again after its wait; a hammer's never.
@@ -172,6 +172,51 @@ func TestLiveTick(t *testing.T) {
 		if NewLive(w, start, s).Speed != 1 {
 			t.Errorf("speed %v not defaulted", s)
 		}
+	}
+}
+
+// At the largest speed one tick stays bounded: an hour of world time after any idle spell, a delivery cut at its
+// time budget, and world time never overflowing however long the run.
+func TestLiveBounded(t *testing.T) {
+	w := testWorld(t, 2, "baseline")
+	start := time.Now()
+	l := NewLive(w, start, SpeedLimit.Max())
+	l.Tick(start.Add(time.Second))
+	reqs := l.Tick(start.Add(10 * time.Minute)) // ten idle minutes: 10 days of the world
+	to := l.WorldTime(start.Add(10 * time.Minute))
+	if len(reqs) == 0 {
+		t.Fatal("nothing after the idle spell")
+	}
+	for _, q := range reqs {
+		if q.At.Before(to.Add(-l.MaxSpan)) || q.At.After(to) {
+			t.Fatalf("a request at %v, the tick spans %v to %v", q.At, to.Add(-l.MaxSpan), to)
+		}
+	}
+	if len(w.plans) > maxPlans {
+		t.Errorf("%d day plans held", len(w.plans))
+	}
+	// A delivery stops at its budget and counts what it left.
+	slow := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		time.Sleep(2 * time.Millisecond)
+		rw.WriteHeader(http.StatusNoContent)
+	})
+	l.Budget = 20 * time.Millisecond
+	began := time.Now()
+	s := l.Deliver(t.Context(), Handlers{Browser: slow, Feed: slow}, reqs)
+	if took := time.Since(began); took > 200*time.Millisecond || s.Skipped == 0 || s.Requests+s.Skipped != len(reqs) {
+		t.Errorf("delivery of %d took %v: %v", len(reqs), took, s)
+	}
+	// A month of wall time at the largest speed is beyond a time.Duration; world time still only moves forward.
+	prev := l.WorldTime(start)
+	for d := range 400 {
+		at := l.WorldTime(start.Add(time.Duration(d) * day))
+		if at.Before(prev) || at.Sub(w.Anchor) > maxWorld {
+			t.Fatalf("day %d of wall time: world time %v after %v", d, at, prev)
+		}
+		prev = at
+	}
+	if l.Clock()(prev) < start.UnixMilli() {
+		t.Error("the clock maps the far world time before the start")
 	}
 }
 
