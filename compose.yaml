@@ -26,6 +26,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    # ./data holds nui.db, the reference data cache (ref/) and sites.json, the sites nui collects for (README).
     volumes:
       - ./data:/data
     expose:
