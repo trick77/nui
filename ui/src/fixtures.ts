@@ -834,9 +834,11 @@ function visitors(q: URLSearchParams, feed: boolean): Visitors {
   };
 }
 
-function visitor(key: string, feed: boolean): Visitor | null {
+// cursor: TRAIL_NEXT asks for the person's second trail page.
+function visitor(key: string, feed: boolean, cursor: string): Visitor | null {
   const v = VISITORS.find((x) => x.key === key);
   if (!v) return null;
+  const later = cursor === TRAIL_NEXT;
   const r = rng(key.length * 31);
   const raw = Array.from({ length: 24 }, (_, h) => {
     if (v.class === "monitor") return 3;
@@ -895,22 +897,14 @@ function visitor(key: string, feed: boolean): Visitor | null {
             from: "2026-11-22T10:02:17Z",
             to: "2026-11-22T13:19:42Z",
             interval_s: 0.8,
+            continues: false,
+            continued: false,
           },
           single("2026-11-22T10:02:17Z", "request", "GET / → 200"),
         ]
-      : [
-          single(
-            "2026-11-22T13:12:08Z",
-            "outbound_click",
-            "outbound_click github.com",
-          ),
-          single("2026-11-22T13:11:31Z", "engagement", "engagement"),
-          single("2026-11-22T13:10:55Z", "page_view", "view /AS:n"),
-          single("2026-11-22T13:10:12Z", "page_view", "view /:text"),
-          single("2026-11-22T13:09:47Z", "session_start", "session_start"),
-        ],
+      : PERSON_TRAIL[later ? 1 : 0],
     // The backend's keyset cursor, "<ms>.<row id>".
-    trail_next: scrape ? "" : TRAIL_NEXT,
+    trail_next: scrape || later ? "" : TRAIL_NEXT,
   };
 }
 
@@ -925,7 +919,48 @@ const single = (t: string, kind: string, what: string): TrailItem => ({
   from: t,
   to: t,
   interval_s: 0,
+  continues: false,
+  continued: false,
 });
+
+// A person's trail in two pages, a run of views split by the page bound:
+// the first page's last line continues, the second's first continued.
+const PERSON_TRAIL: TrailItem[][] = [
+  [
+    single(
+      "2026-11-22T13:12:08Z",
+      "outbound_click",
+      "outbound_click github.com",
+    ),
+    single("2026-11-22T13:11:31Z", "engagement", "engagement"),
+    single("2026-11-22T13:10:55Z", "page_view", "view /AS:n"),
+    {
+      t: "2026-11-22T13:10:12Z",
+      kind: "page_view",
+      what: "view /:text",
+      count: 3,
+      from: "2026-11-22T13:09:52Z",
+      to: "2026-11-22T13:10:12Z",
+      interval_s: 10,
+      continues: true,
+      continued: false,
+    },
+  ],
+  [
+    {
+      t: "2026-11-22T13:09:41Z",
+      kind: "page_view",
+      what: "view /:text",
+      count: 2,
+      from: "2026-11-22T13:09:21Z",
+      to: "2026-11-22T13:09:41Z",
+      interval_s: 20,
+      continues: false,
+      continued: true,
+    },
+    single("2026-11-22T13:09:02Z", "session_start", "session_start"),
+  ],
+];
 
 const LOG_CLIENTS: [string, ClassKey, string, string, LogRow["source"]][] = [
   // what as the backend describes an event: a request by its template.
@@ -1185,7 +1220,7 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
       case "/api/dash/visitors":
         return json(visitors(q, feed));
       case "/api/dash/visitor": {
-        const v = visitor(q.get("key") || "", feed);
+        const v = visitor(q.get("key") || "", feed, q.get("cursor") || "");
         return v
           ? json(v)
           : json({ detail: "no events from this address in the range" }, 404);

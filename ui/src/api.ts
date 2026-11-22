@@ -181,6 +181,11 @@ export type TrailItem = {
   from: string;
   to: string;
   interval_s: number;
+  // A page of the trail may end inside a run: continues marks a run that
+  // goes on into the next, older page, continued one that began on the
+  // previous page. count, span and interval are this page's part only.
+  continues: boolean;
+  continued: boolean;
 };
 
 export type Reading = {

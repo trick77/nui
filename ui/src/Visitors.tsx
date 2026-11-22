@@ -268,12 +268,52 @@ const KIND_COLOR: Record<string, string> = {
   resource_error: "var(--color-danger-ink)",
 };
 
-function trailText(t: TrailItem): string {
-  if (t.count <= 1) return t.what;
-  const span =
-    t.from && t.to ? ` · ${dateTime(t.from)} to ${dateTime(t.to)}` : "";
-  const every = t.interval_s != null ? `, every ${seconds(t.interval_s)}` : "";
-  return `${t.what}${span}${every}`;
+// A trail line as shown: a run a page boundary split is joined once both
+// parts are loaded. Each part's interval is the median of its own gaps,
+// which do not combine: a joined run shows them apart (intervals).
+type TrailLine = TrailItem & { intervals: number[] };
+
+// The pages' lines in order, newest first, each run that goes on into the
+// next page joined with that page's first line.
+function joinTrail(items: TrailItem[]): TrailLine[] {
+  const out: TrailLine[] = [];
+  for (const t of items) {
+    const prev = out.at(-1);
+    const own = t.count > 1 ? [t.interval_s] : [];
+    if (prev?.continues && t.continued && prev.what === t.what) {
+      out[out.length - 1] = {
+        ...prev,
+        count: prev.count + t.count,
+        from: t.from,
+        continues: t.continues,
+        intervals: [...prev.intervals, ...own],
+      };
+    } else out.push({ ...t, intervals: own });
+  }
+  return out;
+}
+
+// A run's count: one still going on into a page not loaded is at least
+// that.
+function trailCount(t: TrailLine): string {
+  if (t.continues) return ` × ${num(t.count)}+`;
+  return t.count > 1 ? ` × ${num(t.count)}` : "";
+}
+
+function trailText(t: TrailLine): string {
+  if (t.count <= 1 && !t.continues) return t.what;
+  const span = ` · ${dateTime(t.from)} to ${dateTime(t.to)}`;
+  // Parts of one run with different medians: the range between them.
+  const lo = Math.min(...t.intervals);
+  const hi = Math.max(...t.intervals);
+  const every = !t.intervals.length
+    ? ""
+    : lo === hi
+      ? `, every ${seconds(lo)}`
+      : `, every ${seconds(lo)} to ${seconds(hi)}`;
+  // Its older events are on the next page: the span so far.
+  const more = t.continues ? ", continues earlier" : "";
+  return `${t.what}${span}${every}${more}`;
 }
 
 function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
@@ -287,7 +327,7 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
   );
   const more = useMore<TrailItem>(key);
   const v = d.data;
-  const trail = [...(v?.trail ?? []), ...more.items];
+  const trail = joinTrail([...(v?.trail ?? []), ...more.items]);
   // The previous visitor's trail and cursor while this one loads.
   const fresh = !d.loading;
   const next = more.next ?? v?.trail_next ?? "";
@@ -423,7 +463,7 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
                     </time>
                     <span className="font-mono text-[11.5px] text-ink-dim">
                       {t.kind}
-                      {t.count > 1 ? ` × ${num(t.count)}` : ""}
+                      {trailCount(t)}
                     </span>
                     <span className="font-mono text-[12.5px] wrap-anywhere">
                       {trailText(t)}

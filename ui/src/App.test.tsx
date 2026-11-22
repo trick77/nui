@@ -459,10 +459,28 @@ describe("dashboard on a domain with a server feed", () => {
     expect(
       within(d).getByRole("img", { name: "Activity by hour" }).children,
     ).toHaveLength(24);
+    // A run the page bound splits: shown as going on, not as complete.
+    const run = () =>
+      within(d)
+        .getByText(/^view \/:text ·/)
+        .closest("li") as HTMLElement;
+    expect(run()).toHaveTextContent("page_view × 3+");
+    expect(run()).toHaveTextContent("every 10 s, continues earlier");
     fireEvent.click(within(d).getByRole("button", { name: "Load earlier →" }));
     await waitFor(() =>
       expect(lastCall("/api/dash/visitor").get("cursor")).toBe(TRAIL_NEXT),
     );
+    // Its older part joins it: one run, both parts' intervals.
+    await waitFor(() =>
+      expect(d.querySelectorAll("ol.trail > li")).toHaveLength(5),
+    );
+    expect(within(d).getAllByText(/^view \/:text/)).toHaveLength(1);
+    expect(run()).toHaveTextContent("page_view × 5");
+    expect(run()).toHaveTextContent("every 10 s to 20 s");
+    expect(run()).not.toHaveTextContent("continues");
+    expect(
+      within(d).queryByRole("button", { name: "Load earlier →" }),
+    ).toBeNull();
     fireEvent.click(
       within(d).getByRole("button", { name: /Every event of this address/ }),
     );
