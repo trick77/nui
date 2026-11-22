@@ -4,8 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,15 +145,69 @@ func TestRequestsIndependentOfTicks(t *testing.T) {
 	}
 }
 
-// No visit runs longer than maxVisit, and no day plan reaches past its day further than a visit begun at midnight and
-// its last batch: every session's first event to its last, every plan's batches and records, over a week of every
-// scenario's days. Records may come a moment before the day (a document is requested before its page shows), within a
-// feed window: they are sent after midnight. A visit drawn longer than the bound ends at it.
+// A midnight crossed in one span or in many small ones gives the same requests, from two day plans at most: the
+// batches of visits begun the day before and sent after midnight among them, the day before's plan read only for as
+// long as they can reach. (Visits are short: the week's first midnight a visit spans at this scale.)
+func TestRequestsAcrossMidnight(t *testing.T) {
+	const scale = 5
+	ow := testWorld(t, scale, "all")
+	var mid time.Time
+	for d := dayOf(anchor) - 7; d <= dayOf(anchor) && mid.IsZero(); d++ {
+		for _, b := range ow.plan(d - 1).batches {
+			if !b.at.Before(dayStart(d)) {
+				mid = dayStart(d)
+			}
+		}
+	}
+	if mid.IsZero() {
+		t.Fatal("no batch of a visit begun before midnight sent after it, all week")
+	}
+	from, to := mid.Add(-2*time.Hour), mid.Add(maxVisit+time.Hour)
+	once := ow.Requests(from, to)
+	before := map[*batch]bool{}
+	for _, b := range ow.plans[dayOf(mid)-1].batches {
+		before[b] = true
+	}
+	spilled := 0
+	for _, q := range once {
+		if before[q.batch] && !q.At.Before(mid) {
+			spilled++
+		}
+	}
+	if spilled == 0 {
+		t.Fatalf("the span %v to %v lacks the batches sent after midnight of the visits begun before", from, to)
+	}
+	for _, tick := range []time.Duration{time.Hour, 7 * time.Minute, 13 * time.Second} {
+		w := testWorld(t, scale, "all")
+		var ticked []*Request
+		for at := from; at.Before(to); at = at.Add(tick) {
+			end := earlier(at.Add(tick), to)
+			ticked = append(ticked, w.Requests(at, end)...)
+			if len(w.plans) > maxPlans {
+				t.Fatalf("ticks of %v: %d day plans held after the span %v to %v", tick, len(w.plans), at, end)
+			}
+		}
+		if len(once) != len(ticked) {
+			t.Fatalf("ticks of %v: %d requests at once, %d ticked", tick, len(once), len(ticked))
+		}
+		for i := range once {
+			if !once[i].At.Equal(ticked[i].At) || string(once[i].Body(nil)) != string(ticked[i].Body(nil)) {
+				t.Fatalf("ticks of %v: request %d differs:\n%s\n%s", tick, i, once[i].Body(nil), ticked[i].Body(nil))
+			}
+		}
+	}
+	t.Logf("%d requests, %d of them batches begun before midnight and sent after it", len(once), spilled)
+}
+
+// No visit runs longer than maxVisit, and no day plan reaches past its day further than planReach: every session's
+// first event to its last, every plan's batches and records, over a week of every scenario's days. Records may come a
+// moment before the day (a document is requested before its page shows), within a feed window: they are sent after
+// midnight. A visit drawn longer than the bound ends at it.
 func TestVisitBound(t *testing.T) {
 	w := testWorld(t, 2, "all")
 	for d := dayOf(anchor) - 6; d <= dayOf(anchor)+1; d++ {
 		p, d0 := w.plan(d), dayStart(d)
-		reach := d0.Add(day + maxVisit + batchWait)
+		reach := d0.Add(day + planReach)
 		visits := map[string][2]time.Time{}
 		for _, b := range p.batches {
 			if b.at.Before(d0) || !b.at.Before(reach) {
@@ -247,42 +304,73 @@ func BenchmarkBackfill(b *testing.B) {
 	}
 }
 
-// The day plans plan keeps (maxPlans neighbouring days) fit in memory at the largest scale: a day's plan grows with
-// the scale, measured here at a small one, day by day over the history's last days (the referrer wave's the largest)
-// and the live week after the anchor, at its level.
-func TestPlanMemory(t *testing.T) {
-	const scale = 4
-	w := testWorld(t, scale, DefaultScenarios)
-	for d := range int64(4) {
-		w.plan(dayOf(anchor) - 3 + d)
+// weekOfSpans asks w for a week of spans on each side of its anchor, as backfill and live ask it, each crossing every
+// midnight in its own way: the history's last week as Backfill slices it (an hour at a time, a day's last span ending
+// at midnight), the referrer wave's day among it, then the live week in ticks of 47 minutes. each runs after every
+// span; the requests are dropped.
+func weekOfSpans(w *World, each func(from, to time.Time)) {
+	for at := w.Anchor.Add(-7 * day); at.Before(w.Anchor); {
+		end := earlier(earlier(at.Add(time.Hour), dayStart(dayOf(at)+1)), w.Anchor)
+		w.Requests(at, end)
+		each(at, end)
+		at = end
 	}
-	if held := len(w.plans); held > maxPlans {
-		t.Errorf("%d day plans held, at most %d", held, maxPlans)
+	start := time.Unix(0, 0)
+	l := NewLive(w, start, 60)
+	for wall := 47 * time.Second; l.cursor.Before(w.Anchor.Add(7 * day)); wall += 47 * time.Second {
+		from := l.cursor
+		l.Tick(start.Add(wall))
+		each(from, l.cursor)
 	}
-	var sizes []float64 // a day's plan per unit of scale
-	for d := dayOf(anchor) - 2; d <= dayOf(anchor)+5; d++ {
-		w := testWorld(t, scale, DefaultScenarios)
-		var before, after runtime.MemStats
-		runtime.GC()
-		runtime.ReadMemStats(&before)
-		w.plan(d)
-		runtime.GC()
-		runtime.ReadMemStats(&after)
-		sizes = append(sizes, (float64(after.HeapAlloc)-float64(before.HeapAlloc))/scale)
-		runtime.KeepAlive(w)
-	}
-	var held, largest float64
-	for i, s := range sizes {
-		largest = max(largest, s)
-		if i > 0 {
-			held = max(held, sizes[i-1]+s)
+}
+
+// The world holds two day plans at most, however it is asked: a week of spans before the anchor and after it, every
+// midnight crossed. The day before a span's is held only in the hours a visit begun on it can reach past midnight.
+func TestPlansHeld(t *testing.T) {
+	w := testWorld(t, 0.5, DefaultScenarios)
+	weekOfSpans(w, func(from, to time.Time) {
+		if len(w.plans) > maxPlans {
+			t.Fatalf("%d day plans held after the span %v to %v", len(w.plans), from, to)
 		}
+		late := from.Sub(dayStart(dayOf(from))) > maxVisit+time.Minute
+		for d := range w.plans {
+			if d > dayOf(to.Add(-time.Nanosecond)) || d < dayOf(from)-1 || d < dayOf(from) && late {
+				t.Fatalf("the plan of %s held after the span %v to %v", dayStart(d).Format(time.DateOnly), from, to)
+			}
+		}
+	})
+}
+
+// The day plans a world holds fit the budget at the largest scale: a world of the default scenarios asked for a week
+// of spans, the referrer wave's day (the largest plan) and every midnight among them, its heap read whenever the plans
+// it holds change (some 9 s under the race detector).
+func TestPlanMemory(t *testing.T) {
+	w := testWorld(t, ScaleLimit.Max(), DefaultScenarios)
+	heap := func() float64 {
+		var m runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&m)
+		return float64(m.HeapAlloc)
 	}
-	atMax := held * ScaleLimit.Max()
-	t.Logf("a day's plan per unit of scale: %.0f kB at most, %.0f kB on a live weekday; %d days held: %.0f MB at "+
-		"scale %v", largest/1024, sizes[3]/1024, maxPlans, atMax/(1<<20), ScaleLimit.Max())
-	if atMax > planBudget {
-		t.Errorf("%.0f MB of day plans at the largest scale, budget %d MB", atMax/(1<<20), planBudget>>20)
+	base := heap()
+	var held, peakHeld string
+	var peak float64
+	weekOfSpans(w, func(_, _ time.Time) {
+		days := slices.Sorted(maps.Keys(w.plans))
+		var names []string
+		for _, d := range days {
+			names = append(names, dayStart(d).Format(time.DateOnly))
+		}
+		if now := strings.Join(names, " "); now != held {
+			held = now
+			if used := heap() - base; used > peak {
+				peak, peakHeld = used, now
+			}
+		}
+	})
+	t.Logf("at most %.0f MB of day plans at scale %v, %s held", peak/(1<<20), ScaleLimit.Max(), peakHeld)
+	if peak > planBudget {
+		t.Errorf("%.0f MB of day plans at the largest scale, budget %d MB", peak/(1<<20), planBudget>>20)
 	}
 }
 

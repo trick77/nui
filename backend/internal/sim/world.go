@@ -162,17 +162,25 @@ func dayOf(t time.Time) int64 { return t.Unix() / 86400 }
 func dayStart(d int64) time.Time { return time.Unix(d*86400, 0).UTC() }
 
 // dayPlan is everything that starts on one UTC day: tracker batches and feed records, each sorted by time. A
-// visit started late in the day spills past midnight.
+// visit started late in the day spills past midnight, by planReach at most; a page's document is requested a moment
+// before the page shows, so a record may come a moment before the day, its feed batch sent after midnight.
 type dayPlan struct {
 	batches []*batch
 	records [][]record // per site
 }
+
+// planReach is how far past its day a plan reaches: a visit begun just before midnight, its last batch sent
+// batchWait after its last event.
+const planReach = maxVisit + batchWait
 
 // plan builds (or returns the cached) plan of day d.
 func (w *World) plan(d int64) *dayPlan {
 	if p, ok := w.plans[d]; ok {
 		return p
 	}
+	// Beside the day built, only the day before is kept (its visits reach past midnight), and dropped before the
+	// build: a plan is a whole day's requests.
+	w.keep(d-1, d-1)
 	p := &dayPlan{records: make([][]record, len(w.Sites))}
 	for _, s := range w.Sites {
 		if s.Silent {
@@ -194,14 +202,17 @@ func (w *World) plan(d int64) *dayPlan {
 		p.records[i] = recs
 	}
 	sort.SliceStable(p.batches, func(a, b int) bool { return p.batches[a].at.Before(p.batches[b].at) })
-	// Days behind are not asked again: a span reads its days and the one before (visits spill past midnight).
+	w.plans[d] = p
+	return p
+}
+
+// keep drops the plans of the days outside [first, last].
+func (w *World) keep(first, last int64) {
 	for k := range w.plans {
-		if k < d-maxPlans+1 {
+		if k < first || k > last {
 			delete(w.plans, k)
 		}
 	}
-	w.plans[d] = p
-	return p
 }
 
 // The day plans a world holds, and what they may take at the largest scale: a plan is the whole day's requests,
@@ -259,28 +270,37 @@ func (w *World) Requests(from, to time.Time) []*Request {
 	var out []*Request
 	// The feed's windows whose batches are sent in [from, to).
 	fFrom := from.Add(-feedDelay).Truncate(feedWindow).Add(-feedWindow)
-	for d := dayOf(fFrom) - 1; d <= dayOf(to); d++ {
+	// The days whose plans hold any of it: the day before only for the hours past midnight a visit begun on it can
+	// reach into. A record before its day's start is sent after it, so a span ending at midnight does not need the
+	// next day. Other days' plans are dropped, and each plan is read once: a span of several days holds two at a time.
+	first, last := dayOf(fFrom.Add(-planReach)), dayOf(to.Add(-time.Nanosecond))
+	w.keep(first, last)
+	recs := make([][]record, len(w.Sites))
+	for d := first; d <= last; d++ {
 		p := w.plan(d)
 		i := sort.Search(len(p.batches), func(i int) bool { return !p.batches[i].at.Before(from) })
 		for ; i < len(p.batches) && p.batches[i].at.Before(to); i++ {
 			b := p.batches[i]
 			out = append(out, &Request{At: b.at, Site: w.Sites[b.site], batch: b, Actor: b.actor})
 		}
+		for _, s := range w.Sites {
+			if !s.Feed {
+				continue
+			}
+			rs := p.records[s.idx]
+			i := sort.Search(len(rs), func(i int) bool { return !rs[i].t.Before(fFrom) })
+			for ; i < len(rs) && rs[i].t.Before(to); i++ {
+				recs[s.idx] = append(recs[s.idx], rs[i])
+			}
+		}
 	}
 	for _, s := range w.Sites {
 		if !s.Feed {
 			continue
 		}
-		var recs []record
-		for d := dayOf(fFrom) - 1; d <= dayOf(to); d++ {
-			rs := w.plan(d).records[s.idx]
-			i := sort.Search(len(rs), func(i int) bool { return !rs[i].t.Before(fFrom) })
-			for ; i < len(rs) && rs[i].t.Before(to); i++ {
-				recs = append(recs, rs[i])
-			}
-		}
-		sort.SliceStable(recs, func(a, b int) bool { return recs[a].t.Before(recs[b].t) })
-		out = append(out, feedBatches(s, recs, from, to)...)
+		rs := recs[s.idx]
+		sort.SliceStable(rs, func(a, b int) bool { return rs[a].t.Before(rs[b].t) })
+		out = append(out, feedBatches(s, rs, from, to)...)
 	}
 	slices.SortStableFunc(out, func(a, b *Request) int { return a.At.Compare(b.At) })
 	for _, q := range out {
