@@ -25,9 +25,11 @@ const KIND: Record<FindingKind, { label: string; color: string }> = {
 // whole line jumps to where the finding leads, the detail is on hover.
 export function Noteworthy() {
   const { scope, goPanel } = useDash();
-  const { site, range, cmp } = scope;
+  const { site, range } = scope;
+  // The backend compares with the previous period whatever the comparison
+  // setting (and for every audience): a change of either is no new query.
   const nw = useApi<NW>(
-    scopeKey("noteworthy", { site, range, cmp }),
+    scopeKey("noteworthy", { site, range }),
     (s) => api.noteworthy(scope, s),
     site,
   );

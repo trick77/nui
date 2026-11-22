@@ -270,6 +270,25 @@ describe("dashboard on a domain with a server feed", () => {
     expect(ov.querySelector('[stroke="var(--color-reference)"]')).toBeNull();
   });
 
+  it("asks for the briefing again only when the domain or range changes", async () => {
+    start("/dashboard/");
+    await screen.findByText(/Good week for people/);
+    const briefings = () =>
+      calls.filter((c) => c.startsWith("/api/dash/noteworthy")).length;
+    expect(briefings()).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "vs last year" }));
+    await waitFor(() =>
+      expect(lastCall("/api/dash/overview").get("cmp")).toBe("yoy"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Bots" }));
+    await waitFor(() =>
+      expect(lastCall("/api/dash/overview").get("aud")).toBe("bots"),
+    );
+    expect(briefings()).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "30d" }));
+    await waitFor(() => expect(briefings()).toBe(2));
+  });
+
   it("keeps range, audience and comparison in the URL", async () => {
     start();
     await screen.findByText("Visitors per day · all");
