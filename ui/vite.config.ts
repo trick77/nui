@@ -33,8 +33,16 @@ export default defineConfig({
       reportsDirectory: "../coverage/ui",
       // Explicit, so an untested module is not silently invisible to the
       // ratio the gate reads.
-      include: ["src/**/*.{ts,tsx}"],
-      exclude: ["src/main.tsx", "src/test/**", "src/**/*.d.ts"],
+      include: ["src/**/*.{ts,tsx}", "tracker/**/*.ts"],
+      exclude: [
+        "src/main.tsx",
+        "src/test/**",
+        "src/**/*.d.ts",
+        "src/**/*.test.{ts,tsx}",
+        "tracker/**/*.test.ts",
+        // The script's entry only hands document.currentScript to start().
+        "tracker/index.ts",
+      ],
     },
   },
 });

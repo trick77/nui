@@ -7,11 +7,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev:fixtures": "vite --mode fixtures",
+    "build": "tsc -b && vite build && vite build -c vite.tracker.config.ts",
     "preview": "vite preview",
     "lint": "eslint . --max-warnings 0 && npm run format:check",
-    "format": "prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'",
-    "format:check": "prettier --check 'src/**/*.{ts,tsx,css}' '*.ts'",
+    "format": "prettier --write 'src/**/*.{ts,tsx,css}' 'tracker/**/*.ts' '*.ts'",
+    "format:check": "prettier --check 'src/**/*.{ts,tsx,css}' 'tracker/**/*.ts' '*.ts'",
     "test": "vitest run"
   },
   "dependencies": {
