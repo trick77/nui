@@ -59,8 +59,17 @@ export function date(iso: string | null | undefined, tz?: string): string {
   });
 }
 
-export function dayMonth(iso: string | null | undefined, tz?: string): string {
+// Day and month, with the year when it is not the current one: a span
+// across the new year must not read backwards, nor something a year old
+// look current. Years are the viewer's (tz).
+export function dayMonth(
+  iso: string | null | undefined,
+  tz?: string,
+  now = new Date(),
+): string {
   if (!iso) return "–";
+  const full = date(iso, tz);
+  if (full.slice(-4) !== date(now.toISOString(), tz).slice(-4)) return full;
   const d = new Date(iso).toLocaleDateString(LOCALE, {
     day: "numeric",
     month: "numeric",
@@ -89,24 +98,25 @@ export function clockSec(iso: string | null | undefined, tz?: string): string {
 }
 
 // A moment relative to now as the log and the trail show it: the time
-// today, the date and time before, with the year when it is another one.
-// Days and years are the viewer's (tz).
+// today, the date (dayMonth) and time before. Days are the viewer's (tz).
 export function when(
   iso: string | null | undefined,
   now = new Date(),
   tz?: string,
 ): string {
   if (!iso) return "–";
-  const d = date(iso, tz);
-  const today = date(now.toISOString(), tz);
-  if (d === today) return clockSec(iso, tz);
-  const year = d.slice(-4) === today.slice(-4);
-  return `${year ? dayMonth(iso, tz) : d} ${clock(iso, tz)}`;
+  if (date(iso, tz) === date(now.toISOString(), tz)) return clockSec(iso, tz);
+  return dateTime(iso, tz, now);
 }
 
-export function dateTime(iso: string | null | undefined, tz?: string): string {
+// The date (dayMonth) and time.
+export function dateTime(
+  iso: string | null | undefined,
+  tz?: string,
+  now = new Date(),
+): string {
   if (!iso) return "–";
-  return `${dayMonth(iso, tz)} ${clock(iso, tz)}`;
+  return `${dayMonth(iso, tz, now)} ${clock(iso, tz)}`;
 }
 
 // An ISO 3166-1 alpha-2 code as its English name.

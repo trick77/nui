@@ -72,9 +72,24 @@ describe("format", () => {
   it("writes dates and times", () => {
     const t = "2026-11-22T13:19:42Z";
     expect(date(t, "UTC")).toBe("22.11.2026");
-    expect(dayMonth(t, "UTC")).toBe("22.11.");
+    const now = new Date(t);
+    expect(dayMonth(t, "UTC", now)).toBe("22.11.");
     expect(clock(t, "UTC")).toBe("13:19");
-    expect(dateTime(t, "UTC")).toBe("22.11. 13:19");
+    expect(dateTime(t, "UTC", now)).toBe("22.11. 13:19");
+    // Another year than the viewer's current one says it, in every helper:
+    // a span across the new year, a list last updated long ago.
+    const jan = new Date("2027-01-03T10:00:00Z");
+    expect(dateTime("2026-12-30T09:00:00Z", "UTC", jan)).toBe(
+      "30.12.2026 09:00",
+    );
+    expect(dateTime("2027-01-02T09:00:00Z", "UTC", jan)).toBe("2.1. 09:00");
+    expect(dayMonth("2025-03-01T09:00:00Z", "UTC", now)).toBe("1.3.2025");
+    // The year is the viewer's: 2026 in UTC, already 2027 in Tokyo.
+    const eve = new Date("2026-12-31T20:00:00Z");
+    expect(dateTime("2026-12-31T10:00:00Z", "Asia/Tokyo", eve)).toBe(
+      "31.12.2026 19:00",
+    );
+    expect(dateTime("2026-12-31T10:00:00Z", "UTC", eve)).toBe("31.12. 10:00");
     expect(when(t, new Date(t), "UTC")).toBe("13:19:42");
     expect(when("2026-11-20T08:00:00Z", new Date(t), "UTC")).toBe(
       "20.11. 08:00",
