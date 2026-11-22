@@ -69,7 +69,9 @@ export const LIMITS = {
   failures: 5,
   sessionMs: 30 * 60 * 1000,
   sameError: 3,
+  // Distinct error messages per page, and per document over all its pages.
   errorKinds: 20,
+  errorKindsPerDocument: 100,
 };
 
 const STORE_VID = "nui.vid";
@@ -275,6 +277,7 @@ export function start(
   const queue: Rec[] = [];
   const minute: number[] = [];
   const errorsSeen = new Map<string, number>();
+  let docErrors = 0;
   const offs: (() => void)[] = [];
   let pageCount = 0;
   let docCount = 0;
@@ -899,6 +902,7 @@ export function start(
     }
     lastPage = k;
     pageCount = 0;
+    errorsSeen.clear();
     view = record("page_view", {});
   };
   const hist = win.history;
@@ -1012,14 +1016,22 @@ export function start(
   );
 
   // Errors: script errors, failed resources, unhandled rejections.
-  // Each message a few times; a bounded number of distinct ones, so a page
-  // throwing ever new messages cannot grow the table.
+  // Each message a few times; a bounded number of distinct ones per page
+  // (the table starts over on a navigation), so a page throwing ever new
+  // messages cannot grow the table, and a long single-page visit still
+  // reports what breaks on its later pages, within a ceiling per document.
   const jsError = (msg: string, extra: Props) => {
     if (disabled || full(now())) return;
     const key = clip(msg, 200);
     const n = errorsSeen.get(key) || 0;
-    if (n >= LIMITS.sameError || (!n && errorsSeen.size >= LIMITS.errorKinds))
+    if (
+      n >= LIMITS.sameError ||
+      (!n &&
+        (errorsSeen.size >= LIMITS.errorKinds ||
+          docErrors >= LIMITS.errorKindsPerDocument))
+    )
       return;
+    if (!n) docErrors++;
     errorsSeen.set(key, n + 1);
     record("js_error", { msg, ...extra });
   };

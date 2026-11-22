@@ -927,6 +927,30 @@ describe("capture", () => {
     expect(u.state().errorKeys).toBe(0);
   });
 
+  it("remembers distinct errors per page, within a ceiling per document", async () => {
+    const t = boot();
+    for (let page = 0; page < 7; page++) {
+      history.pushState(null, "", "/p" + page);
+      for (let i = 0; i < 30; i++)
+        window.dispatchEvent(
+          new ErrorEvent("error", { message: "P" + page + " E" + i }),
+        );
+      expect(t.state().errorKeys).toBeLessThanOrEqual(LIMITS.errorKinds);
+      // Past the per-minute cap, and the batch out.
+      await vi.advanceTimersByTimeAsync(61_000);
+    }
+    const errs = kinds().filter((k) => k === "js_error");
+    expect(errs).toHaveLength(LIMITS.errorKindsPerDocument);
+    const msgs = bodies()
+      .flatMap((b) => b.events)
+      .filter((e) => e.k === "js_error")
+      .map((e) => String(e.p.msg));
+    // A later page's new error is reported: the first page's did not use up
+    // the table.
+    expect(msgs).toContain("P1 E0");
+    expect(msgs).not.toContain("P5 E0");
+  });
+
   it("sends engagement and vitals when the page is hidden", async () => {
     boot();
     window.dispatchEvent(new Event("scroll"));
