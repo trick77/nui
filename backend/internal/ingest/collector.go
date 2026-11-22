@@ -605,13 +605,14 @@ func (c *Collector) HandleFeed(w http.ResponseWriter, r *http.Request) {
 	// clients' (a crafted method or user agent would otherwise blind the feed). Each event is decoded on its own;
 	// unusable ones (a wrong JSON type included) are dropped and counted as rejected, the rest is taken.
 	evs, dropped := c.feedEvents(site, b.Events)
-	if dropped > 0 {
-		c.count(site.ID, func(s *store.IngestStat) { s.Rejected += int64(dropped) })
-	}
 	if ok, wait := c.Feed.Take(limitKey, float64(len(evs)), 0); !ok {
 		c.count(site.ID, func(s *store.IngestStat) { s.RateLimited += int64(len(evs)) })
 		apix.TooMany(w, wait)
 		return
+	}
+	// Counted once the batch is taken: a refused one comes again, its dropped events with it.
+	if dropped > 0 {
+		c.count(site.ID, func(s *store.IngestStat) { s.Rejected += int64(dropped) })
 	}
 	c.accept(site.ID, "server", evs)
 	w.WriteHeader(http.StatusNoContent)

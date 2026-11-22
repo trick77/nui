@@ -500,6 +500,32 @@ func TestFeed_Hostile(t *testing.T) {
 	}
 }
 
+// A batch refused for the rate is sent again whole: its dropped events are counted when it is taken, once.
+func TestFeed_DroppedCountedOnce(t *testing.T) {
+	r := newRig(t, 0, true)
+	site := r.siteID(domain)
+	// Spend the key's burst.
+	for r.feed(feedBody(domain, MaxFeedEvents, `{"t":1,"ip":"192.0.2.1"}`), feedKey).Code != http.StatusTooManyRequests {
+	}
+	before := r.stat(t, site).Rejected
+	body := `{"v":1,"site":"` + domain + `","events":[{"ip":"192.0.2.2"},{"ip":"bad"},{"ua":"no address"}]}`
+	for range 3 {
+		if w := r.feed(body, feedKey); w.Code != http.StatusTooManyRequests {
+			t.Fatalf("retry: %d", w.Code)
+		}
+	}
+	if got := r.stat(t, site).Rejected - before; got != 0 {
+		t.Errorf("refused retries counted %d rejected", got)
+	}
+	r.advance(time.Hour)
+	if w := r.feed(body, feedKey); w.Code != http.StatusNoContent {
+		t.Fatalf("taken: %d", w.Code)
+	}
+	if got := r.stat(t, site).Rejected - before; got != 2 {
+		t.Errorf("rejected %d, want the batch's 2 once", got)
+	}
+}
+
 // An address's IPv6 zone is free text netip accepts: dropped on both paths, never stored or keyed.
 func TestAddressZoneDropped(t *testing.T) {
 	r := newRig(t, 0, true)
