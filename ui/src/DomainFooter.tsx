@@ -60,8 +60,10 @@ export function DomainFooter() {
         ["Rate-limited", x.counters.rate_limited, x.counters.rate_limited > 0],
         ["Rejected · invalid", x.counters.rejected, false],
         ["Dropped · queue full", x.counters.dropped, x.counters.dropped > 0],
+        // Counted for the collector, not per site: a body naming no
+        // configured domain belongs to none.
         [
-          "Unknown domain",
+          "Unknown domain · all sites",
           x.counters.unknown_domain,
           x.counters.unknown_domain > 0,
         ],
@@ -135,7 +137,7 @@ export function DomainFooter() {
                 <Dl
                   rows={[
                     ["Stored events", num(x.storage.events)],
-                    ["Size on disk", bytes(x.storage.bytes)],
+                    ["Database, all sites", bytes(x.storage.bytes)],
                     [
                       "Retention",
                       `${num(x.storage.retention_months)} months, raw, including addresses`,
