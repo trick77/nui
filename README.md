@@ -44,7 +44,9 @@ BACKEND_DATA_DIR=./data BACKEND_AUTH_DISABLED=true BACKEND_REFDATA_DISABLED=true
 ```
 
 and open <http://localhost:8080/dashboard/>. `-demo 30` fills an empty database with 30 days of simulated traffic
-on the configured sites.
+on the configured sites and marks the directory as the simulator's (`nui-sim.json`): a later `-demo` start serves
+it as it is, a database with events the simulator did not write is refused. `-demo` and `-sim` are development
+only: never together, never with `PUBLIC_FQDN` set.
 
 ### Simulated traffic
 
@@ -74,8 +76,10 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
 
 - `scenarios` lists the scenarios, their windows and what the dashboard shows for each; `check` plays each on its
   own and checks exactly that.
-- `backfill -data ./data` writes a history into a data directory (and `sites.json` and the world's reference data
-  into `ref/` when missing: run the server on it with `BACKEND_REFDATA_DISABLED=true`). About 25,000 events a second.
+- `backfill -data ./data [-wipe]` writes a history, `sites.json` and the world's reference data (`ref/`) into an
+  empty or absent data directory, or one it wrote before (marked by `nui-sim.json`; a second history is refused,
+  `-wipe` empties the directory first). Anything else is refused untouched, and so is every run with `PUBLIC_FQDN`
+  set. Serve it with `server -demo 1` and `BACKEND_REFDATA_DISABLED=true`. About 25,000 events a second.
   The largest run is scale 50: about 110,000 events a simulated day, some 5 s of backfill each, and up to 140 MB of
   day plans in memory (a plan holds a whole day's requests).
 - `live -target http://127.0.0.1:8080 [-rate 50] [-speed 60] [-for 10m] [-key domain=key]` sends tracker and feed

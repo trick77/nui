@@ -325,9 +325,24 @@ func flushCounters(ctx context.Context, c *ingest.Counters, st *store.Store) {
 // the data directory's cached reference data. Without a cache, the world's own is written there when the refresh
 // is off (the server then enriches as the backfill did); with it on, the backfill takes the world's from a directory
 // of its own and the refresh fills the cache.
+//
+// A database with events is served as it is when the simulator wrote the directory (a second start, or sim
+// backfill's directory), and refused otherwise: -demo never mixes simulated traffic into real. A directory it fills
+// is marked as the simulator's.
 func seedDemo(ctx context.Context, st *store.Store, cfg app.Config, days int) error {
 	var n int
-	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM event LIMIT 1)`).Scan(&n); err != nil || n > 0 {
+	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM event LIMIT 1)`).Scan(&n); err != nil {
+		return err
+	}
+	switch {
+	case n > 0 && sim.Owned(cfg.DataDir):
+		slog.Info("Demo: the data directory holds the simulator's history already, served as it is")
+		return nil
+	case n > 0:
+		return fmt.Errorf("-demo refuses %s: its database holds events and the simulator did not write it (no %s); "+
+			"-demo fills an empty database only", cfg.DataDir, sim.OwnerFile)
+	}
+	if err := sim.Mark(cfg.DataDir); err != nil {
 		return err
 	}
 	refDir := filepath.Join(cfg.DataDir, "ref")
