@@ -161,8 +161,21 @@ func (c *Collector) now() time.Time {
 	return time.Now()
 }
 
-// errTooLarge marks a limit breach: 413.
-var errTooLarge = errors.New("too large")
+// errTooLarge marks a limit breach: 413. errNoAddr: the request's client address does not parse (400).
+var (
+	errTooLarge = errors.New("too large")
+	errNoAddr   = errors.New("no client address")
+)
+
+// storedAddr parses a client address as it is stored and keyed: an IPv6 zone dropped (netip takes any text after
+// "%", unbounded, and no public address has one), an IPv4-mapped address unmapped. Its text is at most 39 bytes.
+func storedAddr(s string) (netip.Addr, bool) {
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return a.WithZone("").Unmap(), true
+}
 
 // browserBatch is POST /api/in's body.
 type browserBatch struct {
@@ -345,12 +358,11 @@ func (c *Collector) browserEvents(site *sites.Site, b *browserBatch, r *http.Req
 	if len(ctxJSON) > maxCtx {
 		return nil, 0, errTooLarge
 	}
-	ip := httpx.ClientIP(r, c.TrustedHops)
-	addr, err := netip.ParseAddr(ip)
-	if err != nil {
-		return nil, 0, err
+	addr, ok := storedAddr(httpx.ClientIP(r, c.TrustedHops))
+	if !ok {
+		return nil, 0, errNoAddr
 	}
-	ipKey := ratelimit.Key(ip)
+	ipKey := ratelimit.Key(addr.String())
 	ua := truncate(r.UserAgent(), maxString)
 	visitor := b.VID
 	if visitor == "" {
@@ -423,7 +435,7 @@ func (c *Collector) browserEvents(site *sites.Site, b *browserBatch, r *http.Req
 		}
 		ev := store.Event{
 			SiteID: site.ID, TS: eventTime(recv, b.Sent, e.T), Source: "browser", Kind: e.K, Name: eventName(e, p),
-			Visitor: visitor, SID: b.SID, IP: addr.Unmap().String(), IPKey: ipKey, UA: ua, Path: path,
+			Visitor: visitor, SID: b.SID, IP: addr.String(), IPKey: ipKey, UA: ua, Path: path,
 			Template: site.Template(path), URL: evURL, Props: encodeJSON(props),
 		}
 		if e.K == "page_view" || e.K == "session_start" {
@@ -661,8 +673,8 @@ func (c *Collector) feedEvents(site *sites.Site, in []json.RawMessage) ([]store.
 			{&e.ChUA, maxString}, {&e.Account, feedAccount}} {
 			*f.v = truncate(*f.v, f.limit)
 		}
-		addr, err := netip.ParseAddr(e.IP)
-		if err != nil || e.Status < 0 || e.Status > 999 || e.DurMS < 0 || e.Bytes < 0 {
+		addr, ok := storedAddr(e.IP)
+		if !ok || e.Status < 0 || e.Status > 999 || e.DurMS < 0 || e.Bytes < 0 {
 			dropped++
 			continue
 		}
@@ -690,14 +702,14 @@ func (c *Collector) feedEvents(site *sites.Site, in []json.RawMessage) ([]store.
 			}
 		}
 		pj := encodeJSON(props)
-		ipKey := ratelimit.Key(e.IP)
+		ipKey := ratelimit.Key(addr.String())
 		refHost := hostOf(e.Ref)
 		if strings.EqualFold(refHost, site.Domain) {
 			refHost = ""
 		}
 		out = append(out, store.Event{
 			SiteID: site.ID, TS: ts, Source: "server", Kind: "request", Name: e.SFDest,
-			Visitor: anonVisitor(ipKey, e.UA), IP: addr.Unmap().String(), IPKey: ipKey, UA: e.UA, Path: path,
+			Visitor: anonVisitor(ipKey, e.UA), IP: addr.String(), IPKey: ipKey, UA: e.UA, Path: path,
 			Template: template, Ref: stripQuery(e.Ref), RefHost: refHost, Method: method, Status: e.Status,
 			DurMS: e.DurMS, Account: e.Account, Props: pj,
 		})

@@ -500,6 +500,37 @@ func TestFeed_Hostile(t *testing.T) {
 	}
 }
 
+// An address's IPv6 zone is free text netip accepts: dropped on both paths, never stored or keyed.
+func TestAddressZoneDropped(t *testing.T) {
+	r := newRig(t, 0, true)
+	long := `{"t":%d,"ip":"2001:db8::9%` + strings.Repeat("z", 100_000) + `","status":200}`
+	short := `{"t":%d,"ip":"::ffff:192.0.2.9%eth0","status":200}`
+	if w := r.feed(`{"v":1,"site":"`+domain+`","events":[`+
+		strings.ReplaceAll(long, "%d", fmt.Sprint(time.Now().UnixMilli()))+","+
+		strings.ReplaceAll(short, "%d", fmt.Sprint(time.Now().UnixMilli()))+`]}`, feedKey); w.Code != http.StatusNoContent {
+		t.Fatalf("feed: %d %s", w.Code, w.Body)
+	}
+	if w := r.browser(batch(domain, 1, ""), "2001:db8::5%eth0", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("browser: %d %s", w.Code, w.Body)
+	}
+	waitEvents(t, r.st, 3)
+	rows, err := r.st.DB.Query(`SELECT ip, ip_key FROM event ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []string
+	for rows.Next() {
+		var ip, key string
+		_ = rows.Scan(&ip, &key)
+		got = append(got, ip+" "+key)
+	}
+	want := []string{"2001:db8::9 2001:db8::/64", "192.0.2.9 192.0.2.9", "2001:db8::5 2001:db8::/64"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("stored:\n%s", strings.Join(got, "\n"))
+	}
+}
+
 // storedRows is every stored row's size (store.Event.Size over the columns) and props, in id order.
 func storedRows(t *testing.T, st *store.Store) ([]int, []string) {
 	t.Helper()
