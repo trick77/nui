@@ -98,38 +98,44 @@ func (s *Server) scanDim(ctx context.Context, q *query, d dimSpec, extra string,
 		` GROUP BY ` + group
 	n := len(bounds) - 1
 	for i := 0; i < n; i++ {
-		a := append([]any{q.site.ID, ms(bounds[i]), ms(bounds[i+1])}, args...)
-		rows, err := s.query(ctx, stmt, a...)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var key, sb, dv string
-			var x, y int64
-			if err := rows.Scan(&key, &sb, &x, &y, &dv); err != nil {
-				_ = rows.Close()
+		for _, pc := range pieces(bounds[i], bounds[i+1]) {
+			a := append([]any{q.site.ID, ms(pc[0]), ms(pc[1])}, args...)
+			// into[0] takes every bucket, into[1] only the closed ones.
+			if err := s.scanPiece(ctx, stmt, a, i == n-1, into); err != nil {
 				return err
 			}
-			for j, m := range into {
-				// into[0] takes every bucket, into[1] only the closed ones.
-				if j == 1 && i == n-1 {
-					continue
-				}
-				g := m.get(key)
-				g.sub = max(g.sub, sb)
-				g.a += x
-				g.b += y
-				if dv != "" {
-					g.d[dv] = struct{}{}
-				}
-			}
-		}
-		_ = rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
 		}
 	}
 	return nil
+}
+
+// scanPiece adds one piece's rows to the maps; an open bucket's skip the closed map (into[1]).
+func (s *Server) scanPiece(ctx context.Context, stmt string, args []any, open bool, into []aggMap) error {
+	rows, err := s.query(ctx, stmt, args...)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var key, sb, dv string
+		var x, y int64
+		if err := rows.Scan(&key, &sb, &x, &y, &dv); err != nil {
+			return err
+		}
+		for j, m := range into {
+			if j == 1 && open {
+				continue
+			}
+			g := m.get(key)
+			g.sub = max(g.sub, sb)
+			g.a += x
+			g.b += y
+			if dv != "" {
+				g.d[dv] = struct{}{}
+			}
+		}
+	}
+	return rows.Err()
 }
 
 type listRow struct {
@@ -467,10 +473,11 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request, q *query)
 	}
 	type client struct{ ua, ip string }
 	seen := map[string]client{}
-	for i := 0; i < q.p.n(); i++ {
+	// Oldest piece first, so a later piece's client replaces an earlier one's.
+	for _, pc := range pieces(q.p.From(), q.p.Bounds[q.p.n()]) {
 		rows, err := s.query(r.Context(), `SELECT `+id+`, MAX(ua), MAX(ip) FROM event
 			WHERE site_id = ? AND ts >= ? AND ts < ? AND `+where+` AND `+audWhere(q.aud)+` GROUP BY `+id,
-			q.site.ID, ms(q.p.Bounds[i]), ms(q.p.Bounds[i+1]))
+			q.site.ID, ms(pc[0]), ms(pc[1]))
 		if err != nil {
 			s.fail(w, r, err)
 			return

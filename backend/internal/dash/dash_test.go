@@ -555,21 +555,28 @@ func TestVisitsAcrossBuckets(t *testing.T) {
 		return store.Event{SiteID: site.ID, TS: r.end.Add(-ago).UnixMilli(), Source: "browser", Kind: "page_view",
 			Visitor: "v1", SID: sid, IP: "192.0.2.40", IPKey: "192.0.2.40", Template: "/", Cls: store.ClsHuman}
 	}
-	// s1 runs from 12:50 to 13:10 UTC, across the 13:00 hour; s2 is a second visit.
-	evs := []store.Event{ev(40*time.Minute, "s1"), ev(20*time.Minute, "s1"), ev(5*time.Minute, "s2")}
+	// s1 runs from 12:50 to 13:10 UTC, across the 13:00 hour; s2 is a second visit; s3 crosses midnight in Zurich
+	// (23:00 UTC), where the 12-month range's day pieces meet.
+	evs := []store.Event{ev(40*time.Minute, "s1"), ev(20*time.Minute, "s1"), ev(5*time.Minute, "s2"),
+		ev(14*time.Hour+40*time.Minute, "s3"), ev(14*time.Hour+20*time.Minute, "s3")}
 	if err := r.s.DB.InsertEvents(t.Context(), evs); err != nil {
 		t.Fatal(err)
 	}
-	for _, rng := range []string{"24h", "7d"} {
+	for _, rng := range []string{"24h", "7d", "12mo"} {
 		_, body := r.get(t, "visitors", p(plainSite, "range", rng))
 		rows := body["rows"].([]any)
 		if len(rows) != 1 {
 			t.Fatalf("%s: %d rows", rng, len(rows))
 		}
 		row := rows[0].(map[string]any)
-		if row["visits"] != 2.0 || row["views"] != 3.0 {
-			t.Errorf("%s: visits %v views %v, want 2 and 3", rng, row["visits"], row["views"])
+		if row["visits"] != 3.0 || row["views"] != 5.0 {
+			t.Errorf("%s: visits %v views %v, want 3 and 5", rng, row["visits"], row["views"])
 		}
+	}
+	from := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	ps := pieces(from, from.Add(36*time.Hour))
+	if len(ps) != 2 || !ps[0][1].Equal(from.Add(24*time.Hour)) || !ps[1][1].Equal(from.Add(36*time.Hour)) {
+		t.Errorf("pieces: %v", ps)
 	}
 }
 

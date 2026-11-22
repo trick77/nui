@@ -13,9 +13,20 @@ import (
 // visitor did.
 const eventKinds = `kind NOT IN ('page_view', 'session_start', 'engagement', 'vital')`
 
-// bucket reads one bucket: two short statements (the sums, the distinct visitors).
+// bucket reads one bucket, a piece (at most a day) at a time.
 func (s *Server) bucket(ctx context.Context, site int64, aud string, from, to time.Time) (bucketStats, error) {
 	b := bucketStats{visitors: map[string]struct{}{}}
+	for _, pc := range pieces(from, to) {
+		if err := s.bucketPiece(ctx, site, aud, pc[0], pc[1], &b); err != nil {
+			return b, err
+		}
+	}
+	return b, nil
+}
+
+// bucketPiece adds one piece to b: two short statements (the sums, the distinct visitors).
+func (s *Server) bucketPiece(ctx context.Context, site int64, aud string, from, to time.Time, b *bucketStats) error {
+	var views, events, requests, unknown, allReq, errs float64
 	cond := audWhere(aud)
 	err := s.row(ctx, `SELECT
 		COALESCE(SUM(`+cond+` AND kind = 'page_view'), 0),
@@ -25,27 +36,33 @@ func (s *Server) bucket(ctx context.Context, site int64, aud string, from, to ti
 		COALESCE(SUM(source = 'server'), 0),
 		COALESCE(SUM(`+cond+` AND (kind = 'js_error' OR (source = 'server' AND status >= 500))), 0)
 		FROM event WHERE site_id = ? AND ts >= ? AND ts < ?`, site, ms(from), ms(to)).
-		Scan(&b.views, &b.events, &b.requests, &b.unknown, &b.allReq, &b.errors)
+		Scan(&views, &events, &requests, &unknown, &allReq, &errs)
 	if err != nil {
-		return b, err
+		return err
 	}
+	b.views += views
+	b.events += events
+	b.requests += requests
+	b.unknown += unknown
+	b.allReq += allReq
+	b.errors += errs
 	vq := `SELECT DISTINCT visitor FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND source = 'browser' AND ` + cond
 	if aud == "bots" {
 		vq = `SELECT DISTINCT ip_key FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND ` + cond
 	}
 	rows, err := s.query(ctx, vq, site, ms(from), ms(to))
 	if err != nil {
-		return b, err
+		return err
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var v string
 		if err := rows.Scan(&v); err != nil {
-			return b, err
+			return err
 		}
 		b.visitors[v] = struct{}{}
 	}
-	return b, rows.Err()
+	return rows.Err()
 }
 
 // buckets reads every bucket of bounds, one at a time.

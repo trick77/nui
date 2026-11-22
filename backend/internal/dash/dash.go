@@ -186,6 +186,27 @@ func label(t time.Time, bucket string) string {
 	return t.Format("02.01.")
 }
 
+// readSpan is the longest span one bucket statement reads. A month bucket (12mo) is read in day pieces: a month of a
+// busy site in one GROUP BY held a read for over a second (the visitors' actor sums, 24 M events), twelve times in a
+// row, and the WAL cannot restart past an open read while the collector writes. Sums and sets merge exactly.
+const readSpan = 24 * time.Hour
+
+// pieces cuts [from, to) into spans of at most readSpan, oldest first.
+func pieces(from, to time.Time) [][2]time.Time {
+	var out [][2]time.Time
+	for lo := from; lo.Before(to); lo = lo.Add(readSpan) {
+		out = append(out, [2]time.Time{lo, minTime(lo.Add(readSpan), to)})
+	}
+	return out
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
 // n is the number of buckets.
 func (p period) n() int { return len(p.Bounds) - 1 }
 

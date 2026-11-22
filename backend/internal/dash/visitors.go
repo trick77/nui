@@ -21,15 +21,15 @@ import (
 	"github.com/trick77/nui/backend/internal/insight"
 )
 
-// actors sums every address key over the range's buckets. Visits are distinct sessions over the whole range: a
-// session crossing a bucket boundary is one visit, so they are counted from (key, session) pairs, never summed per
-// bucket.
+// actors sums every address key over the range, a piece (at most a day) at a time. Visits are distinct sessions
+// over the whole range: a session crossing a piece boundary is one visit, so they are counted from (key, session)
+// pairs, never summed per piece.
 func (s *Server) actors(ctx context.Context, q *query) (map[string]*actor, error) {
 	out := map[string]*actor{}
 	// A hash per (key, session) seen: a few bytes each, not the strings.
 	sessions := map[uint64]struct{}{}
-	for i := 0; i < q.p.n(); i++ {
-		if err := s.actorSessions(ctx, q, q.p.Bounds[i], q.p.Bounds[i+1], sessions, out); err != nil {
+	for _, pc := range pieces(q.p.From(), q.p.Bounds[q.p.n()]) {
+		if err := s.actorSessions(ctx, q, pc[0], pc[1], sessions, out); err != nil {
 			return nil, err
 		}
 		rows, err := s.query(ctx, `SELECT ip_key,
@@ -37,7 +37,7 @@ func (s *Server) actors(ctx context.Context, q *query) (map[string]*actor, error
 			SUM(source = 'browser' AND `+eventKinds+`), MAX(ts), MAX(ua), MAX(asn), MAX(country), MAX(cls),
 			MAX(source = 'browser')
 			FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND `+audWhere(q.aud)+` GROUP BY ip_key`,
-			q.site.ID, ms(q.p.Bounds[i]), ms(q.p.Bounds[i+1]))
+			q.site.ID, ms(pc[0]), ms(pc[1]))
 		if err != nil {
 			return nil, err
 		}
