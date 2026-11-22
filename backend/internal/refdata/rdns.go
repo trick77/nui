@@ -48,16 +48,16 @@ type verdict struct {
 type Verdict int
 
 const (
-	// Unverified: no lookup answers it now (the network's daily lookup budget is spent, the provider names no rDNS
-	// pattern, no address); nothing is known either way.
+	// Unverified means no lookup answers it now (the network's daily lookup budget is spent, the provider names no
+	// rDNS pattern, no address); nothing is known either way.
 	Unverified Verdict = iota
-	// Pending: a lookup is queued, or will be on a later pass; ask again then.
+	// Pending means a lookup is queued, or will be on a later pass; ask again then.
 	Pending
-	// Failed: the last lookup failed and is retried after failRetry; nothing is known either way.
+	// Failed means the last lookup failed and is retried after failRetry; nothing is known either way.
 	Failed
-	// Confirmed: the address's forward-confirmed PTR name matches the provider's rDNS glob.
+	// Confirmed means the address's forward-confirmed PTR name matches the provider's rDNS glob.
 	Confirmed
-	// Refuted: a completed lookup found no forward-confirmed PTR name matching it.
+	// Refuted means a completed lookup found no forward-confirmed PTR name matching it.
 	Refuted
 )
 
