@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -123,6 +124,12 @@ func TestCommands(t *testing.T) {
 	if code, _, errs := run(t, nil, "live", "-target", "http://127.0.0.1:1", "-speed", "0.01", "-rate", "1000"); code != 1 ||
 		!strings.Contains(errs, "-speed") {
 		t.Errorf("rate beyond the scale: %d %s", code, errs)
+	}
+	// The port server -sim listens on, as make sim hands it to the UI: the knob, or its default when it is bad.
+	for raw, want := range map[string]string{"9123": "9123\n", "x": "8080\n", "70000": "8080\n"} {
+		if code, out, _ := run(t, map[string]string{"NUI_SIM_PORT": raw}, "port"); code != 0 || out != want {
+			t.Errorf("port with NUI_SIM_PORT=%s: %d %q", raw, code, out)
+		}
 	}
 	code, out, _ := run(t, nil, "scenarios")
 	if code != 0 || !strings.Contains(out, "api-walker (always)") || !strings.Contains(out, "Noteworthy lists the new referrer") {
@@ -300,7 +307,7 @@ func TestServer(t *testing.T) {
 	time.Sleep(500 * time.Millisecond) // half an hour of the world after serving began
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/dash/sites", nil))
-	if rec.Code != http.StatusTeapot || c.Writer.Queued() == 0 {
+	if rec.Code != http.StatusTeapot || c.Writer.Queued() == 0 || rec.Header().Get(PIDHeader) != strconv.Itoa(os.Getpid()) {
 		t.Errorf("wrapped: %d, queued %d", rec.Code, c.Writer.Queued())
 	}
 	// server -demo: the configured sites, the world's reference data written where there was none.

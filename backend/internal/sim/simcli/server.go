@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,8 +93,17 @@ func (s *Server) Backfill(ctx context.Context, st *store.Store) error {
 // names (NUI_SIM_START in the past or the future).
 func (s *Server) Wrap(dash http.Handler, h sim.Handlers) http.Handler {
 	s.live = sim.NewLive(s.World, time.Now(), s.Knobs.Speed)
-	return s.live.Wrap(dash, h, time.Duration(s.Knobs.SlowMS)*time.Millisecond)
+	next := s.live.Wrap(dash, h, time.Duration(s.Knobs.SlowMS)*time.Millisecond)
+	pid := strconv.Itoa(os.Getpid())
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// make sim waits for this process's answer before it starts the UI: not another server on the port.
+		w.Header().Set(PIDHeader, pid)
+		next.ServeHTTP(w, r)
+	})
 }
+
+// PIDHeader names the simulated server's process on every dashboard answer.
+const PIDHeader = "X-Nui-Sim-Pid"
 
 // Close removes the data directory.
 func (s *Server) Close() { _ = os.RemoveAll(s.Dir) }
