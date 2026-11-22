@@ -11,6 +11,48 @@ import (
 	"github.com/trick77/nui/backend/internal/store"
 )
 
+// What the simulator leaves in a data directory changes nothing in a normal run: its reference data is discarded,
+// its directory named, and refused for a deployment. Its own modes keep both; rDNS verification follows the mode
+// alone.
+func TestCheckDataDir(t *testing.T) {
+	if !verifyBots(normalRun) || verifyBots(simRun) || verifyBots(demoRun) {
+		t.Error("rDNS verification not by the mode")
+	}
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref")
+	if err := sim.WriteReference(ref); err != nil {
+		t.Fatal(err)
+	}
+	if err := sim.Mark(dir); err != nil {
+		t.Fatal(err)
+	}
+	cfg := app.Config{DataDir: dir, RefDataDisabled: true}
+	if err := checkDataDir(cfg, demoRun); err != nil || !sim.SimulatedReference(ref) {
+		t.Fatalf("-demo: %v, reference kept %v", err, sim.SimulatedReference(ref))
+	}
+	pub := cfg
+	pub.PublicFQDN = "nui.example.com"
+	if err := checkDataDir(pub, normalRun); err == nil || !strings.Contains(err.Error(), sim.OwnerFile) {
+		t.Errorf("a deployment on simulated data: %v", err)
+	}
+	if err := checkDataDir(cfg, normalRun); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(ref); len(entries) != 0 {
+		t.Errorf("the made-up reference data left: %v", entries)
+	}
+	// Real reference data, unmarked, is never touched.
+	if err := os.WriteFile(filepath.Join(ref, "crawlers.json"), []byte(`{"services":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkDataDir(cfg, normalRun); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ref, "crawlers.json")); err != nil {
+		t.Error(err)
+	}
+}
+
 // -demo fills an empty database and marks the directory, serves its own history again, and refuses one with
 // events it did not write.
 func TestSeedDemo(t *testing.T) {

@@ -123,6 +123,44 @@ func startMode(cfg app.Config, simulate bool, demoDays int) (runMode, error) {
 	return normalRun, nil
 }
 
+// verifyBots reports whether the classifier confirms bots' claims by reverse DNS: always in a normal run, whatever
+// its data holds. Not in the simulator's modes: their bots send from documentation addresses, which have no rDNS
+// (a lookup would refute what the backfill classed).
+func verifyBots(mode runMode) bool { return mode == normalRun }
+
+// checkDataDir is what a normal run makes of what the simulator left in its data directory, decided by the
+// simulator's markers, never by what the data looks like: its made-up reference data is discarded (the real data is
+// fetched in its place), and a directory it wrote is refused for a deployment and named loudly otherwise. The
+// simulator's own modes keep both.
+func checkDataDir(cfg app.Config, mode runMode) error {
+	if mode != normalRun {
+		return nil
+	}
+	refDir := filepath.Join(cfg.DataDir, "ref")
+	if sim.SimulatedReference(refDir) {
+		if err := sim.DiscardReference(refDir); err != nil {
+			return err
+		}
+		if cfg.RefDataDisabled {
+			slog.Warn("The reference cache held the simulator's made-up data: discarded, and with "+
+				"BACKEND_REFDATA_DISABLED=true nothing replaces it (server -demo keeps it)", "dir", refDir)
+		} else {
+			slog.Warn("The reference cache held the simulator's made-up data: discarded, the real data is fetched",
+				"dir", refDir)
+		}
+	}
+	if sim.Owned(cfg.DataDir) {
+		if cfg.PublicFQDN != "" {
+			return fmt.Errorf("%s was written by the simulator (%s): its events are synthetic, a deployment never "+
+				"runs on it", cfg.DataDir, sim.OwnerFile)
+		}
+		slog.Warn("SIMULATED DATA: this data directory was written by the simulator, its events are synthetic "+
+			"(server -demo serves it as such; delete the directory for a real one)", "data_dir", cfg.DataDir,
+			"marker", sim.OwnerFile)
+	}
+	return nil
+}
+
 func newFeedKey() (key, hash string) {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)
@@ -135,6 +173,9 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 		return err
 	}
 	slog.Info("starting nui", "version", version.String(), "public_fqdn", cfg.PublicFQDN, "data_dir", cfg.DataDir)
+	if err := checkDataDir(cfg, mode); err != nil {
+		return err
+	}
 
 	ctx, stop := run.Context(context.Background())
 	defer stop()
@@ -162,9 +203,7 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	ref := refdata.New(refdata.Options{Dir: filepath.Join(cfg.DataDir, "ref")})
 	verifier := refdata.NewVerifier(nil, 3*time.Second)
 	cls := &classify.Classifier{DB: st, Sites: reg, Ref: ref, Verifier: verifier}
-	if sim.WorldReference(filepath.Join(cfg.DataDir, "ref")) {
-		// The simulator's reference data: its bots send from documentation addresses, which have no rDNS to
-		// confirm them by (a lookup would refute what the backfill classed).
+	if !verifyBots(mode) {
 		cls.Verifier = nil
 	}
 	counters := ingest.NewCounters(nil)
