@@ -471,10 +471,19 @@ func TestVisitorsAndDetail(t *testing.T) {
 	if rows := listRows(monitors); len(rows) != 1 || rows[0]["key"] != "69.162.124.230" {
 		t.Errorf("monitor filter %v", monitors)
 	}
-	_, found := r.get(t, "visitors", p(feedSite, "q", "uptime"))
-	if len(found["rows"].([]any)) != 0 {
-		// the client of UptimeRobot is "Mozilla/5.0+(compatible;" family; search is on key, network, client, country
-		_ = found
+	// The search matches the model's client label the table shows, as stored.
+	if err := r.s.DB.PutLabel(t.Context(), "ua", "python-requests/2.32.3", "Python scraping script"); err != nil {
+		t.Fatal(err)
+	}
+	_, found := r.get(t, "visitors", p(feedSite, "q", "Scraping SCRIPT", "range", "24h"))
+	if rows := listRows(found); len(rows) == 0 || rows[0]["client_gen"] != "Python scraping script" {
+		t.Errorf("search by client label: %v", found)
+	} else {
+		for _, row := range rows {
+			if row["client"] != "python-requests/2.32.3" {
+				t.Errorf("search by client label matched %v", row["client"])
+			}
+		}
 	}
 	// Without a feed: requests and refused are null, sorted by views.
 	_, plain := r.get(t, "visitors", p(plainSite))

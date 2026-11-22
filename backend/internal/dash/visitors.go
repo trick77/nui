@@ -254,14 +254,20 @@ func (s *Server) visitorRows(ctx context.Context, q *query, span visitorCursor, 
 	if err != nil {
 		return nil, err
 	}
+	labelled, err := s.labelMatches(ctx, needle)
+	if err != nil {
+		return nil, err
+	}
 	rows := make([]visitorRow, 0, len(all))
 	for _, a := range all {
 		row := s.visitorRow(q, a, cls[a.key])
 		if class != "" && row.Class != class {
 			continue
 		}
+		// The search covers what the row shows: the model's client label too (labelClients shows it on unknown
+		// automated rows).
 		if needle != "" && !strings.Contains(strings.ToLower(row.Key+" "+row.Network+" "+row.Client+" "+row.Country),
-			needle) {
+			needle) && (row.Class != "unknown" || !labelled[row.ua]) {
 			continue
 		}
 		rows = append(rows, row)
@@ -273,6 +279,28 @@ func (s *Server) visitorRows(ctx context.Context, q *query, span visitorCursor, 
 		return cmp.Compare(a.Key, b.Key)
 	})
 	return rows, nil
+}
+
+// labelMatches is the user agents whose stored model label holds needle, nil without a needle or a model (the
+// table shows no label then).
+func (s *Server) labelMatches(ctx context.Context, needle string) (map[string]bool, error) {
+	if needle == "" || s.Model == nil || !s.Model.Configured() {
+		return nil, nil
+	}
+	rows, err := s.query(ctx, `SELECT value FROM llm_label WHERE kind = 'ua' AND instr(lower(label), ?) > 0`, needle)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]bool{}
+	for rows.Next() {
+		var ua string
+		if err := rows.Scan(&ua); err != nil {
+			return nil, err
+		}
+		out[ua] = true
+	}
+	return out, rows.Err()
 }
 
 func sortValue(r visitorRow, sortBy string) int64 {
