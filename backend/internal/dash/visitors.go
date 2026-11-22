@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -113,6 +114,23 @@ func (s *Server) actorSessions(ctx context.Context, q *query, from, to time.Time
 		actorOf(out, key).visits++
 	}
 	return rows.Err()
+}
+
+// classOne is one key's latest stored class and reasons within the range, on the primary key: the detail needs no
+// other actor's rows.
+func (s *Server) classOne(ctx context.Context, site int64, key string, from, to time.Time) (classInfo, error) {
+	var ci classInfo
+	var reasons string
+	err := s.row(ctx, `SELECT class, reasons FROM actor_class WHERE site_id = ? AND ip_key = ? AND day >= ?
+		AND day <= ? ORDER BY day DESC LIMIT 1`, site, key, ms(from)/dayMS, ms(to)/dayMS).Scan(&ci.class, &reasons)
+	if errors.Is(err, sql.ErrNoRows) {
+		return classInfo{}, nil
+	}
+	if err != nil {
+		return ci, err
+	}
+	_ = json.Unmarshal([]byte(reasons), &ci.signals)
+	return ci, nil
 }
 
 // classes is each key's latest stored class and reasons within the range.
@@ -840,12 +858,12 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		apix.Error(w, http.StatusNotFound, "no events from this address in the range")
 		return
 	}
-	cls, err := s.classes(ctx, q.site.ID, q.p.From(), q.p.Now)
+	ci, err := s.classOne(ctx, q.site.ID, key, q.p.From(), q.p.Now)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	row := s.visitorRow(q, a, cls[key])
+	row := s.visitorRow(q, a, ci)
 	tr, err := s.trail(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()], before, 1)
 	if err != nil {
 		s.fail(w, r, err)

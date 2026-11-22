@@ -554,6 +554,39 @@ func TestVisitorsAndDetail(t *testing.T) {
 	}
 }
 
+// Opening one visitor reads only its own class rows: never the site's whole range of them.
+func TestVisitorReadsOwnClass(t *testing.T) {
+	r := newRig(t, 3, 8, nil)
+	var stmts []string
+	var mu sync.Mutex
+	traceSQL = func(q string, _ []any) {
+		mu.Lock()
+		stmts = append(stmts, strings.Join(strings.Fields(q), " "))
+		mu.Unlock()
+	}
+	t.Cleanup(func() { traceSQL = nil })
+	code, d := r.get(t, "visitor", p(feedSite, "key", "69.162.124.230", "range", "24h"))
+	if code != http.StatusOK || d["class"] != "monitor" {
+		t.Fatalf("visitor %d %v", code, d)
+	}
+	for _, q := range stmts {
+		if strings.Contains(q, "FROM actor_class") && !strings.Contains(q, "ip_key = ?") {
+			t.Errorf("the detail read every actor's class: %s", q)
+		}
+	}
+	// A key without a class row reads as its events' class.
+	site, _ := r.s.Sites.Lookup(feedSite)
+	if err := r.s.DB.InsertEvents(t.Context(), []store.Event{{SiteID: site.ID, TS: r.end.UnixMilli(), Source: "server",
+		Kind: "request", IP: "192.0.2.250", IPKey: "192.0.2.250", UA: "curl/8", Template: "GET /", Status: 200,
+		Cls: store.ClsUnknown}}); err != nil {
+		t.Fatal(err)
+	}
+	if code, d := r.get(t, "visitor", p(feedSite, "key", "192.0.2.250", "range", "24h")); code != 200 ||
+		d["class"] != "unknown" {
+		t.Errorf("visitor without a class row: %d %v", code, d["class"])
+	}
+}
+
 func TestTrailPaging(t *testing.T) {
 	r := newRig(t, 0, 0, nil)
 	site, _ := r.s.Sites.Lookup(feedSite)
