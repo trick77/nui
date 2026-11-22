@@ -494,7 +494,7 @@ describe("dashboard on a domain with a server feed", () => {
     expect(label).toHaveClass("gen");
     expect(label.closest("td")).toHaveAttribute(
       "title",
-      "python-requests/2.32",
+      "python-requests/2.32.3",
     );
     // The detail names the client as the table does.
     fireEvent.click(label);
@@ -502,7 +502,7 @@ describe("dashboard on a domain with a server feed", () => {
     const detail = await within(d).findByText("Python scraping script");
     expect(detail.closest("dd")).toHaveAttribute(
       "title",
-      "python-requests/2.32",
+      "python-requests/2.32.3",
     );
   });
 

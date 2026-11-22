@@ -216,10 +216,13 @@ function overview(
       to: NOW.toISOString(),
       bucket: range === "24h" ? "hour" : range === "12mo" ? "month" : "day",
       labels: ls,
+      // Empty with the comparison off.
       prev_label:
-        cmp === "yoy"
-          ? "same period last year"
-          : `prior ${range.replace(/(\d+)/, "$1 ")}`,
+        cmp === "off"
+          ? ""
+          : cmp === "yoy"
+            ? "last year"
+            : `prior ${range.replace(/(\d+)/, "$1 ")}`,
       last_bucket_open: true,
     },
     live: { humans: 7, automated: feed ? 3 : 1 },
@@ -613,13 +616,13 @@ const VISITORS: VisitorRow[] = [
     network_kind: "hosting",
     country: "US",
     class: "unknown",
-    client: "python-requests/2.32",
+    client: "python-requests/2.32.3",
     client_gen: "Python scraping script",
     visits: null,
     views: 0,
     requests: 2340,
     refused: 2338,
-    refused_share: 100,
+    refused_share: 99.9,
     events: 0,
     last: "2026-11-22T13:19:42Z",
     signals: ["no script beacon", "no assets", "0.8 s interval"],
@@ -635,7 +638,7 @@ const VISITORS: VisitorRow[] = [
     network_kind: "isp",
     country: "CH",
     class: "human",
-    client: "Chrome 142 · macOS 26",
+    client: "Chrome · macOS",
     visits: 14,
     views: 61,
     requests: 318,
@@ -652,8 +655,8 @@ const VISITORS: VisitorRow[] = [
   {
     key: "192.0.2.66",
     display: "192.0.2.66",
-    network: "Googlebot",
-    network_kind: "crawler",
+    network: "AS15169 Google LLC",
+    network_kind: "business",
     country: "US",
     class: "bot",
     client: "Googlebot/2.1",
@@ -674,7 +677,7 @@ const VISITORS: VisitorRow[] = [
     network_kind: "isp",
     country: "DE",
     class: "human",
-    client: "Firefox 145 · Windows 11",
+    client: "Firefox · Windows",
     visits: 6,
     views: 22,
     requests: 141,
@@ -691,8 +694,8 @@ const VISITORS: VisitorRow[] = [
   {
     key: "192.0.2.120",
     display: "192.0.2.120",
-    network: "UptimeRobot",
-    network_kind: "monitor",
+    network: "AS46475 Example Monitoring",
+    network_kind: "hosting",
     country: "US",
     class: "monitor",
     client: "UptimeRobot/2.0",
@@ -716,7 +719,7 @@ const VISITORS: VisitorRow[] = [
     network_kind: "hosting",
     country: "NL",
     class: "unknown",
-    client: "Chrome 141 · Linux (headless)",
+    client: "HeadlessChrome/141",
     visits: 3,
     views: 97,
     requests: 512,
@@ -737,7 +740,7 @@ const VISITORS: VisitorRow[] = [
     network_kind: "isp",
     country: "CH",
     class: "human",
-    client: "Safari 26 · iOS 26",
+    client: "Safari · iOS",
     visits: 2,
     views: 5,
     requests: 44,
@@ -758,7 +761,7 @@ const VISITORS: VisitorRow[] = [
     network_kind: "isp",
     country: "AT",
     class: "human",
-    client: "Chrome 142 · Android 16",
+    client: "Chrome · Android",
     visits: 1,
     views: 3 - (i % 3),
     requests: 30 - i,
@@ -1049,23 +1052,24 @@ const clients: Clients = {
     { key: "IPv6", value: 917, share: 32 },
   ],
   browsers: [
-    { key: "Chrome", value: 1480, share: 51.6 },
-    { key: "Firefox", value: 620, share: 21.6 },
-    { key: "Safari", value: 510, share: 17.8 },
-    { key: "Edge", value: 170, share: 5.9 },
+    // Whole percents, as the backend rounds them.
+    { key: "Chrome", value: 1480, share: 52 },
+    { key: "Firefox", value: 620, share: 22 },
+    { key: "Safari", value: 510, share: 18 },
+    { key: "Edge", value: 170, share: 6 },
     { key: "Other", value: 87, share: 3 },
   ],
   os: [
-    { key: "macOS", value: 980, share: 34.2 },
+    { key: "macOS", value: 980, share: 34 },
     { key: "Windows", value: 860, share: 30 },
-    { key: "Linux", value: 540, share: 18.8 },
-    { key: "iOS", value: 310, share: 10.8 },
-    { key: "Other", value: 177, share: 6.2 },
+    { key: "Linux", value: 540, share: 19 },
+    { key: "iOS", value: 310, share: 11 },
+    { key: "Other", value: 177, share: 6 },
   ],
   devices: [
-    { key: "Desktop", value: 2290, share: 79.9 },
-    { key: "Mobile", value: 470, share: 16.4 },
-    { key: "Tablet", value: 107, share: 3.7 },
+    { key: "Desktop", value: 2290, share: 80 },
+    { key: "Mobile", value: 470, share: 16 },
+    { key: "Tablet", value: 107, share: 4 },
   ],
 };
 
@@ -1146,7 +1150,7 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
       case "/api/dash/classes":
         return feed
           ? json(classes(range))
-          : json({ detail: "no server feed" }, 404);
+          : json({ detail: `${site} has no server feed` }, 404);
       case "/api/dash/status":
         return feed
           ? json({
@@ -1157,10 +1161,12 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
                 { class: "5xx", value: 37, share: 0.3 },
               ],
             })
-          : json({ detail: "no server feed" }, 404);
+          : json({ detail: `${site} has no server feed` }, 404);
       case "/api/dash/list": {
         const l = list(q, feed);
-        return l ? json(l) : json({ detail: "no server feed" }, 404);
+        return l
+          ? json(l)
+          : json({ detail: `${site} has no server feed` }, 404);
       }
       case "/api/dash/clients":
         return json(clients);
@@ -1168,7 +1174,9 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
         return json(visitors(q, feed));
       case "/api/dash/visitor": {
         const v = visitor(q.get("key") || "", feed);
-        return v ? json(v) : json({ detail: "unknown address" }, 404);
+        return v
+          ? json(v)
+          : json({ detail: "no events from this address in the range" }, 404);
       }
       case "/api/dash/log": {
         const l = log(q, feed, script);
@@ -1177,6 +1185,6 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
       case "/api/dash/domain":
         return json(domain(feed, script));
     }
-    return json({ detail: "not found" }, 404);
+    return json({ detail: "no such endpoint" }, 404);
   };
 }
