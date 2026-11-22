@@ -100,6 +100,23 @@ export function Panel({
   );
 }
 
+// The keyboard's way into a clickable table row: its first cell as a
+// button, so the row stays a row. Enter and Space click it, and the click
+// reaches the row's own handler.
+export function RowButton({
+  children,
+  pressed,
+}: {
+  children: ReactNode;
+  pressed?: boolean;
+}) {
+  return (
+    <button type="button" className="rowbtn" aria-pressed={pressed}>
+      {children}
+    </button>
+  );
+}
+
 // The sources a panel's data comes from, shown only on a domain with both.
 export function Sources({ of }: { of: ("browser" | "server")[] }) {
   const { both } = useDash();

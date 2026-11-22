@@ -759,6 +759,18 @@ table.t th button {
     cursor: default;
     opacity: 0.6;
   }
+  .rowbtn {
+    all: unset;
+    cursor: pointer;
+  }
+  .rowbtn:focus-visible {
+    outline: 2px solid var(--color-accent-strong);
+    outline-offset: 3px;
+    border-radius: 3px;
+  }
+}
+table.t tbody tr.click:focus-within {
+  background: var(--color-active);
 }
 
 .map path {

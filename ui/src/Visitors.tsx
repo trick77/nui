@@ -19,6 +19,7 @@ import {
   ErrorBox,
   GenText,
   Panel,
+  RowButton,
   SectionHead,
   Seg,
   Skeleton,
@@ -127,13 +128,15 @@ export function Visitors({ aud }: { aud: Audience }) {
                     onClick={() => selectVisitor(v.key)}
                   >
                     <td>
-                      <span className="font-mono text-[12.5px]">
-                        {v.display}
-                      </span>
-                      <div className="text-[12px] text-muted">
-                        {v.network}
-                        {v.network_kind ? ` · ${v.network_kind}` : ""}
-                      </div>
+                      <RowButton pressed={v.key === selected}>
+                        <span className="font-mono text-[12.5px]">
+                          {v.display}
+                        </span>
+                        <span className="block text-[12px] text-muted">
+                          {v.network}
+                          {v.network_kind ? ` · ${v.network_kind}` : ""}
+                        </span>
+                      </RowButton>
                     </td>
                     <td>
                       <ClassPill cls={v.class} />

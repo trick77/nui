@@ -421,6 +421,41 @@ describe("dashboard on a domain with a server feed", () => {
     );
   });
 
+  it("lets the keyboard reach every clickable row", async () => {
+    start();
+    const v = await screen.findByRole("region", {
+      name: "Visitors by address",
+    });
+    const vrow = await within(v).findByRole("button", {
+      name: /^203\.0\.113\.42/,
+    });
+    vrow.focus();
+    expect(vrow).toHaveFocus();
+    fireEvent.click(vrow);
+    const d = screen.getByRole("region", { name: "Visitor" });
+    expect(await within(d).findByText("Ordinary use")).toBeInTheDocument();
+    expect(vrow).toHaveAttribute("aria-pressed", "true");
+
+    const pages = screen.getByRole("region", { name: "Pages" });
+    await within(pages).findByText("/AS:n");
+    // The table keeps its rows; the first cell is the row's button.
+    const row = within(pages).getByText("/AS:n").closest("tr")!;
+    expect(within(pages).getAllByRole("row")).toContain(row);
+    expect(within(row).getByRole("button", { name: "/AS:n" })).toBeTruthy();
+    fireEvent.click(within(pages).getByRole("button", { name: "Open /AS:n" }));
+    // The caret opens the row, it does not follow it.
+    expect(window.location.pathname).toBe("/dashboard/");
+    fireEvent.click(
+      await within(pages).findByRole("button", { name: "/AS15169" }),
+    );
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/dashboard/log"),
+    );
+    expect(new URLSearchParams(window.location.search).get("path")).toBe(
+      "/AS15169",
+    );
+  });
+
   it("opens the log from a page and from an event", async () => {
     start();
     const ev = await screen.findByRole("region", { name: "Events" });

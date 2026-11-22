@@ -14,6 +14,7 @@ import {
   Empty,
   ErrorBox,
   Panel,
+  RowButton,
   Skeleton,
   Tabs,
   useDash,
@@ -241,6 +242,11 @@ function RowsTable({
   );
 }
 
+// A cell's content; in a clickable row's first cell, the row's button.
+function cell(c: Col, r: ListRow, onRow?: (r: ListRow) => void) {
+  return onRow ? <RowButton>{c.cell(r)}</RowButton> : c.cell(r);
+}
+
 function Row({
   r,
   cols,
@@ -280,10 +286,10 @@ function Row({
                 >
                   {open ? "▾" : "▸"}
                 </button>
-                {c.cell(r)}
+                {cell(c, r, onRow)}
               </span>
             ) : (
-              c.cell(r)
+              cell(c, r, j === 0 ? onRow : undefined)
             )}
           </td>
         ))}
@@ -342,7 +348,7 @@ function Within({
         >
           {cols.map((c, j) => (
             <td key={c.head} className={c.num ? "n" : j === 0 ? "pl-8" : ""}>
-              {c.cell(r)}
+              {cell(c, r, j === 0 ? onRow : undefined)}
             </td>
           ))}
         </tr>
