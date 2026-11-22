@@ -41,6 +41,7 @@ export const LIMITS = {
   failures: 5,
   sessionMs: 30 * 60 * 1000,
   sameError: 3,
+  errorKinds: 20,
 };
 
 const STORE_VID = "nui.vid";
@@ -135,6 +136,7 @@ export type Tracker = {
     failures: number;
     backoff: number;
     dropped: number;
+    errorKeys: number;
     sid: string;
     vid: string;
   };
@@ -166,7 +168,7 @@ export function start(
 
   const queue: Rec[] = [];
   const minute: number[] = [];
-  const errorsSeen: Record<string, number> = {};
+  const errorsSeen = new Map<string, number>();
   const offs: (() => void)[] = [];
   let pageCount = 0;
   let dropped = 0;
@@ -721,10 +723,15 @@ export function start(
   );
 
   // Errors: script errors, failed resources, unhandled rejections.
+  // Each message a few times; a bounded number of distinct ones, so a page
+  // throwing ever new messages cannot grow the table.
   const jsError = (msg: string, extra: Props) => {
+    if (disabled) return;
     const key = clip(msg, 200);
-    errorsSeen[key] = (errorsSeen[key] || 0) + 1;
-    if (errorsSeen[key] > LIMITS.sameError) return;
+    const n = errorsSeen.get(key) || 0;
+    if (n >= LIMITS.sameError || (!n && errorsSeen.size >= LIMITS.errorKinds))
+      return;
+    errorsSeen.set(key, n + 1);
     record("js_error", { msg: clip(msg, LIMITS.str), ...extra });
   };
   on(
@@ -841,6 +848,7 @@ export function start(
       failures,
       backoff,
       dropped,
+      errorKeys: errorsSeen.size,
       sid,
       vid,
     }),

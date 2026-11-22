@@ -508,6 +508,27 @@ describe("capture", () => {
     img.remove();
   });
 
+  it("remembers a bounded number of distinct errors", async () => {
+    const t = boot();
+    const fire = (n: number) => {
+      for (let i = 0; i < n; i++)
+        window.dispatchEvent(
+          new ErrorEvent("error", { message: "E" + i + "x".repeat(300) }),
+        );
+    };
+    fire(500);
+    expect(t.state().errorKeys).toBeLessThanOrEqual(LIMITS.errorKinds);
+    t.stop();
+    tracker = null;
+    const u = boot();
+    fetchMock.mockImplementation(() => reply(403));
+    u.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(u.state().disabled).toBe(true);
+    fire(10);
+    expect(u.state().errorKeys).toBe(0);
+  });
+
   it("sends engagement and vitals when the page is hidden", async () => {
     boot();
     window.dispatchEvent(new Event("scroll"));
