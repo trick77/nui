@@ -79,7 +79,9 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
   The largest run is scale 50: about 110,000 events a simulated day, some 5 s of backfill each, and up to 140 MB of
   day plans in memory (a plan holds a whole day's requests).
 - `live -target http://127.0.0.1:8080 [-rate 50] [-speed 60] [-for 10m] [-key domain=key]` sends tracker and feed
-  batches to a running server, backing off on 429 as the tracker does. Each browser's address goes in
+  batches to a running server, backing off on 429 as the tracker does. `-rate` sets the scale for that many events a
+  second, averaged over a simulated week (the day's rhythm and the weekend vary it; at speed 1 at most about 1, raise
+  `-speed` for more). Each browser's address goes in
   `X-Forwarded-For`, which nui reads with one trusted hop: target the server itself, `server -sim` (it sets
   `BACKEND_TRUSTED_HOPS=1` whatever the environment says) or one left at the default; at 0 every visitor is the
   loopback. Without `-key` the feeds use the simulator's own keys, which a `make sim-server` of the same seed has

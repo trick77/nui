@@ -211,14 +211,19 @@ const (
 	planBudget = 256 << 20
 )
 
-// EventsPerDay is how many events the world's clients send on the day before its anchor (at least 1): what a live
-// rate is scaled by.
-func (w *World) EventsPerDay() float64 {
+// liveWeek is the span a live rate is averaged over: a week after the anchor, its weekend and every hour of its days.
+const liveWeek = 7 * day
+
+// LiveEvents counts the events the world's clients send in the week after its anchor: what a live run plays, the
+// scenarios' windows in the history left out.
+func (w *World) LiveEvents() int {
 	n := 0
-	for _, q := range w.Requests(w.Anchor.Add(-day), w.Anchor) {
-		n += q.Events()
+	for from := w.Anchor; from.Before(w.Anchor.Add(liveWeek)); from = from.Add(day) {
+		for _, q := range w.Requests(from, from.Add(day)) {
+			n += q.Events()
+		}
 	}
-	return max(float64(n), 1)
+	return n
 }
 
 // FeedDelivers reports whether site's feed delivers at t.

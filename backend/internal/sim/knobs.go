@@ -202,6 +202,42 @@ func ReadKnobs(getenv func(string) string, warn func(string)) Knobs {
 	return k
 }
 
+// ScaleFor is the scale at which the knobs' world sends rate events a second of wall time live at their speed,
+// averaged over the week after the anchor. Not every actor scales (the scenarios' own; the uptime probe stops at its
+// beat above 1), so the week is counted at scales 0, 1 and 2 and the scale read off the line between.
+func (k Knobs) ScaleFor(ref *Reference, now time.Time, rate float64) (float64, error) {
+	if !(rate > 0) || SpeedLimit.Check(k.Speed) != nil {
+		return 0, fmt.Errorf("-rate %v at speed %v: no positive rate or the speed out of range", rate, k.Speed)
+	}
+	target := rate * liveWeek.Seconds() / k.Speed
+	var at [3]float64
+	for i := range at {
+		k.Scale = float64(i)
+		w, err := k.World(ref, now)
+		if err != nil {
+			return 0, err
+		}
+		at[i] = float64(w.LiveEvents())
+	}
+	perSecond := func(events float64) float64 { return events * k.Speed / liveWeek.Seconds() }
+	var s float64
+	switch {
+	case target <= at[0] || at[1] <= at[0] || at[2] <= at[1]:
+		return 0, fmt.Errorf("-rate %v at speed %v: the world's fixed actors alone send %.3g events a second "+
+			"(change -speed)", rate, k.Speed, perSecond(at[0]))
+	case target <= at[1]:
+		s = (target - at[0]) / (at[1] - at[0])
+	default:
+		s = 1 + (target-at[1])/(at[2]-at[1])
+	}
+	if err := ScaleLimit.Check(s); err != nil {
+		return s, fmt.Errorf("-rate %v at speed %v needs scale %.3g, %w: at most %.3g events a second at this speed, "+
+			"at least %.3g (change -speed)", rate, k.Speed, s, err, perSecond(at[1]+(ScaleLimit.Max()-1)*(at[2]-at[1])),
+			perSecond(at[0]+ScaleLimit.lo*(at[1]-at[0])))
+	}
+	return s, nil
+}
+
 // World builds the knobs' world on ref, its anchor the knobs' start or now.
 func (k Knobs) World(ref *Reference, now time.Time) (*World, error) {
 	sc, err := Scenarios(k.Scenarios)
