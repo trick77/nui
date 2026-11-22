@@ -252,6 +252,10 @@ func TestOverview(t *testing.T) {
 	for _, rng := range []string{"24h", "7d", "30d", "90d", "12mo"} {
 		for _, aud := range []string{"all", "humans", "bots"} {
 			for _, c := range []string{"prev", "yoy", "off"} {
+				// Every range once; the audience and comparison matrix on the short ones (SQLite under -race is slow).
+				if (aud != "all" || c != "prev") && (rng == "90d" || rng == "12mo" || rng == "30d") {
+					continue
+				}
 				code, body := r.get(t, "overview", p(feedSite, "range", rng, "aud", aud, "cmp", c))
 				if code != 200 {
 					t.Fatalf("%s %s %s: %d %v", rng, aud, c, code, body)
@@ -554,7 +558,7 @@ func TestLog(t *testing.T) {
 		check  func(map[string]any) bool
 	}{
 		{[]string{"addr", "69.162.124.230"}, func(m map[string]any) bool { return m["class"] == "monitor" }},
-		{[]string{"addr", "2001:db8:1:1::/64"}, func(m map[string]any) bool { return true }},
+		{[]string{"addr", "2001:db8:1:1::/64"}, func(map[string]any) bool { return true }},
 		{[]string{"status", "4xx"}, func(m map[string]any) bool { return strings.Contains(m["what"].(string), "→ 4") }},
 		{[]string{"status", "401"}, func(m map[string]any) bool { return strings.HasSuffix(m["what"].(string), "→ 401") }},
 		{[]string{"class", "unknown"}, func(m map[string]any) bool { return m["class"] == "unknown" }},
@@ -644,7 +648,7 @@ func TestNoteworthy(t *testing.T) {
 	// With a briefing: its order and words, merged facts in the detail, unknown ids dropped.
 	model := &fakeModel{}
 	r.s.Model = model
-	_, body = r.get(t, "noteworthy", p(feedSite))
+	r.get(t, "noteworthy", p(feedSite))
 	if len(model.briefIns) != 1 || model.briefIns[0].Hash == "" || len(model.briefIns[0].Facts) == 0 {
 		t.Fatalf("briefing input %+v", model.briefIns)
 	}

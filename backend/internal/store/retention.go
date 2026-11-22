@@ -75,6 +75,7 @@ func (s *Store) Prune(ctx context.Context, before time.Time, maxBytes int64) (in
 func (s *Store) deleteEvents(ctx context.Context, where string, args ...any) (int64, error) {
 	var total int64
 	for {
+		//nolint:gosec // where is this file's own constant; values are bound
 		res, err := s.DB.ExecContext(ctx, `DELETE FROM event WHERE id IN (SELECT id FROM event WHERE `+where+
 			` LIMIT `+strconv.Itoa(retentionChunk)+`)`, args...)
 		if err != nil {

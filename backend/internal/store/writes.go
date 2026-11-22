@@ -206,6 +206,7 @@ func (s *Store) Readings(ctx context.Context, sigs []string) (map[string]Reading
 	for i, sg := range sigs {
 		args[i] = sg
 	}
+	//nolint:gosec // only placeholders are spliced in; values are bound
 	rows, err := s.DB.QueryContext(ctx, `SELECT signature, body, basis_from, basis_to, created_at FROM llm_reading
 		WHERE signature IN (`+placeholders(len(sigs))+`)`, args...)
 	if err != nil {
@@ -241,6 +242,7 @@ func (s *Store) Labels(ctx context.Context, kind string, values []string) (map[s
 	for _, v := range values {
 		args = append(args, v)
 	}
+	//nolint:gosec // only placeholders are spliced in; values are bound
 	rows, err := s.DB.QueryContext(ctx, `SELECT value, label FROM llm_label WHERE kind = ? AND value IN (`+
 		placeholders(len(values))+`)`, args...)
 	if err != nil {

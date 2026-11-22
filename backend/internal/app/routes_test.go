@@ -35,7 +35,7 @@ func newAuth(t *testing.T, disabled bool) *Auth {
 	return &Auth{Sessions: s, Group: "nui-admins", Disabled: disabled}
 }
 
-func routes(t *testing.T, a *Auth) http.Handler {
+func routes(_ *testing.T, a *Auth) http.Handler {
 	return Build(Routes{Dashboard: echo("dashboard"), Tracker: echo("tracker"), Browser: echo("browser"),
 		Feed: echo("feed"), Dash: echo("dash"), Auth: a})
 }
@@ -65,8 +65,11 @@ func TestRoutes(t *testing.T) {
 		t.Errorf("tracker CORP: %v", w.Header())
 	}
 	for _, path := range []string{"/api", "/api/", "/api/x", "/dashboardx", "/other", "/api/dash/overview"} {
-		if w := do(h, httptest.NewRequest("GET", path, nil)); w.Code != http.StatusNotFound &&
-			!(path == "/api/dash/overview" && w.Code == http.StatusUnauthorized) {
+		want := http.StatusNotFound
+		if path == "/api/dash/overview" {
+			want = http.StatusUnauthorized
+		}
+		if w := do(h, httptest.NewRequest("GET", path, nil)); w.Code != want {
 			t.Errorf("GET %s: %d", path, w.Code)
 		}
 	}
@@ -164,21 +167,21 @@ func TestAuthDisabled(t *testing.T) {
 	}
 }
 
-// fakeIdP is kit's OIDC Backend without a network.
-type fakeIdP struct {
+// fakeIDP is kit's OIDC Backend without a network.
+type fakeIDP struct {
 	claims auth.Claims
 	nonce  string
 }
 
-func (f *fakeIdP) AuthCodeURL(state string, _ ...oauth2.AuthCodeOption) string {
+func (f *fakeIDP) AuthCodeURL(state string, _ ...oauth2.AuthCodeOption) string {
 	return "https://idp.example.com/auth?state=" + state
 }
 
-func (f *fakeIdP) Exchange(context.Context, string, ...oauth2.AuthCodeOption) (*oauth2.Token, error) {
+func (f *fakeIDP) Exchange(context.Context, string, ...oauth2.AuthCodeOption) (*oauth2.Token, error) {
 	return &oauth2.Token{AccessToken: "t"}, nil
 }
 
-func (f *fakeIdP) Verify(context.Context, *oauth2.Token) (auth.Claims, string, error) {
+func (f *fakeIDP) Verify(context.Context, *oauth2.Token) (auth.Claims, string, error) {
 	return f.claims, f.nonce, nil
 }
 
@@ -189,7 +192,7 @@ func TestOIDCFlow(t *testing.T) {
 		want   string
 	}{{"member", []string{"nui-admins"}, "/dashboard/"}, {"outsider", []string{"x"}, "/dashboard/?no_access=1"}} {
 		a := newAuth(t, false)
-		idp := &fakeIdP{claims: auth.Claims{Subject: "s", Groups: tt.groups}}
+		idp := &fakeIDP{claims: auth.Claims{Subject: "s", Groups: tt.groups}}
 		a.SetOIDC(auth.NewOIDCWithBackend(idp, auth.OIDCConfig{Group: "nui-admins", CookiePrefix: CookiePrefix}))
 		h := routes(t, a)
 		w := do(h, httptest.NewRequest("GET", "/api/auth/login", nil))
@@ -210,7 +213,7 @@ func TestOIDCFlow(t *testing.T) {
 	}
 	// A callback that fails a check lands on the generic error marker.
 	a := newAuth(t, false)
-	a.SetOIDC(auth.NewOIDCWithBackend(&fakeIdP{}, auth.OIDCConfig{CookiePrefix: CookiePrefix}))
+	a.SetOIDC(auth.NewOIDCWithBackend(&fakeIDP{}, auth.OIDCConfig{CookiePrefix: CookiePrefix}))
 	if w := do(routes(t, a), httptest.NewRequest("GET", "/api/auth/callback?state=x", nil)); w.Header().Get("Location") != "/dashboard/?auth_error=1" {
 		t.Errorf("bad callback: %q", w.Header().Get("Location"))
 	}

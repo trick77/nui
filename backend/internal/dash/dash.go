@@ -195,9 +195,6 @@ func (p period) From() time.Time { return p.Bounds[0] }
 // ClosedEnd is where the open bucket starts.
 func (p period) ClosedEnd() time.Time { return p.Bounds[p.n()-1] }
 
-// prevClosedEnd is the comparison's matching end: as many closed buckets as the current range has.
-func (p period) prevClosedEnd() time.Time { return p.Prev[p.n()-1] }
-
 // audWhere is the SQL condition for the audience (event.cls codes; pending counts as human until classified).
 func audWhere(aud string) string {
 	switch aud {

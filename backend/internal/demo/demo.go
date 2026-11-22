@@ -44,7 +44,7 @@ func Generate(ctx context.Context, st *store.Store, o Options) (int, error) {
 	if o.End.IsZero() {
 		o.End = time.Now()
 	}
-	r := rand.New(rand.NewPCG(o.Seed, o.Seed^0x9e3779b97f4a7c15))
+	r := rand.New(rand.NewPCG(o.Seed, o.Seed^0x9e3779b97f4a7c15)) //nolint:gosec // synthetic traffic, reproducible by seed on purpose
 	g := &gen{st: st, o: o, r: r}
 	start := o.End.Add(-time.Duration(o.Days) * 24 * time.Hour)
 	for day := 0; day <= o.Days; day++ {

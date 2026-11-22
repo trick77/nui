@@ -512,14 +512,12 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		return
 	}
 	ctx := r.Context()
-	one := *q
-	var a *actor
-	all, err := s.actorOne(ctx, &one, key)
+	a, err := s.actorOne(ctx, q, key)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	if a = all; a == nil {
+	if a == nil {
 		apix.Error(w, http.StatusNotFound, "no events from this address in the range")
 		return
 	}

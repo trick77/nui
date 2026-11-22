@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/trick77/nui/backend/internal/demo"
 	"github.com/trick77/nui/backend/internal/store"
 )
 
@@ -18,9 +19,21 @@ func TestLargeTable(t *testing.T) {
 	if testing.Short() {
 		t.Skip("large table")
 	}
-	r := newRig(t, 395, 4, &fakeModel{})
+	// Under -race the data is smaller (the plans are the same, the race detector makes SQLite crawl); a plain
+	// go test runs the full size.
+	days, people, want := 395, 4, int64(50_000)
+	if raceOn {
+		days, people, want = 45, 1, 1_500
+	}
+	r := newRig(t, 0, 0, &fakeModel{})
+	site, _ := r.s.Sites.Lookup(feedSite)
+	// No actor_class rows: one transaction per actor-day is what makes generating slow; the reads do not need them.
+	if _, err := demo.Generate(t.Context(), r.s.DB, demo.Options{SiteID: site.ID, Days: days, People: people,
+		End: r.end, Seed: 3, Feed: true}); err != nil {
+		t.Fatal(err)
+	}
 	var n int64
-	if err := r.s.DB.DB.QueryRow(`SELECT COUNT(*) FROM event`).Scan(&n); err != nil || n < 50_000 {
+	if err := r.s.DB.DB.QueryRow(`SELECT COUNT(*) FROM event`).Scan(&n); err != nil || n < want {
 		t.Fatalf("events = %d, %v", n, err)
 	}
 
@@ -40,7 +53,6 @@ func TestLargeTable(t *testing.T) {
 	t.Cleanup(func() { traceSQL = nil })
 
 	// The collector keeps writing meanwhile.
-	site, _ := r.s.Sites.Lookup(feedSite)
 	ctx, cancel := context.WithCancel(t.Context())
 	var written atomic.Int64
 	var writeErr atomic.Value

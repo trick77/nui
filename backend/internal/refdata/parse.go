@@ -68,7 +68,7 @@ func parseBots(crawlers, monitoring []byte) (*Bots, error) {
 					p.ua = append(p.ua, re)
 				}
 			}
-			idx := int32(len(b.Providers))
+			idx := int32(len(b.Providers)) //nolint:gosec // a few dozen services
 			for _, c := range slices.Concat(s.IPv4, s.IPv6) {
 				if pfx, err := netip.ParsePrefix(strings.TrimSpace(c)); err == nil {
 					b.table.Insert(pfx, idx)
@@ -110,8 +110,8 @@ func parseNetworks(r io.Reader) (*Networks, error) {
 			return nil
 		}
 		var e asEntry
-		if err := json.NewDecoder(body).Decode(&e); err != nil {
-			return nil // one broken file does not sink the load
+		if json.NewDecoder(body).Decode(&e) != nil {
+			return nil //nolint:nilerr // one broken file does not sink the load
 		}
 		if e.ASN == 0 {
 			if m := asEntryRE.FindStringSubmatch(name); m != nil {
@@ -158,11 +158,11 @@ func parseCountries(r io.Reader) (*Countries, error) {
 			return nil
 		}
 		var e geoEntry
-		if err := json.NewDecoder(body).Decode(&e); err != nil || len(e.CountryCode) != 2 {
-			return nil
+		if json.NewDecoder(body).Decode(&e) != nil || len(e.CountryCode) != 2 {
+			return nil //nolint:nilerr // one broken file does not sink the load
 		}
 		code := strings.ToUpper(e.CountryCode)
-		idx := int32(len(c.Codes))
+		idx := int32(len(c.Codes)) //nolint:gosec // a few hundred countries
 		c.Codes = append(c.Codes, code)
 		if e.Country != "" {
 			c.Names[code] = e.Country
