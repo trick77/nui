@@ -29,7 +29,7 @@ func TestKnobs(t *testing.T) {
 		"NUI_SIM_CLASSIFY": "false", "NUI_SIM_FEED_OUTAGE": "15", "NUI_SIM_FLOOD": "48", "NUI_SIM_LATE_FEED": "never",
 		"NUI_SIM_SLOW_MS": "800", "NUI_SIM_EMPTY_SITE": "1"}), warn)
 	if k.Seed != 42 || k.Scale != 2.5 || k.Speed != 60 || k.Port != 9091 || k.Days != 7 || k.Scenarios != "hammer" ||
-		!k.Start.Equal(anchor) || k.Classify || k.FeedOutage != 15*time.Minute || k.Flood != "48" || k.LateFeed != 0 ||
+		!k.Start.Equal(anchor) || k.Classify || k.FeedOutage != 15*time.Minute || k.Flood != "48" || k.LateFeed != LateFeedNever ||
 		k.SlowMS != 800 || !k.EmptySite || len(warned) != 1 || !strings.Contains(warned[0], "nope") {
 		t.Errorf("set %+v, warned %v", k, warned)
 	}
@@ -38,7 +38,7 @@ func TestKnobs(t *testing.T) {
 		"NUI_SIM_PORT": "70000", "NUI_SIM_DAYS": "1.5", "NUI_SIM_START": "yesterday", "NUI_SIM_CLASSIFY": "maybe",
 		"NUI_SIM_FLOOD": "huge", "NUI_SIM_LATE_FEED": "soon"}), warn)
 	if d := DefaultKnobs(); k.Seed != d.Seed || k.Scale != d.Scale || k.Speed != d.Speed || k.Port != d.Port ||
-		k.Days != d.Days || !k.Start.IsZero() || !k.Classify || k.Flood != "" || k.LateFeed != -1 || len(warned) != 9 {
+		k.Days != d.Days || !k.Start.IsZero() || !k.Classify || k.Flood != "" || k.LateFeed != LateFeedOff || len(warned) != 9 {
 		t.Errorf("bad values %+v, warned %d: %v", k, len(warned), warned)
 	}
 	// The variables' ranges are the flags' too: Validate refuses what ReadKnobs would have ignored.
@@ -83,6 +83,18 @@ func TestKnobs(t *testing.T) {
 		w.FeedDelivers(blog, anchor.Add(time.Minute)) || !w.FeedDelivers(blog, anchor.Add(6*time.Minute)) ||
 		!w.in("flood-addr", anchor.Add(2*time.Minute)) || len(w.Sites) != 5 {
 		t.Errorf("live windows wrong: %+v", w.Scenarios)
+	}
+	// A late feed of 0 minutes starts at the start, not never; "never" never.
+	for raw, delivers := range map[string]bool{"0": true, "never": false} {
+		k = ReadKnobs(env(map[string]string{"NUI_SIM_LATE_FEED": raw}), warn)
+		if w, err = k.World(ref, anchor); err != nil {
+			t.Fatal(err)
+		}
+		blog, _ = w.Site("blog.example.org")
+		if w.FeedDelivers(blog, anchor.Add(-time.Minute)) || w.FeedDelivers(blog, anchor.Add(time.Minute)) != delivers ||
+			k.Validate() != nil {
+			t.Errorf("NUI_SIM_LATE_FEED=%s: %v, delivering after the start %v", raw, k.LateFeed, !delivers)
+		}
 	}
 }
 

@@ -65,7 +65,7 @@ second UI. The knobs, each falling back to its default with a warning when it do
 | `NUI_SIM_CLASSIFY` | true | run the classifier over the history |
 | `NUI_SIM_FEED_OUTAGE` | off | minutes the lookup site's feed is down, from a minute after the start |
 | `NUI_SIM_FLOOD` | off | `addr`, `64` or `48`: a ten-minute flood from one address, a /64 or a /48 |
-| `NUI_SIM_LATE_FEED` | off | minutes until the blog's feed first delivers, or `never` |
+| `NUI_SIM_LATE_FEED` | off | minutes after the start until the blog's feed first delivers (0: at the start), or `never` |
 | `NUI_SIM_SLOW_MS` | 0 | every dashboard answer waits this long |
 | `NUI_SIM_EMPTY_SITE` | false | one more site, configured, that never delivers |
 
