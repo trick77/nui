@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -189,6 +190,30 @@ func BenchmarkBackfill(b *testing.B) {
 		b.ReportMetric(s.Rate(), "events/s")
 		b.ReportMetric(float64(s.Events), "events")
 	}
+}
+
+// The day plans a world holds at the largest scale fit in memory: a day's plan grows with the scale, measured here
+// at a small one.
+func TestPlanMemory(t *testing.T) {
+	const scale = 4
+	w := testWorld(t, scale, DefaultScenarios)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	for d := range int64(4) {
+		w.plan(dayOf(anchor) - 3 + d)
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	held := len(w.plans)
+	perScaleDay := (float64(after.HeapAlloc) - float64(before.HeapAlloc)) / scale / float64(held)
+	atMax := perScaleDay * ScaleLimit.Max() * float64(held)
+	t.Logf("%.0f kB a day per unit of scale, %d days held: %.0f MB at scale %v", perScaleDay/1024, held, atMax/(1<<20),
+		ScaleLimit.Max())
+	if held > maxPlans || atMax > planBudget {
+		t.Errorf("%d day plans held, %.0f MB at the largest scale, budget %d MB", held, atMax/(1<<20), planBudget>>20)
+	}
+	runtime.KeepAlive(w)
 }
 
 // A small scale is a handful of events, fast.

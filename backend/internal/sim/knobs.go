@@ -53,10 +53,10 @@ type Limit struct {
 	whole  bool
 }
 
-// The knobs' ranges. Scale and speed bound the work: a day's plan grows with the scale, a live tick's span with the
-// speed.
+// The knobs' ranges. Scale and speed bound the work: a day's plan grows with the scale (at 50 a world holds about
+// 140 MB of plans, TestPlanMemory), a live tick's span with the speed.
 var (
-	ScaleLimit   = Limit{lo: 0.01, hi: 10_000}
+	ScaleLimit   = Limit{lo: 0.01, hi: 50}
 	SpeedLimit   = Limit{lo: 0.01, hi: 100_000}
 	portLimit    = Limit{lo: 1, hi: 65535, whole: true}
 	daysLimit    = Limit{lo: 0, hi: 3650, whole: true}
