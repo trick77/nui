@@ -53,9 +53,10 @@ type Limit struct {
 	whole  bool
 }
 
-// The knobs' ranges. Scale and speed bound the work: a day's plan grows with the scale (at 50 a world holds about
-// 140 MB of plans, TestPlanMemory); a live tick hands out at most an hour of world time (Live.MaxSpan), which at
-// the largest speed is a second of wall time: faster, the world would skip most of its time.
+// The knobs' ranges. Scale and speed bound the work: a day's plan grows with the scale and with nothing else, live
+// time past the anchor included (at 50 a world holds up to about 230 MB of plans, TestPlanMemory); a live tick
+// hands out at most an hour of world time (Live.MaxSpan), which at the largest speed is a second of wall time:
+// faster, the world would skip most of its time.
 var (
 	ScaleLimit   = Limit{lo: 0.01, hi: 50}
 	SpeedLimit   = Limit{lo: 0.01, hi: 3600}

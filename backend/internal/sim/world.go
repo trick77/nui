@@ -205,7 +205,7 @@ func (w *World) plan(d int64) *dayPlan {
 }
 
 // The day plans a world holds, and what they may take at the largest scale: a plan is the whole day's requests,
-// about 0.6 MB per unit of scale (TestPlanMemory).
+// about 1.3 MB per unit of scale on a weekday, 3.4 MB on the referrer wave's (TestPlanMemory).
 const (
 	maxPlans   = 2
 	planBudget = 256 << 20

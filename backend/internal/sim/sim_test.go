@@ -193,27 +193,69 @@ func BenchmarkBackfill(b *testing.B) {
 }
 
 // The day plans a world holds at the largest scale fit in memory: a day's plan grows with the scale, measured here
-// at a small one.
+// at a small one, day by day over the history's last days (the referrer wave's the largest) and the live week after
+// the anchor, at its level. Two neighbouring days are held at once.
 func TestPlanMemory(t *testing.T) {
 	const scale = 4
 	w := testWorld(t, scale, DefaultScenarios)
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
 	for d := range int64(4) {
 		w.plan(dayOf(anchor) - 3 + d)
 	}
-	runtime.GC()
-	runtime.ReadMemStats(&after)
-	held := len(w.plans)
-	perScaleDay := (float64(after.HeapAlloc) - float64(before.HeapAlloc)) / scale / float64(held)
-	atMax := perScaleDay * ScaleLimit.Max() * float64(held)
-	t.Logf("%.0f kB a day per unit of scale, %d days held: %.0f MB at scale %v", perScaleDay/1024, held, atMax/(1<<20),
-		ScaleLimit.Max())
-	if held > maxPlans || atMax > planBudget {
-		t.Errorf("%d day plans held, %.0f MB at the largest scale, budget %d MB", held, atMax/(1<<20), planBudget>>20)
+	if held := len(w.plans); held > maxPlans {
+		t.Errorf("%d day plans held, at most %d", held, maxPlans)
 	}
-	runtime.KeepAlive(w)
+	var sizes []float64 // a day's plan per unit of scale
+	for d := dayOf(anchor) - 2; d <= dayOf(anchor)+5; d++ {
+		w := testWorld(t, scale, DefaultScenarios)
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		w.plan(d)
+		runtime.GC()
+		runtime.ReadMemStats(&after)
+		sizes = append(sizes, (float64(after.HeapAlloc)-float64(before.HeapAlloc))/scale)
+		runtime.KeepAlive(w)
+	}
+	var held, largest float64
+	for i, s := range sizes {
+		largest = max(largest, s)
+		if i > 0 {
+			held = max(held, sizes[i-1]+s)
+		}
+	}
+	atMax := held * ScaleLimit.Max()
+	t.Logf("a day's plan per unit of scale: %.0f kB at most, %.0f kB on a live weekday; %d days held: %.0f MB at "+
+		"scale %v", largest/1024, sizes[3]/1024, maxPlans, atMax/(1<<20), ScaleLimit.Max())
+	if atMax > planBudget {
+		t.Errorf("%.0f MB of day plans at the largest scale, budget %d MB", atMax/(1<<20), planBudget>>20)
+	}
+}
+
+// Growth is the history's: live time past the anchor keeps the anchor's level, so a day's plan stays within the
+// scale's bound however long a live run goes on (doubling on, a day plan at scale 1 took 897 MB at 900 days).
+func TestGrowthStopsAtTheAnchor(t *testing.T) {
+	w := testWorld(t, 2, "growth")
+	people := func(from int64) int {
+		n := 0
+		for d := from; d < from+7; d++ {
+			for _, b := range w.plan(d).batches {
+				if b.actor == "person" {
+					n += len(b.events)
+				}
+			}
+		}
+		return n
+	}
+	// A week each, the same weekdays: the week after the anchor, one a year on, one a quarter before.
+	first, later, before := people(dayOf(anchor)), people(dayOf(anchor)+364), people(dayOf(anchor)-91)
+	t.Logf("people's events a week: %d after the anchor, %d a year on, %d a quarter before", first, later, before)
+	if first == 0 || float64(later) > 1.3*float64(first) {
+		t.Errorf("a year past the anchor %d events a week, %d the week after it", later, first)
+	}
+	// The history still grows into the anchor.
+	if float64(before) > 0.8*float64(first) {
+		t.Errorf("a quarter before the anchor %d events a week, %d after it", before, first)
+	}
 }
 
 // A small scale is a handful of events, fast.

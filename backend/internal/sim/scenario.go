@@ -86,7 +86,8 @@ var catalogue = []Scenario{
 		"of that time are lost.", From: -20 * h, To: -14 * h, expect: expectOutage},
 	{Name: "late-feed", Story: "A site's feed is set up three days before the anchor: its script delivered all " +
 		"along.", From: -3 * 24 * h, To: 1000 * 24 * h, MinDays: 7, expect: expectLateFeed},
-	{Name: "growth", Story: "The product takes off: its new visitors double every quarter, steadily.",
+	{Name: "growth", Story: "The product takes off: its new visitors double every quarter over the history; " +
+		"live time holds the start's level.",
 		MinDays: 180, expect: expectGrowth},
 	{Name: "hammer", Story: "A client posts tracker batches four times a second for half an hour and ignores 429.",
 		From: -10 * h, To: -9*h - 30*time.Minute, expect: expectHammer},

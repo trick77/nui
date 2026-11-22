@@ -150,7 +150,10 @@ func (w *World) volume(d int64) float64 {
 		// The newcomers double every quarter, steadily: a quarter back the site had half of today's. Noteworthy
 		// compares 90 days with the 90 before, so the visitors rise by some 90 %, the regulars' fixed number and a
 		// seed's luck far from pulling it under the 20 % a trend needs (2.5 times a year rose by 14 to 35 %).
-		quarters := dayStart(d).Add(12*time.Hour).Sub(w.Anchor).Hours() / (growthQuarter * 24)
+		// The growth is the history's: past the anchor the level stays the anchor's. Live time runs on for as long
+		// as the server serves (at the largest speed 150 days a wall hour), and a level doubling on with it would
+		// make a day's plan outgrow memory whatever the scale.
+		quarters := min(dayStart(d).Add(12*time.Hour).Sub(w.Anchor).Hours()/(growthQuarter*24), 0)
 		v *= math.Pow(2, quarters)
 	}
 	return v
