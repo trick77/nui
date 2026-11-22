@@ -218,13 +218,14 @@ func (p period) From() time.Time { return p.Bounds[0] }
 // ClosedEnd is where the open bucket starts.
 func (p period) ClosedEnd() time.Time { return p.Bounds[p.n()-1] }
 
-// audWhere is the SQL condition for the audience (event.cls codes; pending counts as human until classified).
+// audWhere is the SQL condition for the audience (event.cls codes; pending counts as automated until classified,
+// as classOf).
 func audWhere(aud string) string {
 	switch aud {
 	case "humans":
-		return "cls IN (0, 1)"
+		return "cls = 1"
 	case "bots":
-		return "cls IN (2, 3, 4)"
+		return "cls IN (0, 2, 3, 4)"
 	}
 	return "1"
 }

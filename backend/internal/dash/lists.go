@@ -573,12 +573,13 @@ type classRow struct {
 	Verdict   string  `json:"verdict"`
 }
 
-// classOf maps an event.cls code to the API's class, pending counted as human.
+// classOf maps an event.cls code to the API's class. Pending counts as unknown automated: a person is shown by a
+// browser's evidence (a beacon is stamped human at once, the pass decides the rest within minutes), never assumed.
 func classOf(cls int) string {
 	if n, ok := store.ClassNames[cls]; ok {
 		return n
 	}
-	return "human"
+	return "unknown"
 }
 
 var classOrder = []string{"human", "bot", "monitor", "unknown"}

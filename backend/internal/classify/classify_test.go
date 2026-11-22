@@ -354,11 +354,13 @@ func TestPass_SharedAddressAndPace(t *testing.T) {
 		e.TS = r.now.UnixMilli() - 3000 + int64(i)*100
 		evs = append(evs, e)
 	}
-	// A browser with its headers, the tracker blocked and the assets cached: documents only, no engagement. A person.
+	// A browser with its headers, the tracker blocked and the assets cached: documents only, no engagement. Nothing
+	// shows a browser, so no person: a crawler wearing a browser's user agent looks the same.
 	for _, p := range []string{"/", "/a", "/b"} {
 		evs = append(evs, req("192.0.2.86", browserUA, "document", p, 200, ""))
 	}
-	// A single-page app's start on an API: 40 calls 20 ms apart with a browser's headers, nothing else. A person.
+	// API calls only: 40 calls 20 ms apart with a browser's headers, no page, asset or beacon that day. A person's
+	// single-page app loads its page and assets first; without them, no person.
 	for i := range 40 {
 		e := req("192.0.2.87", browserUA, "empty", "/api/v1/ip/1", 200, "")
 		e.TS = r.now.UnixMilli() - int64(i)*20
@@ -372,13 +374,13 @@ func TestPass_SharedAddressAndPace(t *testing.T) {
 	for key, want := range map[string]string{
 		nat: "human|script beacon,engaged,assets loaded," +
 			"also unknown automated: curl/8.4.0, 3 of 15 events (client curl/8.4.0)",
-		"192.0.2.81": "unknown|client Go-http-client/1.1,no script beacon,no assets",
+		"192.0.2.81": "unknown|client Go-http-client/1.1,no sign of a browser",
 		"192.0.2.82": "unknown|machine pace,API only, no page loaded",
 		"192.0.2.83": "unknown|missing browser headers,no script beacon,no assets",
 		"192.0.2.84": "human|assets loaded,no script beacon",
 		"192.0.2.85": "human|assets loaded,no script beacon",
-		"192.0.2.86": "human|no script beacon,no assets",
-		"192.0.2.87": "human|API only, no page loaded,rapid requests",
+		"192.0.2.86": "unknown|no sign of a browser",
+		"192.0.2.87": "unknown|no sign of a browser,API only, no page loaded,rapid requests",
 	} {
 		a := classes[key]
 		if got := a.Class + "|" + strings.Join(a.Reasons, ","); got != want {
@@ -415,9 +417,11 @@ func TestPass_NoAssetsNeedsAssets(t *testing.T) {
 	if a := classes["192.0.2.90"]; a.Class != "human" || slices.Contains(a.Reasons, "no assets") {
 		t.Errorf("no asset reported on the site: %+v", a)
 	}
-	// Another visitor's asset that day makes it one; a day without any (yesterday) does not.
+	// Another visitor's asset that day makes it one; a day without any (yesterday) does not. 192.0.2.91's beacon shows
+	// a browser: a person without assets.
 	r.insert(t, req("192.0.2.92", browserUA, "script", "/assets/a.js", 200, ""),
-		req("192.0.2.91", browserUA, "document", "/b", 200, ""))
+		req("192.0.2.91", browserUA, "document", "/b", 200, ""),
+		store.Event{Source: "browser", Kind: "page_view", IP: "192.0.2.91", UA: browserUA})
 	old := req("192.0.2.93", browserUA, "document", "/", 200, "")
 	old.TS = r.now.Add(-24 * time.Hour).UnixMilli()
 	r.insert(t, old)
@@ -431,6 +435,154 @@ func TestPass_NoAssetsNeedsAssets(t *testing.T) {
 	yesterday, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS-1)
 	if a := yesterday["192.0.2.93"]; a.Class != "human" || slices.Contains(a.Reasons, "no assets") {
 		t.Errorf("yesterday, no asset reported: %+v", a)
+	}
+}
+
+const petalUA = "Mozilla/5.0 (Linux; Android 7.0;) AppleWebKit/537.36 (KHTML, like Gecko) Mobile Safari/537.36 " +
+	"(compatible; PetalBot;+https://webmaster.petalsearch.com/site/petalbot)"
+
+// A person is shown by a browser's evidence, never assumed from a browser's user agent: on a site whose script
+// delivers, a client without beacon, engagement or assets is unknown. A page request is one without Sec-Fetch-Dest
+// too: crawlers do not send it.
+func TestPass_BrowserEvidence(t *testing.T) {
+	r := newRig(t, true)
+	if err := r.st.AddStats(t.Context(), []store.IngestStat{{SiteID: r.site.ID, Hour: r.now.Unix() / 3600,
+		Accepted: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	get := func(ip, ua, path string, props string) store.Event {
+		e := req(ip, ua, "", path, 200, props)
+		e.Method = "GET"
+		return e
+	}
+	r.insert(t,
+		// PetalBot wearing a phone's Safari: three pages, no Sec-Fetch-Dest.
+		get("192.0.2.100", petalUA, "/AS1", `{"lang":"en"}`),
+		get("192.0.2.100", petalUA, "/AS2", `{"lang":"en"}`),
+		get("192.0.2.100", petalUA, "/AS3", `{"lang":"en"}`),
+		// One page with a clean Chrome user agent and Accept-Language, nothing else.
+		get("192.0.2.101", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/142.0 Safari/537.36", "/AS1",
+			`{"lang":"en-GB"}`),
+		// A person: the beacon shows the browser; a page without Sec-Fetch-Dest still counts as one, so on a day
+		// with assets reported the missing assets are a reason.
+		get("192.0.2.102", browserUA, "/AS1", ""),
+		store.Event{Source: "browser", Kind: "page_view", IP: "192.0.2.102", UA: browserUA},
+		req("192.0.2.103", browserUA, "script", "/assets/a.js", 200, ""),
+		store.Event{Source: "browser", Kind: "page_view", IP: "192.0.2.103", UA: browserUA},
+		// Neither a page nor a file: an API call, an asset by its extension.
+		get("192.0.2.102", browserUA, "/api/v1/x", ""),
+		get("192.0.2.102", browserUA, "/robots.txt", ""),
+	)
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	for key, want := range map[string]string{
+		"192.0.2.100": "unknown|client PetalBot,no script beacon,no assets",
+		"192.0.2.101": "unknown|no sign of a browser",
+		"192.0.2.102": "human|script beacon,no assets",
+		"192.0.2.103": "human|script beacon,assets loaded",
+	} {
+		a := classes[key]
+		if got := a.Class + "|" + strings.Join(a.Reasons, ","); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	var docs int
+	if err := r.st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE ip = '192.0.2.102' AND source = 'server' AND ` +
+		pageRequest).Scan(&docs); err != nil || docs != 1 {
+		t.Errorf("page requests of 192.0.2.102 = %d, %v", docs, err)
+	}
+}
+
+// A person whose page reaches the product over one path and whose beacon reaches nui over another (dual stack, a
+// relay) is one by the beacon for the same page with the same user agent within a minute; a beacon too late, or for
+// another page, is no evidence.
+func TestPass_BeaconFromAnotherAddress(t *testing.T) {
+	r := newRig(t, true)
+	if err := r.st.AddStats(t.Context(), []store.IngestStat{{SiteID: r.site.ID, Hour: r.now.Unix() / 3600,
+		Accepted: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	at := r.now.UnixMilli()
+	page := func(ip, path string, ts int64) store.Event {
+		e := req(ip, browserUA, "document", path, 200, "")
+		e.TS = ts
+		return e
+	}
+	beacon := func(ip, path string, ts int64) store.Event {
+		return store.Event{Source: "browser", Kind: "page_view", IP: ip, UA: browserUA, Path: path, TS: ts}
+	}
+	r.insert(t,
+		page("2001:db8::1", "/AS1", at-1000), beacon("192.0.2.110", "/AS1", at),
+		page("2001:db8:1::1", "/AS2", at-1000), beacon("192.0.2.111", "/AS2", at+2*beaconWindow),
+		page("2001:db8:2::1", "/AS3", at-1000), beacon("192.0.2.112", "/AS4", at),
+	)
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	for key, want := range map[string]string{
+		"2001:db8::1":   "human|script beacon from another address",
+		"2001:db8:1::1": "unknown|no sign of a browser",
+		"2001:db8:2::1": "unknown|no sign of a browser",
+	} {
+		a := classes[key]
+		if got := a.Class + "|" + strings.Join(a.Reasons, ","); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+// Without the script only a beacon could show a browser: one cached favicon on a feed-only site makes no visitor
+// automated, and a page scraper's pace is still a machine's though its pages carry no Sec-Fetch-Dest.
+func TestPass_FeedOnlyAndPageScraper(t *testing.T) {
+	r := newRig(t, true)
+	var evs []store.Event
+	evs = append(evs, req("192.0.2.120", browserUA, "image", "/favicon.ico", 200, ""),
+		req("192.0.2.121", browserUA, "document", "/", 200, ""))
+	for i := range 150 {
+		e := req("192.0.2.122", browserUA, "", fmt.Sprintf("/page/%d", i), 200, `{"lang":"en"}`)
+		e.Method = "GET"
+		e.TS = r.now.UnixMilli() - int64(i)*10
+		evs = append(evs, e)
+	}
+	r.insert(t, evs...)
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	if a := classes["192.0.2.121"]; a.Class != "human" {
+		t.Errorf("visitor on a feed-only site: %+v", a)
+	}
+	if a := classes["192.0.2.122"]; a.Class != "unknown" || a.Reasons[0] != reasonMachinePace {
+		t.Errorf("page scraper: %+v", a)
+	}
+}
+
+// A beacon after a pass that saw only the page request is the person's evidence at once, not the pass's stale verdict.
+func TestEnrich_BeaconAfterPass(t *testing.T) {
+	r := newRig(t, true)
+	if err := r.st.AddStats(t.Context(), []store.IngestStat{{SiteID: r.site.ID, Hour: r.now.Unix() / 3600,
+		Accepted: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	r.insert(t, req("192.0.2.130", browserUA, "document", "/", 200, ""))
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	e := store.Event{SiteID: r.site.ID, Source: "browser", Kind: "page_view", IP: "192.0.2.130", IPKey: "192.0.2.130",
+		UA: browserUA, TS: r.now.UnixMilli(), Props: `{"ctx":{"webdriver":false}}`}
+	r.c.Enrich(&e)
+	if e.Cls != store.ClsHuman {
+		t.Errorf("beacon after the pass: %d", e.Cls)
+	}
+	// A request of the same client still has the pass's class.
+	e = req("192.0.2.130", browserUA, "document", "/a", 200, "")
+	e.SiteID, e.IPKey, e.TS = r.site.ID, e.IP, r.now.UnixMilli()
+	r.c.Enrich(&e)
+	if e.Cls != store.ClsUnknown {
+		t.Errorf("request after the pass: %d", e.Cls)
 	}
 }
 
@@ -466,6 +618,27 @@ func TestInstant(t *testing.T) {
 			t.Errorf("%s %q = %d, want %d", tt.ip, tt.ua, e.Cls, tt.want)
 		}
 	}
+	// A beacon from a browser shows a person at once, unless the browser is scripted or a list names the client.
+	for _, tt := range []struct {
+		ua, props string
+		want      int
+	}{
+		{browserUA, `{"ctx":{"webdriver":false}}`, store.ClsHuman},
+		{browserUA, `{"ctx":{"webdriver":true}}`, store.ClsUnknown},
+		// A page's own property named webdriver says nothing about the browser.
+		{browserUA, `{"p":{"webdriver":true},"ctx":{}}`, store.ClsHuman},
+		// A batch's later event carries no context: the pass decides.
+		{browserUA, `{"p":{"x":1}}`, store.ClsPending},
+		// No browser's user agent: the pass decides.
+		{"Dalvik/2.1.0", `{"ctx":{}}`, store.ClsPending},
+		{"SomeCrawler/2", "", store.ClsBot},
+	} {
+		e := store.Event{Source: "browser", IP: "192.0.2.1", UA: tt.ua, IPKey: "192.0.2.1", Props: tt.props}
+		r.c.Enrich(&e)
+		if e.Cls != tt.want {
+			t.Errorf("beacon %q %s = %d, want %d", tt.ua, tt.props, e.Cls, tt.want)
+		}
+	}
 	bad := store.Event{IP: "nope"}
 	r.c.Enrich(&bad)
 	var empty Classifier
@@ -487,6 +660,11 @@ func TestClientAndUA(t *testing.T) {
 		"(weird)":                     "(weird)",
 		"!" + strings.Repeat("x", 60): "!" + strings.Repeat("x", 39),
 		"UptimeRobot":                 "UptimeRobot",
+		petalUA:                       "PetalBot",
+		"Mozilla/5.0 (compatible; Foo-Preview/1.0; +https://foo.example/info)":   "Foo-Preview/1.0",
+		"Mozilla/5.0 (compatible; Barkrowler/0.9; +https://babbar.tech/crawler)": "Barkrowler/0.9",
+		// A phone named CUBOT is a browser, not a bot.
+		"Mozilla/5.0 (Linux; Android 9; CUBOT X19) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36": "Chrome · Android",
 	} {
 		if got := Client(ua); got != want {
 			t.Errorf("Client(%q) = %q, want %q", ua, got, want)
