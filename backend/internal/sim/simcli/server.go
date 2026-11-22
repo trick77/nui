@@ -47,6 +47,11 @@ func NewServer(k sim.Knobs, now time.Time) (*Server, error) {
 // Configure points the server's configuration at the simulated world: its data directory, sign-in off, the
 // reference data kept as written, the knobs' port on the loopback. A configuration naming a public host is refused:
 // the simulator never runs as a deployment.
+//
+// One trusted hop, whatever BACKEND_TRUSTED_HOPS says: sim live sends each browser's address as the one
+// X-Forwarded-For entry, which a server set to 0 ignores (every visitor would be the loopback, one rate-limit key).
+// Only here: the server listens on the loopback alone, its data is thrown away, and sign-in is off anyway. The
+// in-process delivery sets the connection's address and no header, which every hop count reads the same.
 func (s *Server) Configure(cfg *app.Config) error {
 	if cfg.PublicFQDN != "" {
 		return errors.New("server -sim refuses to run with PUBLIC_FQDN set")
@@ -54,6 +59,7 @@ func (s *Server) Configure(cfg *app.Config) error {
 	cfg.DataDir, cfg.SitesFile = s.Dir, filepath.Join(s.Dir, "sites.json")
 	cfg.AuthDisabled, cfg.RefDataDisabled = true, true
 	cfg.Addr = fmt.Sprintf("127.0.0.1:%d", s.Knobs.Port)
+	cfg.TrustedHops = 1
 	return nil
 }
 

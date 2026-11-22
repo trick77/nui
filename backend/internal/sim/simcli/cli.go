@@ -53,7 +53,7 @@ func Main(ctx context.Context, args []string, getenv func(string) string, stdout
 	classify := fl.Bool("classify", k.Classify, "run the classifier over the history (NUI_SIM_CLASSIFY)")
 	data := fl.String("data", "", "backfill: the data directory (nui.db, sites.json, ref/)")
 	out := fl.String("out", "", "export: the directory to write the answers to")
-	target := fl.String("target", "", "live: the collector's base URL, the server itself (it trusts X-Forwarded-For)")
+	target := fl.String("target", "", "live: the collector's base URL, the server itself with one trusted hop (server -sim)")
 	speed := fl.Float64("speed", k.Speed, "live: world time per wall time (NUI_SIM_SPEED)")
 	rate := fl.Float64("rate", 0, "live: events a second to aim for (sets the scale)")
 	dur := fl.Duration("for", 0, "live: how long to run (0: until interrupted)")

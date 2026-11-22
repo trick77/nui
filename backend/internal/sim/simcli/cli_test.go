@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/trick77/nui/backend/internal/apix"
 	"github.com/trick77/nui/backend/internal/app"
 	"github.com/trick77/nui/backend/internal/ingest"
 	"github.com/trick77/nui/backend/internal/sim"
@@ -187,7 +189,7 @@ func TestServer(t *testing.T) {
 	}
 	cfg = app.Config{}
 	if err := s.Configure(&cfg); err != nil || !cfg.AuthDisabled || !cfg.RefDataDisabled || cfg.Addr != "127.0.0.1:9099" ||
-		cfg.DataDir != s.Dir {
+		cfg.DataDir != s.Dir || cfg.TrustedHops != 1 {
 		t.Fatalf("config %+v, %v", cfg, err)
 	}
 	st, err := store.Open(t.Context(), filepath.Join(cfg.DataDir, "nui.db"))
@@ -209,7 +211,7 @@ func TestServer(t *testing.T) {
 	reg, _ := sites.New(rows)
 	counters := ingest.NewCounters(nil)
 	c := &ingest.Collector{Sites: reg, Counters: counters, Writer: ingest.NewWriter(st, counters, 0, nil, nil),
-		Browser: ingest.BrowserTiers(1, nil), Feed: ingest.FeedLimiter(nil), TrustedHops: 1}
+		Browser: ingest.BrowserTiers(cfg.TrustedHops, nil), Feed: ingest.FeedLimiter(nil), TrustedHops: cfg.TrustedHops}
 	h := s.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) }),
 		sim.Handlers{Browser: http.HandlerFunc(c.HandleBrowser), Feed: http.HandlerFunc(c.HandleFeed)})
 	rec := httptest.NewRecorder()
@@ -225,5 +227,43 @@ func TestServer(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(refDir, "crawlers.json")); err != nil {
 		t.Error(err)
+	}
+}
+
+// sim live against server -sim: each browser's address, its one X-Forwarded-For entry, is the caller the server
+// reads, also where the environment trusts no proxy (a local run's BACKEND_TRUSTED_HOPS=0).
+func TestServerReadsSimulatedAddresses(t *testing.T) {
+	s, err := NewServer(sim.DefaultKnobs(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	cfg := app.Config{TrustedHops: 0}
+	if err := s.Configure(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var browsers, loopback int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a, ok := apix.ClientAddr(r, cfg.TrustedHops); ok && r.URL.Path == "/api/in" {
+			mu.Lock()
+			browsers++
+			if a.IsLoopback() {
+				loopback++
+			}
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	l := sim.NewLive(s.World, time.Now(), 4*86400) // four days of the world a second
+	if _, err := sim.Send(t.Context(), l, sim.SendOptions{Target: srv.URL, For: 500 * time.Millisecond,
+		Every: 20 * time.Millisecond}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if browsers == 0 || loopback != 0 {
+		t.Errorf("browser batches %d, %d of them from the loopback", browsers, loopback)
 	}
 }

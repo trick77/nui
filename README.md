@@ -78,8 +78,10 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
   into `ref/` when missing: run the server on it with `BACKEND_REFDATA_DISABLED=true`). About 25,000 events a second.
 - `live -target http://127.0.0.1:8080 [-rate 50] [-speed 60] [-for 10m] [-key domain=key]` sends tracker and feed
   batches to a running server, backing off on 429 as the tracker does. Each browser's address goes in
-  `X-Forwarded-For`, which nui trusts from one proxy: target the server itself. Without `-key` the feeds use the
-  simulator's own keys, which a `make sim-server` of the same seed has configured.
+  `X-Forwarded-For`, which nui reads with one trusted hop: target the server itself, `server -sim` (it sets
+  `BACKEND_TRUSTED_HOPS=1` whatever the environment says) or one left at the default; at 0 every visitor is the
+  loopback. Without `-key` the feeds use the simulator's own keys, which a `make sim-server` of the same seed has
+  configured.
 - `export -out DIR` writes the dashboard API's answers over a seeded history ending at the UI fixtures' "now", one
   JSON file per request the UI's fixture mode makes, named in `DIR/index.json`.
 
