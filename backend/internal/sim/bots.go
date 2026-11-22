@@ -45,6 +45,15 @@ func (w *World) BotAddr(role string, site int) (netip.Addr, bool) {
 	return hostIn(b.V4[0], 10+site), true
 }
 
+// Bot is the address a bot role ("crawler", "renderer", "monitor") sends from to the site with domain.
+func (w *World) Bot(role, domain string) (netip.Addr, bool) {
+	s, ok := w.Site(domain)
+	if !ok {
+		return netip.Addr{}, false
+	}
+	return w.BotAddr(role, s.idx)
+}
+
 // bots plans the known bots' day on s: a crawler fetching pages on a steady beat, one that renders them (its
 // browser runs the script), an uptime probe every few minutes.
 func (w *World) bots(p *dayPlan, s *Site, d int64) {

@@ -94,6 +94,15 @@ func TestBackfillDeterministic(t *testing.T) {
 			t.Fatalf("%v, %v", s, err)
 		}
 		digests = append(digests, dump(t, st))
+		// Every class, every kind of event the tracker and the feed send, nothing in the future.
+		var classes, kinds int
+		var newest int64
+		_ = st.DB.QueryRow(`SELECT COUNT(DISTINCT class) FROM actor_class`).Scan(&classes)
+		_ = st.DB.QueryRow(`SELECT COUNT(DISTINCT kind) FROM event`).Scan(&kinds)
+		_ = st.DB.QueryRow(`SELECT MAX(ts) FROM event`).Scan(&newest)
+		if classes != 4 || kinds < 10 || newest >= anchor.UnixMilli() {
+			t.Errorf("classes %d, kinds %d, newest %v", classes, kinds, time.UnixMilli(newest))
+		}
 	}
 	if digests[0] != digests[1] {
 		t.Error("two backfills of one seed differ")
