@@ -1,7 +1,9 @@
 package simcli
 
 import (
+	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,11 @@ var anchor = time.Date(2026, 11, 22, 13, 30, 0, 0, time.UTC)
 // history backfills the default sites with the named scenarios and returns the store and world.
 func history(t testing.TB, scale float64, days int, scenarios string) (*store.Store, *sim.World) {
 	t.Helper()
+	return seededHistory(t, 7, scale, days, scenarios)
+}
+
+func seededHistory(t testing.TB, seed uint64, scale float64, days int, scenarios string) (*store.Store, *sim.World) {
+	t.Helper()
 	ref, err := sim.OpenReference(filepath.Join(t.TempDir(), "ref"))
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +30,14 @@ func history(t testing.TB, scale float64, days int, scenarios string) (*store.St
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := sim.NewWorld(sim.Options{Seed: 7, Anchor: anchor, Scale: scale, Scenarios: sc, Ref: ref})
+	// A half year (growth) on the first site alone, which its expectation reads: a third of the work, so the gate
+	// affords it under -race.
+	var ss []*sim.Site
+	o := sim.BackfillOptions{Days: days, Classify: true}
+	if days > 30 {
+		ss, o.ClassifyLast = sim.DefaultSites()[:1], 9
+	}
+	w, err := sim.NewWorld(sim.Options{Seed: seed, Anchor: anchor, Scale: scale, Sites: ss, Scenarios: sc, Ref: ref})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +49,7 @@ func history(t testing.TB, scale float64, days int, scenarios string) (*store.St
 	if _, err := w.SyncSites(t.Context(), st); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sim.Backfill(t.Context(), st, w, sim.BackfillOptions{Days: days, Classify: true}); err != nil {
+	if _, err := sim.Backfill(t.Context(), st, w, o); err != nil {
 		t.Fatal(err)
 	}
 	return st, w
@@ -92,19 +106,63 @@ func TestScenariosTogether(t *testing.T) {
 	}
 }
 
+// Growth shows whatever the seed: its visitors rise far past Noteworthy's 20 % (by 47 to 73 % over eight seeds at
+// this scale), not at the threshold.
+func TestGrowthAnySeed(t *testing.T) {
+	t.Parallel()
+	seeds := []uint64{1, 2, 3, 4}
+	if raceOn {
+		seeds = seeds[:2] // the scenario test runs another
+	}
+	for _, seed := range seeds {
+		t.Run(strconv.FormatUint(seed, 10), func(t *testing.T) {
+			t.Parallel()
+			st, w := seededHistory(t, seed, 0.3, 180, "growth")
+			fails, err := Check(t.Context(), st, w)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range fails {
+				t.Error(f)
+			}
+			code, b := dashboardOf(t, st, w).Get(t.Context(), "overview", map[string]string{
+				"site": "lens.example.com", "range": "90d", "tz": "UTC"})
+			var body map[string]any
+			if err := json.Unmarshal(b, &body); code != 200 || err != nil {
+				t.Fatalf("overview: %d %v", code, err)
+			}
+			for _, x := range body["tiles"].([]any) {
+				if m := x.(map[string]any); m["key"] == "visitors" {
+					if pct, _ := m["change"].(map[string]any)["pct"].(float64); pct < 40 {
+						t.Errorf("visitors up %v %%, too near the threshold", pct)
+					}
+				}
+			}
+		})
+	}
+}
+
+// dashboardOf is NewDashboard in a test.
+func dashboardOf(t *testing.T, st *store.Store, w *sim.World) *Dashboard {
+	t.Helper()
+	d, err := NewDashboard(t.Context(), st, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
 // Every scenario, played with the baseline alone, shows on the real dashboard what it says it shows.
 func TestScenarioExpectations(t *testing.T) {
 	for _, sc := range sim.Catalogue() {
 		t.Run(sc.Name, func(t *testing.T) {
 			t.Parallel()
+			// Half a year (growth) at 0.3, under -race too: the gate runs every scenario.
 			days, scale := max(sc.MinDays, 9), 1.0
 			if days > 30 {
 				scale = 0.3
 			}
 			if raceOn {
-				if days > 30 {
-					t.Skip("half a year of history: checked without -race")
-				}
 				days, scale = max(sc.MinDays, 3), 0.3
 			}
 			st, w := history(t, scale, days, sc.Name)

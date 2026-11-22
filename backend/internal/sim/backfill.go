@@ -139,6 +139,9 @@ type BackfillOptions struct {
 	// Classify runs the classifier's pass after every simulated day (one transaction per actor-day: off for load
 	// runs, whose events keep the instant class the writer gave them).
 	Classify bool
+	// ClassifyLast, above 0, runs that pass on the last that many days only: the older ones keep the writer's
+	// instant class (a long history whose old days nothing reads by class costs half as much).
+	ClassifyLast int
 	// Log reports each day's progress; nil is quiet.
 	Log *slog.Logger
 }
@@ -209,7 +212,8 @@ func Backfill(ctx context.Context, st *store.Store, w *World, o BackfillOptions)
 			return b.stats, err
 		}
 		b.now = next.Add(-time.Millisecond)
-		if err := b.settle(o.Classify); err != nil {
+		classify := o.Classify && (o.ClassifyLast <= 0 || !next.Before(w.Anchor.Add(-time.Duration(o.ClassifyLast)*day)))
+		if err := b.settle(classify); err != nil {
 			return b.stats, err
 		}
 		b.log.Info("Simulated day written", "day", t.Format(time.DateOnly), "events", b.stats.Events)
