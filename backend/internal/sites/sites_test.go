@@ -128,6 +128,13 @@ func TestParse_Faults(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
+	// One key for two sites is refused, naming both.
+	h := HashKey("shared")
+	_, err := Parse([]byte(`{"sites":[{"domain":"a.example.com","feed_key_sha256":"` + h +
+		`"},{"domain":"b.example.com","feed_key_sha256":"` + strings.ToUpper(h) + `"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "b.example.com") || !strings.Contains(err.Error(), "a.example.com") {
+		t.Errorf("shared feed key: %v", err)
+	}
 	cs, err := Parse([]byte(`{"sites":[{"domain":" A.Example.com ","feed_key_sha256":"` +
 		strings.Repeat("AB", 32) + `"}]}`))
 	if err != nil || cs[0].Domain != "a.example.com" || cs[0].Kind != "site" || cs[0].FeedKeySHA256 != strings.Repeat("ab", 32) {

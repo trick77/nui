@@ -75,6 +75,7 @@ func Parse(b []byte) ([]Config, error) {
 	}
 	var errs []error
 	seen := map[string]bool{}
+	keys := map[string]string{} // feed key hash → domain
 	for i := range f.Sites {
 		c := &f.Sites[i]
 		c.Domain = strings.ToLower(strings.TrimSpace(c.Domain))
@@ -92,8 +93,17 @@ func Parse(b []byte) ([]Config, error) {
 		if c.Kind != "site" && c.Kind != "api" {
 			errs = append(errs, fmt.Errorf("site %s: kind %q, want site or api", c.Domain, c.Kind))
 		}
-		if c.FeedKeySHA256 != "" && !hashRE.MatchString(c.FeedKeySHA256) {
+		switch {
+		case c.FeedKeySHA256 == "":
+		case !hashRE.MatchString(c.FeedKeySHA256):
 			errs = append(errs, fmt.Errorf("site %s: feed_key_sha256 is not 64 hex digits", c.Domain))
+		case keys[c.FeedKeySHA256] != "":
+			// One key for two sites: the collector could file a batch under only one of them, and the other's
+			// would be refused as another site's for good.
+			errs = append(errs, fmt.Errorf("site %s: feed_key_sha256 is also %s's, every site needs its own key",
+				c.Domain, keys[c.FeedKeySHA256]))
+		default:
+			keys[c.FeedKeySHA256] = c.Domain
 		}
 		if _, err := compileRules(c.PathRules); err != nil {
 			errs = append(errs, fmt.Errorf("site %s: %w", c.Domain, err))
