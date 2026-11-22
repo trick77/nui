@@ -261,18 +261,23 @@ export function GenText({
   gen,
   text,
   className = "",
+  hang = false,
 }: {
   gen: string | null | undefined;
   text: string;
   className?: string;
+  // A block whose mark hangs in a margin every text of it keeps, marked or
+  // not: wrapped lines and unmarked rows start where the marked text does.
+  hang?: boolean;
 }) {
+  const h = hang ? "hang " : "";
   if (gen)
     return (
-      <span className={`gen ${className}`} title="Written by the model">
+      <span className={`${h}gen ${className}`} title="Written by the model">
         {gen}
       </span>
     );
-  return <span className={className}>{text}</span>;
+  return <span className={`${h}${className}`}>{text}</span>;
 }
 
 export function Skeleton({ h, label }: { h: number; label?: string }) {

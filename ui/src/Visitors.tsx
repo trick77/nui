@@ -74,6 +74,9 @@ export function Visitors({ aud }: { aud: Audience }) {
   const next = more.next ?? page.data?.next ?? "";
   // A pick from a finding or a related address may lie outside the table.
   const selected = visitor ?? rows[0]?.key ?? null;
+  // A column keeps the mark's margin only when a row shown has the mark.
+  const hangClient = rows.some((v) => v.client_gen);
+  const hangDoes = rows.some((v) => v.does.gen);
 
   return (
     <>
@@ -150,7 +153,11 @@ export function Visitors({ aud }: { aud: Audience }) {
                     </td>
                     <td title={countryName(v.country)}>{v.country}</td>
                     <td title={v.client_gen ? v.client : undefined}>
-                      <GenText gen={v.client_gen} text={v.client} />
+                      <GenText
+                        hang={hangClient}
+                        gen={v.client_gen}
+                        text={v.client}
+                      />
                     </td>
                     <td className="n">{num(v.visits)}</td>
                     <td className="n">{num(v.views)}</td>
@@ -177,12 +184,15 @@ export function Visitors({ aud }: { aud: Audience }) {
                     )}
                     <td className="min-w-[220px]">
                       <GenText
+                        hang={hangDoes}
                         gen={v.does.gen}
                         text={v.does.text}
                         className="text-[13px] text-ink-dim"
                       />
                       {v.signals.length > 0 && (
-                        <div className="text-[12px] text-muted">
+                        <div
+                          className={`text-[12px] text-muted ${hangDoes ? "pl-4" : ""}`}
+                        >
                           {v.signals.join(" · ")}
                         </div>
                       )}
@@ -360,7 +370,11 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
             <div className="eyebrow">Visitor</div>
             <div className="mt-1 font-mono text-[15px]">{v.key}</div>
             <p className="mt-1.5 mb-0 text-[13px] text-ink-dim">
-              <GenText gen={v.does.gen} text={v.does.text} />
+              <GenText
+                hang={!!v.does.gen}
+                gen={v.does.gen}
+                text={v.does.text}
+              />
             </p>
             <dl className="mt-2.5 mb-0 grid grid-cols-[auto_1fr] gap-x-3.5 gap-y-[5px] text-[13px]">
               <dt className="text-muted">Class</dt>
@@ -376,7 +390,11 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
               <dd className="m-0">{countryName(v.country)}</dd>
               <dt className="text-muted">Client</dt>
               <dd className="m-0" title={v.client_gen ? v.client : undefined}>
-                <GenText gen={v.client_gen} text={v.client} />
+                <GenText
+                  hang={!!v.client_gen}
+                  gen={v.client_gen}
+                  text={v.client}
+                />
               </dd>
               <dt className="text-muted">Signals</dt>
               <dd className="m-0">{v.signals.join(" · ") || "–"}</dd>
