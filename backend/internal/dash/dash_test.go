@@ -927,9 +927,12 @@ func TestDomainAndSites(t *testing.T) {
 	if rules["llm"].(map[string]any)["budget"].(float64) != 200 || rules["tz"] != "Europe/Zurich" {
 		t.Errorf("rules %v", rules)
 	}
+	if src["feed"] != true {
+		t.Errorf("feed site's sources say no feed: %v", src)
+	}
 	_, body = r.get(t, "domain", p(plainSite))
-	if body["sources"].(map[string]any)["server"] != nil {
-		t.Error("plain site has a server source")
+	if src := body["sources"].(map[string]any); src["server"] != nil || src["feed"] != false {
+		t.Errorf("plain site's sources %v", src)
 	}
 	_, body = r.get(t, "sites", nil)
 	sts := body["sites"].([]any)
@@ -967,6 +970,10 @@ func TestSourcesNeverDelivered(t *testing.T) {
 			if (got.v != nil) != got.want {
 				t.Errorf("%s: %s = %v", name, got.where, got.v)
 			}
+		}
+		// The configured feed is stated whether or not it delivered: a null server reads as "not yet".
+		if src["feed"] != true {
+			t.Errorf("%s: domain feed = %v", name, src["feed"])
 		}
 	}
 	r.s.Counters = ingest.NewCounters(func() time.Time { return r.end })

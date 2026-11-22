@@ -266,8 +266,9 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 		s.fail(w, r, err)
 		return
 	}
-	sources := map[string]any{"browser": source(browser, s.now()), "server": nil, "script": "/nui.js",
-		"build": version.String(), "first": nil}
+	// feed: the site has a server feed configured, so a null server source is one that has not delivered yet.
+	sources := map[string]any{"browser": source(browser, s.now()), "server": nil, "feed": q.site.HasFeed,
+		"script": "/nui.js", "build": version.String(), "first": nil}
 	if q.site.HasFeed {
 		sources["server"] = source(server, s.now())
 	}
