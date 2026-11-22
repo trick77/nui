@@ -280,9 +280,46 @@ describe("dashboard on a domain with a server feed", () => {
     expect(within(v).queryByRole("button", { name: "Load more →" })).toBeNull();
   });
 
+  it("marks the model's client label and keeps the raw client", async () => {
+    start();
+    const v = await screen.findByRole("region", {
+      name: "Visitors by address",
+    });
+    const label = await within(v).findByText("Python scraping script");
+    expect(label).toHaveClass("gen");
+    expect(label.closest("td")).toHaveAttribute(
+      "title",
+      "python-requests/2.32",
+    );
+  });
+
+  it("shows an address without events in the range as empty, not failed", async () => {
+    window.history.replaceState(null, "", "/dashboard/");
+    const fx = fixtureFetch();
+    setFetcher((u, i) =>
+      u.startsWith("/api/dash/visitor?")
+        ? Promise.resolve(
+            new Response(
+              JSON.stringify({
+                detail: "no events from this address in the range",
+              }),
+              { status: 404 },
+            ),
+          )
+        : fx(u, i),
+    );
+    render(<App />);
+    const d = await screen.findByRole("region", { name: "Visitor" });
+    expect(
+      await within(d).findByText("No events from this address in this range."),
+    ).toBeInTheDocument();
+    expect(within(d).queryByRole("alert")).toBeNull();
+  });
+
   it("shows a reading's related address and the computed fallback", async () => {
     start();
     const d = await screen.findByRole("region", { name: "Visitor" });
+    expect(await within(d).findByText(/Same class in this \/24/)).toBeTruthy();
     fireEvent.click(
       await within(d).findByRole("button", { name: "198.51.100.201" }),
     );

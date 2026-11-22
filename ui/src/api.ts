@@ -161,6 +161,9 @@ export type VisitorRow = {
   last: string;
   signals: string[];
   does: Gen;
+  // The model's label for an unknown automated client's user agent; null
+  // when there is none, and client stands.
+  client_gen?: string | null;
 };
 
 export type Visitors = { rows: VisitorRow[]; total: number; next: string };

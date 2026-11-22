@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  ApiError,
   api,
   type Audience,
   type TrailItem,
@@ -138,7 +139,9 @@ export function Visitors({ aud }: { aud: Audience }) {
                       <ClassPill cls={v.class} />
                     </td>
                     <td title={countryName(v.country)}>{v.country}</td>
-                    <td>{v.client}</td>
+                    <td title={v.client_gen ? v.client : undefined}>
+                      <GenText gen={v.client_gen} text={v.client} />
+                    </td>
                     <td className="n">{num(v.visits)}</td>
                     <td className="n">{num(v.views)}</td>
                     {feed && <td className="n">{num(v.requests)}</td>}
@@ -271,7 +274,15 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
       label="Visitor"
       className="mt-3 grid grid-cols-1 min-[1000px]:grid-cols-[320px_1fr]"
     >
-      {d.error ? (
+      {d.error instanceof ApiError && d.error.status === 404 ? (
+        // A picked address with no events in this range (another range or
+        // a finding chose it): nothing to show, not a failure.
+        <div className="px-[18px] py-4 min-[1000px]:col-span-2">
+          <div className="eyebrow">Visitor</div>
+          <div className="mt-1 font-mono text-[15px]">{vkey}</div>
+          <Empty>No events from this address in this range.</Empty>
+        </div>
+      ) : d.error ? (
         <div className="p-4 min-[1000px]:col-span-2">
           <ErrorBox error={d.error} />
         </div>
@@ -332,7 +343,7 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
                 )}
                 {v.reading.related.length > 0 && (
                   <div className="mt-1.5 text-[12px] text-muted">
-                    Same pattern:{" "}
+                    Same class in this {v.key.includes(":") ? "/48" : "/24"}:{" "}
                     {v.reading.related.map((r) => (
                       <button
                         key={r}

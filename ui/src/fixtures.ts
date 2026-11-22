@@ -599,6 +599,7 @@ const VISITORS: VisitorRow[] = [
     country: "US",
     class: "unknown",
     client: "python-requests/2.32",
+    client_gen: "Python scraping script",
     visits: null,
     views: 0,
     requests: 2340,
