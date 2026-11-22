@@ -64,6 +64,37 @@ func TestTracker(t *testing.T) {
 	}
 }
 
+// The build as it ships: the shell links the icon under the mount, the sign-in card's files are in the embed, the
+// tracker is the minified one. Only a built embed can say so: ship check builds the UI before the Go tests.
+func TestHandler_ServesTheBuild(t *testing.T) {
+	if _, err := embedded.Open("dist/index.html"); err != nil {
+		t.Skip("UI not built (npm run build in ui/); ship check builds it before this test")
+	}
+	h, err := Handler("/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const icon = `<link rel="icon" type="image/svg+xml" href="/dashboard/icon.svg"`
+	if body := get(h, "/").Body.String(); !strings.Contains(body, icon) {
+		t.Errorf("shell does not link the icon under the mount: %s", body)
+	}
+	for path, typ := range map[string]string{"/icon.svg": "image/svg+xml", "/login-cover.webp": "image/webp"} {
+		w := get(h, path)
+		if w.Code != http.StatusOK || !strings.HasPrefix(w.Header().Get("Content-Type"), typ) || w.Body.Len() == 0 {
+			t.Errorf("%s: status=%d type=%q bytes=%d", path, w.Code, w.Header().Get("Content-Type"), w.Body.Len())
+		}
+	}
+	tr, err := Tracker()
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := get(tr, "/nui.js").Body.String()
+	if js == "" || strings.Contains(js, "sourceMappingURL") || strings.Contains(js, "/*") ||
+		strings.Count(js, "\n") > 2 {
+		t.Errorf("nui.js is not the minified build (%d bytes, %d lines)", len(js), strings.Count(js, "\n"))
+	}
+}
+
 func TestHandler_ServesTheEmbed(t *testing.T) {
 	h, err := Handler("/dashboard")
 	if err != nil {
