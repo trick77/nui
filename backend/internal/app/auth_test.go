@@ -6,18 +6,27 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/trick77/ship/kit/auth"
 	"github.com/trick77/ship/kit/ratelimit"
 )
 
 const testToken = "0123456789abcdef0123456789abcdef-admin"
 
+// tokenAuth builds the sign-in from vars; without BACKEND_DATA_DIR in them its session secret is made in a new
+// temporary directory.
 func tokenAuth(t *testing.T, vars map[string]string) *Auth {
 	t.Helper()
-	cfg, err := LoadConfig(lookup(vars))
+	all := map[string]string{"BACKEND_DATA_DIR": t.TempDir()}
+	for k, v := range vars {
+		all[k] = v
+	}
+	cfg, err := LoadConfig(lookup(all))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +149,8 @@ func TestTokenSignIn(t *testing.T) {
 // Rotating BACKEND_ADMIN_TOKEN ends the sessions issued under the old one, with or without a session secret.
 func TestTokenRotation(t *testing.T) {
 	for _, secret := range []string{"", strings.Repeat("s", 32)} {
-		vars := map[string]string{"BACKEND_ADMIN_TOKEN": testToken, "BACKEND_SESSION_SECRET": secret}
+		vars := map[string]string{"BACKEND_ADMIN_TOKEN": testToken, "BACKEND_SESSION_SECRET": secret,
+			"BACKEND_DATA_DIR": t.TempDir()}
 		w := do(routes(t, tokenAuth(t, vars)), tokenPost("token="+testToken))
 		if w.Code != http.StatusNoContent {
 			t.Fatalf("sign-in: %d", w.Code)
@@ -154,9 +164,75 @@ func TestTokenRotation(t *testing.T) {
 		if got := get(tokenAuth(t, vars)); got != http.StatusOK {
 			t.Errorf("secret %q: same token after a restart: %d", secret, got)
 		}
+		// The same token beside another session secret (another data directory's, another configured one): the
+		// cookie is worth nothing there, the key is never the token's alone.
+		other := map[string]string{"BACKEND_ADMIN_TOKEN": testToken, "BACKEND_DATA_DIR": t.TempDir()}
+		if secret != "" {
+			other["BACKEND_SESSION_SECRET"] = strings.Repeat("t", 32)
+		}
+		if got := get(tokenAuth(t, other)); got != http.StatusUnauthorized {
+			t.Errorf("secret %q: same token, other secret: %d, want 401", secret, got)
+		}
 		vars["BACKEND_ADMIN_TOKEN"] = strings.Repeat("n", 40)
 		if got := get(tokenAuth(t, vars)); got != http.StatusUnauthorized {
 			t.Errorf("secret %q: rotated token: %d, want 401", secret, got)
 		}
+	}
+}
+
+// Without BACKEND_SESSION_SECRET the secret is made once in the data directory, owner-only, and kept; a directory it
+// cannot be made in, or a damaged file, fails the start.
+func TestSessionSecretFile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{DataDir: dir, AdminToken: testToken}
+	k1, err := sessionKey(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, SessionSecretFile)
+	st, err := os.Stat(path)
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("secret file: %v %v", st, err)
+	}
+	if k2, err := sessionKey(cfg); err != nil || !bytes.Equal(k1, k2) {
+		t.Errorf("a restart made another key: %v", err)
+	}
+	// Neither the token alone nor kit's derivation from it.
+	if bytes.Equal(k1, auth.DeriveKey(testToken, "nui-session")) {
+		t.Error("the key is the token's alone")
+	}
+	// A file others can read is restricted, not refused.
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if k3, err := sessionKey(cfg); err != nil || !bytes.Equal(k1, k3) {
+		t.Errorf("after chmod: %v", err)
+	}
+	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
+		t.Errorf("not restricted: %v", st.Mode())
+	}
+	// A configured secret wins over the file.
+	withSecret := Config{DataDir: dir, AdminToken: testToken, SessionSecret: strings.Repeat("s", 32)}
+	if k4, _ := sessionKey(withSecret); bytes.Equal(k1, k4) {
+		t.Error("configured secret ignored")
+	}
+
+	if err := os.WriteFile(path, []byte("short\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sessionKey(cfg); err == nil || !strings.Contains(err.Error(), "want at least 32") {
+		t.Errorf("damaged file: %v", err)
+	}
+	if _, err := NewAuth(Config{DataDir: filepath.Join(dir, "missing")}); err == nil ||
+		!strings.Contains(err.Error(), "BACKEND_DATA_DIR") {
+		t.Errorf("missing directory: %v", err)
+	}
+	ro := t.TempDir()
+	if err := os.Chmod(ro, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ro, 0o700) })
+	if _, err := sessionKey(Config{DataDir: ro}); err == nil || !strings.Contains(err.Error(), "BACKEND_DATA_DIR") {
+		t.Errorf("read-only directory: %v", err)
 	}
 }

@@ -120,21 +120,12 @@ func (a *Auth) HandleToken(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// NewAuth builds the sign-in from cfg. The session key derives from the admin token whenever one is set, so
-// rotating the token ends every session issued under the old one (with a session secret too, the key derives from
-// both: the OIDC sessions end with it). No secret and no token: a random key, sessions end with the process.
+// NewAuth builds the sign-in from cfg. The session key derives from the session secret (configured, else made once
+// in the data directory) together with the admin token (sessionKey): rotating either ends every session.
 func NewAuth(cfg Config) (*Auth, error) {
-	var key []byte
-	switch {
-	case cfg.SessionSecret != "" && cfg.AdminToken != "":
-		key = auth.DeriveKey(cfg.SessionSecret+"\x00"+cfg.AdminToken, "nui-session")
-	case cfg.SessionSecret != "":
-		key = []byte(cfg.SessionSecret)
-	case cfg.AdminToken != "":
-		key = auth.DeriveKey(cfg.AdminToken, "nui-session")
-	default:
-		slog.Warn("BACKEND_SESSION_SECRET and BACKEND_ADMIN_TOKEN are empty: sessions end with this process")
-		key = auth.RandomKey()
+	key, err := sessionKey(cfg)
+	if err != nil {
+		return nil, err
 	}
 	sessions, err := auth.NewSessions(auth.SessionConfig{Name: SessionCookie, Key: key, Secure: cfg.Secure(),
 		KeepGroup: cfg.OIDCAdminGroup})

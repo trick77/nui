@@ -28,7 +28,8 @@ type Config struct {
 	// MaxDBMB caps what the rows may take; past it the oldest events go first. 0 is no cap.
 	MaxDBMB int
 
-	// SessionSecret signs the session cookie, 32+ characters; empty signs with a random key per start.
+	// SessionSecret keys the session cookie's signature (with the admin token, sessionKey), 32+ characters; empty
+	// uses a secret nui makes once in DataDir (SessionSecretFile).
 	SessionSecret string
 
 	// OIDC: all four of issuer, client id, secret and redirect URL, or none; the group is optional.

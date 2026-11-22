@@ -49,8 +49,10 @@ docker compose pull && docker compose up -d
 The dashboard signs in with OIDC (`BACKEND_OIDC_*`), with an admin token (`BACKEND_ADMIN_TOKEN`, 32 to 2048 bytes,
 `openssl rand -hex 32`), or with either: the sign-in card offers what is configured. With `PUBLIC_FQDN` set nui
 refuses to start with neither. The token is the way in when the identity provider is down; its session is named
-`admin`. Changing the token signs everyone out (the session key derives from it). Token attempts are spaced a second
-apart per address or IPv6 /64; past a short queue they get a 429 with `Retry-After`.
+`admin`. The session cookie is signed with a key derived from a session secret together with the token: changing
+either signs everyone out. The secret is `BACKEND_SESSION_SECRET`, or, left empty, one nui makes at first start and
+keeps in `data/session.secret` (owner-only; a data directory nui cannot write stops the start). Token attempts are
+spaced a second apart per address or IPv6 /64; past a short queue they get a 429 with `Retry-After`.
 
 ### Sites
 
