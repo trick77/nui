@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Self-hosted, passive usage analytics for the user's own web products. One host: the collector under `/api`, the
-dashboard SPA under `/dashboard` (OIDC). `backend/`: Go on ship's kit, embeds the UI. `ui/`: React 19, Vite, Tailwind v4.
+dashboard SPA under `/dashboard` (OIDC, an admin token, or both). `backend/`: Go on ship's kit, embeds the UI. `ui/`: React 19, Vite, Tailwind v4.
 
 ## Decisions
 - The app mounts `/dashboard` itself, no Traefik StripPrefix: collector and dashboard share the host. Vite base `./`,

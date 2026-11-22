@@ -4,7 +4,7 @@ Self-hosted, passive usage analytics for your own web products. One host serves 
 dashboard under `/dashboard`.
 
 - A browser script (`/nui.js`) and an optional server feed from your backend deliver events.
-- The dashboard (behind OIDC) shows per-domain figures, trends and who is asking: people, known bots, uptime
+- The dashboard (behind a sign-in: OIDC, an admin token, or both) shows per-domain figures, trends and who is asking: people, known bots, uptime
   probes and unknown automation, each with the reasons it was classified that way.
 - With an [llmwire](https://github.com/trick77/toolkit) model key it adds a short briefing and readings of
   automated visitors; every figure is computed without it.
