@@ -943,6 +943,9 @@ export function start(
   const hidden = () => {
     if (pre()) return;
     engagement();
+    // A left page is no longer read: without this the visibilitychange
+    // after a pagehide sends a second engagement of the moments between.
+    activeSince = 0;
     if (!vitalsSent) {
       vitalsSent = true;
       vitalsFinal();

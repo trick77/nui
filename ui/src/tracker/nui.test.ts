@@ -999,6 +999,27 @@ describe("capture", () => {
     expect(cls).toHaveLength(1);
   });
 
+  it("sends one engagement when a page is left, not one per signal", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    boot();
+    document.dispatchEvent(new Event("pointerdown"));
+    vi.advanceTimersByTime(3000);
+    // Leaving: pagehide first, the page still visible, then hidden.
+    window.dispatchEvent(new Event("pagehide"));
+    vi.advanceTimersByTime(20);
+    Object.defineProperty(document, "visibilityState", {
+      value: "hidden",
+      configurable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      configurable: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(kinds().filter((k) => k === "engagement")).toHaveLength(1);
+  });
+
   it("waits for a prerendered page to be shown, and times vitals from then", async () => {
     type Entry = { name?: string; startTime: number };
     class FakePO {
