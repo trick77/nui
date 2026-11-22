@@ -46,7 +46,7 @@ func loadSessionSecret(dir string) ([]byte, error) {
 		return s, err
 	}
 	s = []byte(hex.EncodeToString(auth.RandomKey()))
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // a fixed name in the data dir
 	if errors.Is(err, fs.ErrExist) {
 		return readSessionSecret(path) // another process made it meanwhile
 	}
@@ -71,7 +71,7 @@ func loadSessionSecret(dir string) ([]byte, error) {
 
 // readSessionSecret reads an existing secret, restricting a file others can read to its owner.
 func readSessionSecret(path string) ([]byte, error) {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // a fixed name in the data dir
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
