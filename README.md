@@ -60,10 +60,38 @@ docker compose run --rm nui -new-feed-key
 The key goes to the product's feed emitter (`Authorization: Bearer <key>` on `POST /api/feed`), the hash into
 `sites.json`.
 
+### Browser script
+
+On a page, include the script:
+
+```html
+<script src="https://nui.example.com/nui.js" defer></script>
+```
+
+It posts batches to `POST /api/in` and keeps every batch within the collector's limits on its own; a batch over
+one is refused whole (413, or 400 for a malformed one) and its events are lost. For anyone sending there
+otherwise, the limits are:
+
+| What | Limit |
+|---|---|
+| Body | 32 KiB, 50 events |
+| `url`, `ref`, `src`, `href` values; an event's `url` | 2048 bytes |
+| Every other string, `title`, `n`, `vid`, `sid` | 512 bytes |
+| An event's `p` | 4 KiB as sent; maps 64 keys of at most 64 bytes, arrays 50 items, 8 levels |
+| `ctx` without `url` and `ref`, as stored | 4 KiB |
+| An event's own row, as stored | 16 KiB (the batch's context and headers aside) |
+| A batch's rows, as stored | 64 KiB |
+
+"As stored" counts the event's columns, its `url` with its path, a page view's referrer and the props re-encoded
+(U+2028 and U+2029 take six bytes each); the request's client-hint and fetch headers are kept up to 2 KiB, on the
+batch's first row. The rate is 60 events a minute per address or IPv6 /64 and 600 per /48 (IPv4 /24), with a burst
+of 60; a batch is charged one event per event or per 2 KiB stored, whichever is more, and every request pays one on
+arrival (429 with `Retry-After` beyond it). A body not received within 10 s is a 408: send it again.
+
 ### Server feed
 
 `POST /api/feed` takes `{"v": 1, "site": "<domain>", "events": [...]}` as JSON, at most 256 KiB and 500 events per
-batch, rate-limited per key. The batch as a whole is refused only for an unparseable envelope (400), a wrong key
+batch, rate-limited per key (200 events a second, a burst of 5000). The batch as a whole is refused only for an unparseable envelope (400), a wrong key
 (401), another site's name (400), its size or event count (413), a body not received within 30 s (408) or the rate
 (429). One event's content never refuses the batch: strings over their limit are clipped (on a character boundary),
 and an event that is no JSON object, has a field of the wrong type, lacks a parseable `ip` or has an impossible
@@ -80,13 +108,8 @@ with the unknown domains every footer shows.
 | `ua`, `lang`, `ch_ua` | 512 |
 | `path`, `ref` | 2048 (query and fragment dropped) |
 
-Send only these fields, never raw request headers: they can carry credentials.
-
-On a page, include the script:
-
-```html
-<script src="https://nui.example.com/nui.js" defer></script>
-```
+Send only these fields, never raw request headers: they can carry credentials. A refused batch (408, 429, 5xx)
+can be sent again; 400, 401 and 413 will be refused again.
 
 ## License
 
