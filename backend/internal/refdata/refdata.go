@@ -42,6 +42,8 @@ type Bots struct {
 	Providers []*Provider
 	table     PrefixTable
 	Updated   time.Time
+	// Rejected are the ranges left out as implausibly broad.
+	Rejected Rejected
 }
 
 // ByIP is the provider whose ranges hold a.
@@ -80,9 +82,10 @@ type AS struct {
 
 // Networks is one load of the AS data.
 type Networks struct {
-	ASes    []AS
-	table   PrefixTable
-	Updated time.Time
+	ASes     []AS
+	table    PrefixTable
+	Updated  time.Time
+	Rejected Rejected
 }
 
 // Lookup is the AS announcing a.
@@ -121,9 +124,10 @@ func (n *Networks) ByASN(asn int64) (AS, bool) {
 // Countries is one load of the country data.
 type Countries struct {
 	Codes   []string
-	Names   map[string]string
-	table   PrefixTable
-	Updated time.Time
+	Names    map[string]string
+	table    PrefixTable
+	Updated  time.Time
+	Rejected Rejected
 }
 
 // Lookup is the ISO code of a's country, "" when unknown.

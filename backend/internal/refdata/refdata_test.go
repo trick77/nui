@@ -299,7 +299,7 @@ func TestData_RefreshCacheAndFailure(t *testing.T) {
 	if d3.Networks() != nil {
 		t.Error("a broken tarball was installed")
 	}
-	if n, err := d3.loadNetworks(); err != nil || len(n.ASes) == 0 {
+	if n, err := loadNetworks(d3.path(networksFile)); err != nil || len(n.ASes) == 0 {
 		t.Errorf("previous cache file lost: %v", err)
 	}
 	// Run returns when its context ends.
@@ -307,6 +307,100 @@ func TestData_RefreshCacheAndFailure(t *testing.T) {
 	cancel()
 	New(Options{Dir: t.TempDir(), Crawlers: "http://127.0.0.1:1/x", Monitoring: "http://127.0.0.1:1/y",
 		Networks: "http://127.0.0.1:1/z", Countries: "http://127.0.0.1:1/w", Log: quiet}).Run(ctx)
+}
+
+// A bot list that does not parse (an error page served with 200) never replaces the good cached pair: the files on
+// disk keep their content and age (so the next refresh tries again), and a restart without network still has them.
+func TestData_BotListRollback(t *testing.T) {
+	var html atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case html.Load() && r.URL.Path == "/monitoring.json":
+			_, _ = io.WriteString(w, "<html>rate limited</html>")
+		case r.URL.Path == "/crawlers.json":
+			_, _ = io.WriteString(w, crawlers)
+		case r.URL.Path == "/monitoring.json":
+			_, _ = io.WriteString(w, monitoring)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	o := Options{Dir: dir, Crawlers: srv.URL + "/crawlers.json", Monitoring: srv.URL + "/monitoring.json",
+		Networks: srv.URL + "/none", Countries: srv.URL + "/none", Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	d := New(o)
+	d.Refresh(t.Context())
+	if d.Bots() == nil {
+		t.Fatal("bot list not loaded")
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	for _, f := range []string{crawlersFile, monitorFile} {
+		_ = os.Chtimes(filepath.Join(dir, f), old, old)
+	}
+	html.Store(true)
+	d.Refresh(t.Context())
+	if d.Bots() == nil {
+		t.Fatal("bot list dropped from memory")
+	}
+	for f, want := range map[string]string{crawlersFile: crawlers, monitorFile: monitoring} {
+		got, err := os.ReadFile(filepath.Join(dir, f))
+		st, _ := os.Stat(filepath.Join(dir, f))
+		if err != nil || string(got) != want || !st.ModTime().Equal(old) {
+			t.Errorf("%s replaced by the failed refresh: %q", f, got)
+		}
+	}
+	if !d.stale(crawlersFile) {
+		t.Error("a failed refresh marked the cache fresh")
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 2 {
+		t.Errorf("leftover files: %v", entries)
+	}
+	d2 := New(o)
+	d2.LoadCached()
+	if d2.Bots() == nil || len(d2.Bots().Providers) == 0 {
+		t.Error("restart lost the bot list")
+	}
+}
+
+// Prefixes broad enough to swallow every address are left out of every list, and counted.
+func TestParse_OverbroadPrefixes(t *testing.T) {
+	b, err := parseBots([]byte(`{"services":{"Evil":{"ipv4":["0.0.0.0/0","10.0.0.0/7","66.249.64.0/19"],
+		"ipv6":["::/0","2001:db8::/19","::ffff:0.0.0.0/96","2001:4860::/32"],"ip_list_authoritative":true}}}`),
+		[]byte(monitoring))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []string{"203.0.113.1", "2001:db9::1", "11.1.1.1"} {
+		if _, ok := b.ByIP(addr(a)); ok {
+			t.Errorf("%s matched an overbroad range", a)
+		}
+	}
+	for _, a := range []string{"66.249.66.1", "2001:4860::1"} {
+		if _, ok := b.ByIP(addr(a)); !ok {
+			t.Errorf("%s lost with the plausible ranges", a)
+		}
+	}
+	if b.Rejected.Count != 5 || len(b.Rejected.First) != 5 || b.Rejected.First[0] != "Evil 0.0.0.0/0" {
+		t.Errorf("rejected %+v", b.Rejected)
+	}
+	n, err := parseNetworks(bytes.NewReader(tarball(t, map[string]string{
+		"as/64500/aggregated.json": `{"asn":64500,"prefixes":{"ipv4":["0.0.0.0/0","192.0.2.0/24"],"ipv6":["::/8"]}}`})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := n.Lookup(addr("198.51.100.1")); ok || n.Rejected.Count != 2 {
+		t.Errorf("networks: rejected %+v", n.Rejected)
+	}
+	c, err := parseCountries(bytes.NewReader(tarball(t, map[string]string{
+		"country/ch/ch.json": `{"countryCode":"ch","prefixes":{"ipv4":["0.0.0.0/1","192.0.2.0/24"]}}`})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Lookup(addr("10.0.0.1")) != "" || c.Lookup(addr("192.0.2.1")) != "CH" || c.Rejected.Count != 1 {
+		t.Errorf("countries: rejected %+v", c.Rejected)
+	}
 }
 
 type fakeResolver struct {

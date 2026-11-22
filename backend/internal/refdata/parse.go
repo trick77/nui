@@ -21,6 +21,38 @@ const (
 	maxDecompressedBytes = 2 << 30  // one whole tarball, decompressed
 )
 
+// The shortest prefixes a list may name, per family. One broader entry would swallow everything: 0.0.0.0/0 in the
+// bot list made every address that bot. A bot operator's or an AS's block is at most a /8 (IPv4); IPv6 bot ranges
+// stay within an organisation's allocation (/20 and longer), AS and country data within an RIR's (/12). An
+// IPv4-mapped IPv6 prefix is refused too: it would stand for IPv4 space under another name.
+const (
+	botMinV4, botMinV6 = 8, 20
+	netMinV4, netMinV6 = 8, 12
+)
+
+func plausible(p netip.Prefix, v4, v6 int) bool {
+	switch {
+	case p.Addr().Is4():
+		return p.Bits() >= v4
+	case p.Addr().Is4In6():
+		return false
+	}
+	return p.Bits() >= v6
+}
+
+// Rejected is what a load refused: how many entries, the first few for the log.
+type Rejected struct {
+	Count int
+	First []string
+}
+
+func (r *Rejected) add(s string) {
+	r.Count++
+	if len(r.First) < 5 {
+		r.First = append(r.First, s)
+	}
+}
+
 // botFile mirrors ipverse/bot-ip-blocks crawlers.json and monitoring.json. ip_list_authoritative is a pointer so a
 // feed that leaves it out reads as non-authoritative, the safe side (verify by rDNS).
 type botFile struct {
@@ -70,7 +102,12 @@ func parseBots(crawlers, monitoring []byte) (*Bots, error) {
 			}
 			idx := int32(len(b.Providers)) //nolint:gosec // a few dozen services
 			for _, c := range slices.Concat(s.IPv4, s.IPv6) {
-				if pfx, err := netip.ParsePrefix(strings.TrimSpace(c)); err == nil {
+				pfx, err := netip.ParsePrefix(strings.TrimSpace(c))
+				switch {
+				case err != nil:
+				case !plausible(pfx, botMinV4, botMinV6):
+					b.Rejected.add(name + " " + pfx.String())
+				default:
 					b.table.Insert(pfx, idx)
 					p.HasRanges = true
 				}
@@ -132,7 +169,12 @@ func parseNetworks(r io.Reader) (*Networks, error) {
 		n.ASes = append(n.ASes, AS{ASN: e.ASN, Handle: e.Metadata.Handle, Name: e.Metadata.Description,
 			Country: e.Metadata.CountryCode, Category: e.Metadata.Category})
 		for _, c := range slices.Concat(e.Prefixes.IPv4, e.Prefixes.IPv6) {
-			if pfx, err := netip.ParsePrefix(c); err == nil {
+			pfx, err := netip.ParsePrefix(c)
+			switch {
+			case err != nil:
+			case !plausible(pfx, netMinV4, netMinV6):
+				n.Rejected.add(fmt.Sprintf("AS%d %s", e.ASN, pfx))
+			default:
 				n.table.Insert(pfx, int32(i))
 			}
 		}
@@ -168,7 +210,12 @@ func parseCountries(r io.Reader) (*Countries, error) {
 			c.Names[code] = e.Country
 		}
 		for _, p := range slices.Concat(e.Prefixes.IPv4, e.Prefixes.IPv6) {
-			if pfx, err := netip.ParsePrefix(p); err == nil {
+			pfx, err := netip.ParsePrefix(p)
+			switch {
+			case err != nil:
+			case !plausible(pfx, netMinV4, netMinV6):
+				c.Rejected.add(code + " " + pfx.String())
+			default:
 				c.table.Insert(pfx, idx)
 			}
 		}
