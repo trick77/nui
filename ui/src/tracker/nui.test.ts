@@ -168,6 +168,57 @@ describe("sending", () => {
     expect(s.dropped).toBeGreaterThan(100);
   });
 
+  // A host-page value whose every read is counted: as wide and as deep as
+  // anyone walks it.
+  const endless = () => {
+    const reads = { n: 0 };
+    const keys = Array.from({ length: 100 }, (_, i) => "k" + i);
+    const node = (): object =>
+      new Proxy(
+        {},
+        {
+          ownKeys: () => keys,
+          getOwnPropertyDescriptor: () => ({
+            enumerable: true,
+            configurable: true,
+          }),
+          get: () => {
+            reads.n++;
+            return node();
+          },
+        },
+      );
+    return { reads, value: node() };
+  };
+
+  it("checks the caps before doing any work for an event", () => {
+    const t = boot();
+    for (let i = 0; i < LIMITS.perMinute; i++) t.event("fill");
+    const get = vi.spyOn(Storage.prototype, "getItem");
+    const set = vi.spyOn(Storage.prototype, "setItem");
+    const { reads, value } = endless();
+    const name = { toString: vi.fn(() => "x") };
+    t.event(name, { state: value });
+    expect(reads.n).toBe(0);
+    expect(name.toString).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("bounds the work one event's props can cost", () => {
+    const t = boot();
+    const { reads, value } = endless();
+    t.event("x", { state: value, other: value });
+    expect(reads.n).toBeLessThan(400);
+    expect(t.state().queued).toBe(3);
+    // clip reads at most max + 1 code units and still never splits a pair.
+    const tail = "x".repeat(1_000_000);
+    expect(clip("a".repeat(511) + "😀" + tail, 512)).toBe("a".repeat(511));
+    expect(clip("a".repeat(508) + "😀" + tail, 512)).toBe(
+      "a".repeat(508) + "😀",
+    );
+  });
+
   it("caps events per page and bounds the queue", async () => {
     const t = boot();
     // A collector that never answers: everything stays queued.

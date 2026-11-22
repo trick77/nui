@@ -36,6 +36,8 @@ export const LIMITS = {
   keys: 64,
   items: 50,
   depth: 8,
+  // Values visited per walk of a host page's props.
+  nodes: 200,
   props: 4096,
   queue: 100,
   perPage: 300,
@@ -77,8 +79,10 @@ export function utf8Len(s: string): number {
 }
 
 // s cut to at most max UTF-8 bytes, never inside a surrogate pair.
+// The work is bounded by max, not by the input: the result has at most max
+// code units, and one more keeps a pair at the cut whole.
 export function clip(v: unknown, max: number): string {
-  const s = v == null ? "" : String(v);
+  const s = (v == null ? "" : String(v)).slice(0, max + 1);
   if (s.length * 3 <= max || utf8Len(s) <= max) return s;
   let n = 0;
   let i = 0;
@@ -100,16 +104,21 @@ const URL_KEY = /^(url|ref|src|href)$/;
 // half by the clip is dropped.
 export function clipURL(v: unknown): string {
   return clip(
-    (v == null ? "" : String(v)).replace(/%(?![\da-f]{2})/gi, "%25"),
+    clip(v, LIMITS.url).replace(/%(?![\da-f]{2})/gi, "%25"),
     LIMITS.url,
   ).replace(/%[\da-f]?$/i, "");
 }
+
+// Values bound() may still visit in the current walk: a host page's object
+// costs the same whatever its size.
+let budget = 0;
 
 // A copy of v within the collector's limits: strings clipped by their key,
 // maps and arrays cut, too deep a container null, anything not JSON null.
 // key is the name the value is checked under, depth where the collector
 // counts it (0 for an event's p and for each ctx value).
 export function bound(v: unknown, key: string, depth: number): unknown {
+  if (--budget < 0) return null;
   if (typeof v === "string")
     return URL_KEY.test(key) ? clipURL(v) : clip(v, LIMITS.str);
   if (typeof v === "number") return isFinite(v) ? v : null;
@@ -117,15 +126,15 @@ export function bound(v: unknown, key: string, depth: number): unknown {
   if (!v || typeof v !== "object" || depth >= LIMITS.depth) return null;
   if (Array.isArray(v)) {
     const a: unknown[] = [];
-    for (let i = 0; i < v.length && i < LIMITS.items; i++)
+    for (let i = 0; i < v.length && i < LIMITS.items && budget > 0; i++)
       a.push(bound(v[i], key, depth + 1));
     return a;
   }
   const out: Props = {};
   let n = 0;
   for (const k in v as Props) {
+    if (++n > LIMITS.keys || budget <= 0) break;
     if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
-    if (++n > LIMITS.keys) break;
     const c = clip(k, LIMITS.key);
     out[c] = bound((v as Props)[k], c, depth + 1);
   }
@@ -135,6 +144,7 @@ export function bound(v: unknown, key: string, depth: number): unknown {
 // An event's props within the collector's limits; over the per-event
 // budget they are dropped, not the event.
 function fit(p: unknown): Props {
+  budget = LIMITS.nodes;
   const out = bound(p, "p", 0) as Props;
   return utf8Len(safeJSON(out)) > LIMITS.props ? { dropped: true } : out;
 }
@@ -145,6 +155,7 @@ export function cleanProps(p: unknown): Props {
   const out: Props = {};
   if (!p || typeof p !== "object") return out;
   let keys = 0;
+  budget = LIMITS.nodes;
   for (const k in p as Props) {
     if (!Object.prototype.hasOwnProperty.call(p, k)) continue;
     if (++keys > 32) break;
@@ -362,6 +373,7 @@ export function start(
     set("cookies", () => nav.cookieEnabled);
     set("inputs", () => ({ ...inputs }));
     // Each value is checked at depth 0, like an event's p.
+    budget = LIMITS.nodes;
     return bound(c, "", -1) as Props;
   };
 
@@ -395,7 +407,9 @@ export function start(
     return fresh;
   };
 
-  const admit = (t: number): boolean => {
+  // Checked before any work for an event: once a cap is reached, a host page
+  // calling in a loop costs nothing more.
+  const full = (t: number): boolean => {
     while (minute.length && t - minute[0] >= 60000) minute.shift();
     if (
       pageCount >= LIMITS.perPage ||
@@ -403,8 +417,12 @@ export function start(
       queue.length >= LIMITS.queue
     ) {
       dropped++;
-      return false;
+      return true;
     }
+    return false;
+  };
+  const admit = (t: number): boolean => {
+    if (full(t)) return false;
     pageCount++;
     minute.push(t);
     return true;
@@ -413,6 +431,7 @@ export function start(
   const record = (k: string, p: Props, n?: string) => {
     if (disabled) return;
     const t = now();
+    if (full(t)) return;
     if (session(t) && k !== "session_start") record("session_start", {});
     if (!admit(t)) return;
     const r: Rec = {
@@ -787,7 +806,7 @@ export function start(
   // Each message a few times; a bounded number of distinct ones, so a page
   // throwing ever new messages cannot grow the table.
   const jsError = (msg: string, extra: Props) => {
-    if (disabled) return;
+    if (disabled || full(now())) return;
     const key = clip(msg, 200);
     const n = errorsSeen.get(key) || 0;
     if (n >= LIMITS.sameError || (!n && errorsSeen.size >= LIMITS.errorKinds))
@@ -883,6 +902,7 @@ export function start(
   // ---- the public API, and calls queued before the script loaded
   const event = (name: unknown, props?: unknown) =>
     guard(() => {
+      if (disabled || full(now())) return;
       const n = clip(name, 128);
       if (n) record("custom", cleanProps(props), n);
     });
