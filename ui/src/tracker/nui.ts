@@ -35,6 +35,9 @@ export const LIMITS = {
   flushAt: 20,
   backoffMs: 2000,
   backoffMaxMs: 5 * 60 * 1000,
+  // Every delay, Retry-After included: browsers fire a timer over 2^31-1 ms
+  // at once.
+  retryMaxMs: 60 * 60 * 1000,
   failures: 5,
   sessionMs: 30 * 60 * 1000,
   sameError: 3,
@@ -303,10 +306,13 @@ export function start(
   const schedule = (ms: number) => {
     if (timer) return;
     try {
-      timer = setTimeout(() => {
-        timer = 0;
-        guard(() => flush(false));
-      }, ms);
+      timer = setTimeout(
+        () => {
+          timer = 0;
+          guard(() => flush(false));
+        },
+        Math.min(Math.max(ms, 0) || 0, LIMITS.retryMaxMs),
+      );
     } catch {
       timer = 0;
     }
@@ -360,7 +366,7 @@ export function start(
   };
 
   // ---- sending
-  const fail = (retryAfterS: number) => {
+  const fail = (retryMs: number) => {
     failures++;
     backoff = Math.min(
       LIMITS.backoffMaxMs,
@@ -371,7 +377,9 @@ export function start(
       queue.length = 0;
       return;
     }
-    notBefore = now() + Math.max(backoff, retryAfterS * 1000);
+    notBefore =
+      now() +
+      Math.min(LIMITS.retryMaxMs, Math.max(backoff, retryMs > 0 ? retryMs : 0));
   };
 
   const requeue = (batch: Rec[]) => {
@@ -477,7 +485,10 @@ export function start(
         } else if (st === 429 || st >= 500) {
           let ra = 0;
           try {
-            ra = Number(res.headers.get("Retry-After")) || 0;
+            // Seconds or an HTTP date; anything else (NaN) counts as 0.
+            const h = res.headers.get("Retry-After") || "";
+            const s = Number(h);
+            ra = isFinite(s) ? s * 1000 : Date.parse(h) - now();
           } catch {
             // no readable headers: the own back-off alone
           }

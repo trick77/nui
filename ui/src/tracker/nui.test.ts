@@ -224,6 +224,51 @@ describe("sending", () => {
     expect(t.state().queued).toBe(0);
   });
 
+  it("caps every delay, whatever Retry-After says", async () => {
+    const delays: number[] = [];
+    const real = globalThis.setTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      f: () => void,
+      ms?: number,
+    ) => {
+      delays.push(ms ?? 0);
+      return real(f, ms);
+    }) as typeof setTimeout);
+    for (const ra of ["1e10", "Infinity", "-5", "soon", "999999999999"]) {
+      tracker?.stop();
+      localStorage.clear();
+      fetchMock.mockReset();
+      fetchMock.mockImplementationOnce(() => reply(429, { "Retry-After": ra }));
+      fetchMock.mockImplementation(() => reply(204));
+      const t = boot();
+      t.flush();
+      await vi.advanceTimersByTimeAsync(0);
+      const armed = delays.length;
+      await vi.advanceTimersByTimeAsync(1000);
+      // A delay past 2^31-1 ms fires at once in browsers: a busy loop.
+      expect(delays.length - armed).toBeLessThan(3);
+      for (const d of delays) {
+        expect(Number.isFinite(d)).toBe(true);
+        expect(d).toBeGreaterThanOrEqual(0);
+        expect(d).toBeLessThanOrEqual(LIMITS.retryMaxMs);
+      }
+      await vi.advanceTimersByTimeAsync(LIMITS.retryMaxMs);
+      expect(t.state().queued).toBe(0);
+    }
+  });
+
+  it("reads Retry-After as an HTTP date", async () => {
+    const t = boot();
+    const at = new Date(Date.now() + 120_000).toUTCString();
+    fetchMock.mockImplementationOnce(() => reply(429, { "Retry-After": at }));
+    t.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("switches itself off on 403", async () => {
     const t = boot();
     fetchMock.mockImplementation(() => reply(403));
