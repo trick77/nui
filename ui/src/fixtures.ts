@@ -85,12 +85,14 @@ function labels(range: string): string[] {
       d.setUTCHours(d.getUTCHours() - back);
       return `${String(d.getUTCHours()).padStart(2, "0")}:00`;
     }
+    // As the backend writes them: "Jan", "02.01.", "15:00".
     if (range === "12mo") {
       d.setUTCMonth(d.getUTCMonth() - back);
-      return `${MONTHS[d.getUTCMonth()]} ${String(d.getUTCFullYear()).slice(2)}`;
+      return MONTHS[d.getUTCMonth()];
     }
     d.setUTCDate(d.getUTCDate() - back);
-    return `${d.getUTCDate()}.${d.getUTCMonth() + 1}.`;
+    const two = (n: number) => String(n).padStart(2, "0");
+    return `${two(d.getUTCDate())}.${two(d.getUTCMonth() + 1)}.`;
   });
 }
 
@@ -440,13 +442,29 @@ const LISTS: Record<string, ListRow[]> = {
     row("/privacy", 12, 12, null, "flat", { expandable: true, entry: 0 }),
   ],
   entry: [
-    row("/", 980, 1210, { pct: 4 }, "good"),
-    row("/AS:n", 610, 840, { pct: 25 }, "good", { expandable: true }),
-    row("/:ipv4", 402, 512, { pct: 11 }, "good", { expandable: true }),
-    row("/:text", 150, 388, { pct: -8 }, "bad", { expandable: true }),
-    row("/:cidr", 77, 141, { pct: 1 }, "flat", { expandable: true }),
-    row("/:ipv6", 40, 62, { new: true }, "good", { expandable: true }),
-    row("/about", 3, 31, { pct: -50 }, "bad"),
+    // entry as on pages: the backend sets it for both dimensions.
+    row("/", 980, 1210, { pct: 4 }, "good", { entry: 43.3 }),
+    row("/AS:n", 610, 840, { pct: 25 }, "good", {
+      expandable: true,
+      entry: 27,
+    }),
+    row("/:ipv4", 402, 512, { pct: 11 }, "good", {
+      expandable: true,
+      entry: 17.8,
+    }),
+    row("/:text", 150, 388, { pct: -8 }, "bad", {
+      expandable: true,
+      entry: 6.6,
+    }),
+    row("/:cidr", 77, 141, { pct: 1 }, "flat", {
+      expandable: true,
+      entry: 3.4,
+    }),
+    row("/:ipv6", 40, 62, { new: true }, "good", {
+      expandable: true,
+      entry: 1.8,
+    }),
+    row("/about", 3, 31, { pct: -50 }, "bad", { entry: 0.1 }),
   ],
   events: [
     row("form", 912, 640, { pct: 4 }, "good", { sub: "auto" }),
@@ -473,27 +491,35 @@ const LISTS: Record<string, ListRow[]> = {
     row("bing.com", 22, null, { pct: 1 }, "flat"),
     row("reddit.com", 12, null, { new: true }, "good"),
   ],
+  // By AS number: its name as label, its network kind as sub.
   networks: [
     row("64500", 410, null, { pct: 6 }, "good", {
       label: "AS64500 Example Broadband",
+      sub: "isp",
     }),
     row("64501", 330, null, { pct: -3 }, "bad", {
       label: "AS64501 ExampleNet Fiber",
+      sub: "isp",
     }),
     row("64502", 260, null, { pct: 22 }, "good", {
       label: "AS64502 Example Mobile",
+      sub: "isp",
     }),
     row("64503", 140, null, { pct: 41 }, "good", {
       label: "AS64503 Example University",
+      sub: "education",
     }),
     row("64504", 90, null, { pct: 0 }, "flat", {
       label: "AS64504 Example Telecom",
+      sub: "isp",
     }),
     row("64505", 61, null, { new: true }, "good", {
       label: "AS64505 Example Cable",
+      sub: "isp",
     }),
-    row("64506", 30, null, { pct: 2 }, "flat", {
-      label: "AS64506 Example Net",
+    row("64510", 30, null, { pct: 2 }, "flat", {
+      label: "AS64510 Example Cloud",
+      sub: "hosting",
     }),
   ],
   // A method and template, its most frequent status as sub.
@@ -600,6 +626,7 @@ function list(q: URLSearchParams, feed: boolean): List | null {
   const within = q.get("within");
   let rows: ListRow[];
   if (within) {
+    // A template's raw paths carry their own entry share too.
     rows = (WITHIN[within] ?? []).map((p, i) =>
       row(
         p,
@@ -607,14 +634,21 @@ function list(q: URLSearchParams, feed: boolean): List | null {
         Math.round(700 / (i + 1)),
         { pct: 10 - 3 * i },
         i < 3 ? "good" : "bad",
+        dim === "pages" || dim === "entry"
+          ? { entry: round1(12 / (i + 1)) }
+          : {},
       ),
     );
   } else rows = [...(LISTS[dim] ?? [])];
   if (dim === "errors" && !feed) rows = rows.filter((r) => r.sub === "js");
   if (q.get("sub")) rows = rows.filter((r) => r.sub === q.get("sub"));
+  // Shares are of every row the query matched, before the search narrows
+  // them, as the backend sums them.
+  const total = sum(rows.map((r) => r.value));
+  // The search matches key and label, not sub.
   if (term)
     rows = rows.filter((r) =>
-      `${r.key} ${r.label} ${r.sub}`.toLowerCase().includes(term),
+      `${r.key} ${r.label}`.toLowerCase().includes(term),
     );
   if (q.get("sort") === "change") {
     const mag = (r: ListRow) =>
@@ -625,7 +659,6 @@ function list(q: URLSearchParams, feed: boolean): List | null {
           : Math.abs("pct" in r.change ? r.change.pct : r.change.pp);
     rows.sort((a, b) => mag(b) - mag(a));
   }
-  const total = sum(rows.map((r) => r.value));
   rows = rows.map((r) => ({
     ...r,
     share: Math.round((r.value / (total || 1)) * 100),
@@ -657,7 +690,14 @@ const VISITORS: VisitorRow[] = [
     refused_share: 99.9,
     events: 0,
     last: "2026-11-22T13:19:42Z",
-    signals: ["no script beacon", "no assets", "0.8 s interval"],
+    // The classifier's reasons, verbatim.
+    signals: [
+      "client python-requests/2.32.3",
+      "mostly refused",
+      "API only, no page loaded",
+      "rapid requests",
+      "hosting network",
+    ],
     does: {
       gen: "Walks the IP lookup API in address order with an invalid key: a scraping attempt.",
       text: "Unknown automated, mostly GET /api/v1/ip/{addr} → 401 (2338×)",
@@ -679,7 +719,12 @@ const VISITORS: VisitorRow[] = [
     refused_share: 0.6,
     events: 9,
     last: "2026-11-22T13:12:08Z",
-    signals: ["pointer + scroll", "assets loaded"],
+    signals: [
+      "script beacon",
+      "engaged",
+      "assets loaded",
+      "also unknown automated: curl/8.4.0, 12 of 330 events (client curl/8.4.0)",
+    ],
     does: {
       gen: "Looked up one AS after a search, then left for the GitHub data repository.",
       text: "Person, mostly view /AS:n (40×)",
@@ -694,14 +739,16 @@ const VISITORS: VisitorRow[] = [
     class: "bot",
     client: "Googlebot/2.1",
     client_gen: null,
-    visits: null,
+    // Its page views came with the script: visits are counted (null only
+    // for an address without browser events).
+    visits: 64,
     views: 212,
     requests: 1904,
     refused: 14,
     refused_share: 0.7,
     events: 0,
     last: "2026-11-22T13:17:20Z",
-    signals: ["ipverse crawlers.json", "renders JS"],
+    signals: ["Googlebot address range"],
     does: { gen: null, text: "Known bot, mostly view /AS:n (1520×)" },
   },
   {
@@ -720,7 +767,7 @@ const VISITORS: VisitorRow[] = [
     refused_share: 0,
     events: 4,
     last: "2026-11-22T12:58:40Z",
-    signals: ["3 addresses in this /64"],
+    signals: ["script beacon", "engaged", "assets loaded"],
     does: {
       gen: "Checked an IPv6 address, then went on to the console.",
       text: "Person, mostly view /:ipv6 (12×)",
@@ -742,7 +789,7 @@ const VISITORS: VisitorRow[] = [
     refused_share: 0,
     events: 0,
     last: "2026-11-22T13:20:00Z",
-    signals: ["ipverse monitoring.json", "every 60 s"],
+    signals: ["UptimeRobot address range"],
     does: {
       gen: "Uptime check of the front page, once a minute.",
       text: "Uptime probe, mostly HEAD / → 200 (1440×)",
@@ -764,7 +811,7 @@ const VISITORS: VisitorRow[] = [
     refused_share: 58.8,
     events: 0,
     last: "2026-11-22T11:41:09Z",
-    signals: ["navigator.webdriver", "no input", "800×600"],
+    signals: ["navigator.webdriver set", "hosting network"],
     does: {
       gen: "Headless Chrome stepping through AS pages one per second: a scraper.",
       text: "Unknown automated, mostly view /AS:n (97×)",
@@ -786,7 +833,7 @@ const VISITORS: VisitorRow[] = [
     refused_share: 0,
     events: 1,
     last: "2026-11-22T08:30:11Z",
-    signals: ["touch", "assets loaded"],
+    signals: ["script beacon", "assets loaded"],
     does: {
       gen: "Looked up a single address on a phone.",
       text: "Person, mostly view /:ipv4 (3×)",
@@ -808,7 +855,7 @@ const VISITORS: VisitorRow[] = [
     refused_share: 0,
     events: i % 2,
     last: "2026-11-21T18:00:00Z",
-    signals: ["touch"],
+    signals: ["script beacon"],
     does: { gen: null, text: `Person, mostly view /AS:n (${3 - (i % 3)}×)` },
   })),
 ];
