@@ -8,6 +8,7 @@
 
 Go types:
 
+- `dash.classInfo` (internal/dash): classInfo is one address key's stored class and its reasons for a day.
 - `store.ActorClass` (internal/store): ActorClass is one actor's class on one day, with its reasons.
 
 | Column | Type | Null | Default | PK |

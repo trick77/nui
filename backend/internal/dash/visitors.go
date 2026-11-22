@@ -156,11 +156,6 @@ func (s *Server) classes(ctx context.Context, site int64, from, to time.Time) (m
 
 const dayMS = int64(24 * time.Hour / time.Millisecond)
 
-type classInfo struct {
-	class   string
-	signals []string
-}
-
 type does struct {
 	Gen  *string `json:"gen"`
 	Text string  `json:"text"`

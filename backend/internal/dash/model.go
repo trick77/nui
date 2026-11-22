@@ -21,6 +21,14 @@ type live struct {
 	Automated int64 `json:"automated"`
 }
 
+// classInfo is one address key's stored class and its reasons for a day.
+//
+// Table: actor_class
+type classInfo struct {
+	class   string
+	signals []string
+}
+
 // actor is one address key's events summed over a range.
 //
 // Table: event
