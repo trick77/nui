@@ -376,3 +376,23 @@ func TestExact_LatestClient(t *testing.T) {
 		t.Errorf("ip_version %v", ipv)
 	}
 }
+
+// A person types a client with ordinary spaces, the table shows it with en spaces: any spacing finds it.
+func TestExact_SearchFoldsSpaces(t *testing.T) {
+	r, insert := exactRig(t)
+	insert(pageLoad(at("2026-11-20T10:00:00Z"), "a", "192.0.2.9", "CH", "Mozilla/5.0 (Windows) Firefox/140", 0)...)
+	for _, q := range []string{"firefox · windows", "Firefox\xe2\x80\x82·\xe2\x80\x82Windows", " firefox  ·\twindows"} {
+		_, v := r.get(t, "visitors", p(feedSite, "q", q))
+		if n := len(v["rows"].([]any)); n != 1 {
+			t.Errorf("q %q: %d rows", q, n)
+		}
+	}
+	// A model's label holds the separator with en spaces too.
+	r.s.Model = &fakeModel{}
+	if err := r.s.DB.PutLabel(t.Context(), "ua", "x/1", "Script\xe2\x80\x82·\xe2\x80\x82walker"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.s.labelMatches(t.Context(), foldSpaces("script · walker")); err != nil || !got["x/1"] {
+		t.Errorf("label match %v %v", got, err)
+	}
+}
