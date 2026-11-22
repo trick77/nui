@@ -41,6 +41,7 @@ export const LIMITS = {
   props: 4096,
   queue: 100,
   perPage: 300,
+  perDocument: 1000,
   perMinute: 60,
   flushAfterMs: 5000,
   flushAt: 20,
@@ -239,6 +240,7 @@ export function start(
   const errorsSeen = new Map<string, number>();
   const offs: (() => void)[] = [];
   let pageCount = 0;
+  let docCount = 0;
   let dropped = 0;
   let disabled = false;
   let failures = 0;
@@ -416,6 +418,7 @@ export function start(
     while (minute.length && t - minute[0] >= 60000) minute.shift();
     if (
       pageCount >= LIMITS.perPage ||
+      docCount >= LIMITS.perDocument ||
       minute.length >= LIMITS.perMinute ||
       queue.length >= LIMITS.queue
     ) {
@@ -427,6 +430,7 @@ export function start(
   const admit = (t: number): boolean => {
     if (full(t)) return false;
     pageCount++;
+    docCount++;
     minute.push(t);
     return true;
   };
@@ -695,14 +699,20 @@ export function start(
   on(win, "focus", tick);
   on(win, "blur", tick);
 
-  // Page views, SPA navigation included.
+  // Page views, SPA navigation included. A navigation changes the path or
+  // a client-side route in the fragment, never the query alone: a search box
+  // that writes its text into the URL is one page. Each page has its own
+  // budget of events, the document a higher one.
   let lastPage = "";
-  const pageKey = () => loc.pathname + loc.search;
+  const pageKey = () =>
+    loc.pathname +
+    (/^#[/!]/.test(loc.hash) ? loc.hash.replace(/\?[^]*$/, "") : "");
   const pageView = (force: boolean) => {
     const k = pageKey();
     if (!force && k === lastPage) return;
     if (lastPage) engagement();
     lastPage = k;
+    pageCount = 0;
     record("page_view", {});
   };
   const hist = win.history;
@@ -725,6 +735,7 @@ export function start(
     }
   }
   on(win, "popstate", () => pageView(false));
+  on(win, "hashchange", () => pageView(false));
   on(win, "pageshow", (e) => {
     if ((e as PageTransitionEvent).persisted) {
       activeSince = isActive() ? now() : 0;

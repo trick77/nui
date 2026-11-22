@@ -452,6 +452,58 @@ describe("capture", () => {
     expect(ev[2].url).toBeUndefined();
   });
 
+  it("counts a change of path or route as a navigation, not of query alone", async () => {
+    const t = boot();
+    const go = (u: string, replace = false) => {
+      vi.advanceTimersByTime(1000);
+      history[replace ? "replaceState" : "pushState"](null, "", u);
+    };
+    for (const q of ["a", "ab", "abc"]) go("/?q=" + q, true);
+    go("/?q=abcd");
+    go("/#section");
+    go("/app#/list");
+    go("/app#/list?sort=new");
+    go("/app#!/item/7");
+    vi.advanceTimersByTime(1000);
+    location.hash = "#/item/8";
+    await vi.advanceTimersByTimeAsync(0);
+    const ev = await flushed(t);
+    expect(
+      ev.filter((e) => e.k === "page_view").map((e) => e.url ?? "here"),
+    ).toEqual([
+      location.origin + "/",
+      location.origin + "/app#/list",
+      location.origin + "/app#!/item/7",
+      "here",
+    ]);
+    expect(ev.filter((e) => e.k === "engagement")).toHaveLength(3);
+  });
+
+  it("gives each page its own budget, within a ceiling per document", async () => {
+    const t = boot();
+    fetchMock.mockImplementation(() => reply(204));
+    const views = () => kinds().filter((k) => k === "page_view").length;
+    for (let m = 0; m < 6; m++) {
+      for (let i = 0; i < LIMITS.perMinute; i++) t.event("e");
+      t.flush(true);
+      await vi.advanceTimersByTimeAsync(61_000);
+    }
+    history.pushState(null, "", "/next");
+    t.flush(true);
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(views()).toBe(2);
+    // A loop of navigations stays within the document's ceiling.
+    for (let m = 0; m < 40; m++) {
+      for (let i = 0; i < LIMITS.perMinute; i++) {
+        history.pushState(null, "", "/n" + m + "-" + i);
+        t.event("e");
+      }
+      t.flush(true);
+      await vi.advanceTimersByTimeAsync(61_000);
+    }
+    expect(kinds().length).toBeLessThanOrEqual(LIMITS.perDocument);
+  });
+
   it("restores history on stop", () => {
     const before = history.pushState;
     const t = boot();
