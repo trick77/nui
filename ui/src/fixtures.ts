@@ -1,4 +1,4 @@
-// Synthetic API answers that follow the contract, for the tests and for the
+// Synthetic answers in the dashboard API's shapes, for the tests and for the
 // dev server's fixture mode (npm run dev:fixtures). Never part of the
 // production bundle: main.tsx imports it only under import.meta.env.DEV.
 // The numbers stand in for the backend's, so this file may compute; the

@@ -167,7 +167,7 @@ body {
   }
 }
 
-/* ---- The dashboard's furniture, after the approved mock (v3). ---- */
+/* ---- The dashboard's furniture. ---- */
 
 /* Usable from a 768px window: its scrollbar takes some of that. */
 body {
@@ -206,7 +206,7 @@ body {
 }
 /* Centred on the x-height band of the menu labels, not on the line box:
    with line-height 1 the serif's lowercase sits half a pixel low against
-   the 13.5px sans labels beside it (measured in the mock). */
+   the 13.5px sans labels beside it (measured). */
 .wordmark {
   position: relative;
   top: -0.5px;

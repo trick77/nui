@@ -40,6 +40,17 @@ export function useDash(): Dash {
   return d;
 }
 
+// Panels that always show every class, whatever the audience switch
+// says: the server's traffic and the errors.
+export function AllClasses({ children }: { children: ReactNode }) {
+  const d = useDash();
+  return (
+    <DashContext.Provider value={{ ...d, scope: { ...d.scope, aud: "all" } }}>
+      {children}
+    </DashContext.Provider>
+  );
+}
+
 export const CLASSES: { key: ClassKey; label: string; color: string }[] = [
   { key: "human", label: "Humans", color: "var(--color-s1)" },
   { key: "bot", label: "Known bots", color: "var(--color-s2)" },
@@ -285,7 +296,7 @@ export function Loadable<T>({
   return <>{children(data)}</>;
 }
 
-// A tooltip that follows the pointer, as in the mock: fixed, flipped to
+// A tooltip that follows the pointer: fixed, flipped to
 // the left near the window's right edge.
 export type TipData = {
   x: number;

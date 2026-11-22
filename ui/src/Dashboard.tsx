@@ -269,7 +269,12 @@ export default function Dashboard({ me }: { me: Me }) {
                   <Noteworthy />
                   {feed ? <WhoIsAsking classes={classes} /> : <ErrorsPanel />}
                 </div>
-                {feed && <Traffic classes={classes} />}
+                {feed && (
+                  <Traffic
+                    classes={classes}
+                    open={ov.data?.period.last_bucket_open ?? true}
+                  />
+                )}
                 <Visitors aud={view.aud} />
                 <Content />
                 <Origin aud={view.aud} />

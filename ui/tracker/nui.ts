@@ -512,15 +512,17 @@ export function start(
       timer = 0;
     }
     const url = clip(loc.href, LIMITS.url);
-    // One request in normal operation; a final flush sends what fits.
-    let rounds = final ? 4 : 1;
+    // One request in normal operation. A final flush sends two at most:
+    // browsers cap the keepalive bodies in flight at 64 KiB together, and
+    // a third batch would be refused and count as a failure.
+    let rounds = final ? 2 : 1;
     while (rounds-- > 0 && queue.length && !disabled) {
       const b = take(url);
       if (!b) return;
       deliver(b.body, b.batch, final);
       if (inFlight) break;
     }
-    if (queue.length && !disabled && !final) schedule(LIMITS.flushAfterMs);
+    if (queue.length && !disabled) schedule(LIMITS.flushAfterMs);
   };
 
   // ---- capture

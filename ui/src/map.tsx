@@ -1,7 +1,7 @@
 // The world map without a map library: Natural Earth 110m country
 // outlines (public domain; src/map/countries-110m.json, a TopoJSON keyed by
 // ISO 3166-1 alpha-2, Antarctica left out) decoded and projected by hand,
-// equirectangular, as in the mock. Loaded as its own chunk on first use.
+// equirectangular. Loaded as its own chunk on first use.
 
 import { useEffect, useRef, useState } from "react";
 import type { ListRow } from "./api";

@@ -71,7 +71,8 @@ export function viewHref(base: string, v: View): string {
   if (v.site) q.set("site", v.site);
   if (v.range !== "7d") q.set("range", v.range);
   if (v.page === "dash") {
-    if (v.aud !== "all") q.set("aud", v.aud);
+    // Always written: left out, a reload would take another tab's choice.
+    q.set("aud", v.aud);
     if (v.cmp !== "prev") q.set("cmp", v.cmp);
   } else {
     for (const k of LOG_KEYS) {

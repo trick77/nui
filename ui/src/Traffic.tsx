@@ -4,6 +4,7 @@ import { num, pct } from "./format";
 import { type Loaded, useApi } from "./hooks";
 import { TopList, scopeKey } from "./lists";
 import {
+  AllClasses,
   CLASSES,
   CardHead,
   Delta,
@@ -89,8 +90,17 @@ export function WhoIsAsking({ classes }: { classes: Loaded<Classes> }) {
   );
 }
 
-// Errors: JS errors, and the server's 5xx where there is a feed.
+// Errors: JS errors, and the server's 5xx where there is a feed. Part of
+// Traffic, so every class, whatever the audience switch says.
 export function ErrorsPanel() {
+  return (
+    <AllClasses>
+      <Errors />
+    </AllClasses>
+  );
+}
+
+function Errors() {
   const { feed, openLog } = useDash();
   return (
     <TopList
@@ -138,8 +148,23 @@ const mono = (s: string) => (
 );
 
 // The server's view: requests per class, errors, probed paths, refused
-// requests by address. Shown only on a domain with a feed.
-export function Traffic({ classes }: { classes: Loaded<Classes> }) {
+// requests by address. Shown only on a domain with a feed, always over
+// every class.
+export function Traffic(props: { classes: Loaded<Classes>; open: boolean }) {
+  return (
+    <AllClasses>
+      <TrafficPanels {...props} />
+    </AllClasses>
+  );
+}
+
+function TrafficPanels({
+  classes,
+  open,
+}: {
+  classes: Loaded<Classes>;
+  open: boolean;
+}) {
   const { scope, openLog } = useDash();
   const st = useApi<Status>(scopeKey("status", scope), (s) =>
     api.status(scope, s),
@@ -173,7 +198,7 @@ export function Traffic({ classes }: { classes: Loaded<Classes> }) {
           ) : !c ? (
             <Skeleton h={250} />
           ) : (
-            <StackChart labels={c.labels} series={c.series} open />
+            <StackChart labels={c.labels} series={c.series} open={open} />
           )}
         </Panel>
         <ErrorsPanel />

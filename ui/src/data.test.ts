@@ -122,7 +122,7 @@ describe("state", () => {
 
   it("writes the URL back, defaults left out", () => {
     const v = parseView("/dashboard/", "");
-    expect(viewHref("/dashboard/", v)).toBe("/dashboard/");
+    expect(viewHref("/dashboard/", v)).toBe("/dashboard/?aud=all");
     expect(
       viewHref("/dashboard/", {
         ...v,

@@ -185,10 +185,16 @@ describe("sending", () => {
     const t = boot();
     const props: Record<string, string> = {};
     for (let i = 0; i < 7; i++) props["k" + i] = "y".repeat(500);
-    for (let i = 0; i < 18; i++) t.event("big", props);
+    for (let i = 0; i < 30; i++) t.event("big", props);
+    // The 20th event already flushed one batch.
+    const before = fetchMock.mock.calls.length;
     t.flush(true);
     await vi.advanceTimersByTimeAsync(0);
-    expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
+    // Two at once at most: the keepalive quota is 64 KiB in flight.
+    expect(fetchMock.mock.calls.length - before).toBe(2);
+    expect(t.state().queued).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(LIMITS.flushAfterMs * 3);
+    expect(t.state().queued).toBe(0);
     for (const c of fetchMock.mock.calls) {
       const body = (c[1] as RequestInit).body as string;
       expect(utf8Len(body)).toBeLessThanOrEqual(LIMITS.batchBytes);
@@ -196,7 +202,7 @@ describe("sending", () => {
         LIMITS.batchEvents,
       );
     }
-    expect(kinds().filter((k) => k === "custom")).toHaveLength(18);
+    expect(kinds().filter((k) => k === "custom")).toHaveLength(30);
   });
 
   it("honours Retry-After on 429 and sends again later", async () => {

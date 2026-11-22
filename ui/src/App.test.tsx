@@ -138,6 +138,17 @@ describe("dashboard on a domain with a server feed", () => {
     expect(
       await screen.findByText("Addresses per day · bots"),
     ).toBeInTheDocument();
+    // Traffic and the errors show every class whatever the switch says.
+    await waitFor(() =>
+      expect(lastCall("/api/dash/visitors").get("aud")).toBe("bots"),
+    );
+    const traffic = calls.filter(
+      (c) =>
+        c.startsWith("/api/dash/status") ||
+        /dim=(probed|refused|errors)/.test(c),
+    );
+    expect(traffic.length).toBeGreaterThan(0);
+    expect(traffic.every((c) => c.includes("aud=all"))).toBe(true);
     // The class filter of the visitor table is only there under All.
     expect(screen.queryByRole("group", { name: "Class" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "off" }));
@@ -301,10 +312,12 @@ describe("dashboard on a domain with a server feed", () => {
       expect(calls.some((c) => c.includes("dim=entry"))).toBe(true),
     );
     fireEvent.click(within(pages).getByRole("button", { name: "Top" }));
-    await within(pages).findByText("1’890", {
-      exact: false,
-      normalizer: (s) => s.replace("'", "’"),
-    });
+    // Rows are keyed by position (so nothing re-animates): wait until the
+    // Top answer is drawn, or the caret found may already belong to
+    // another row.
+    await waitFor(() =>
+      expect(within(pages).getAllByRole("row")[2]).toHaveTextContent("/AS:n"),
+    );
     fireEvent.click(within(pages).getByRole("button", { name: "Open /AS:n" }));
     expect(await within(pages).findByText("/AS15169")).toBeInTheDocument();
     expect(within(pages).getByText("and 1 more")).toBeInTheDocument();

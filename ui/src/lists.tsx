@@ -1,4 +1,4 @@
-// The top-N rule (plan section 3): every list shows six rows from the
+// The top-N rule: every list shows six rows from the
 // backend, the rest as "Other", a switch between by volume and by change,
 // and "Show all" with the full, searchable table. The backend ranks and
 // cuts; the UI only draws what it was given.
@@ -6,7 +6,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { api, type Dim, type List, type ListRow } from "./api";
 import { BarRows } from "./charts";
-import { num, pct } from "./format";
+import { changeText, num, pct } from "./format";
 import { useApi, useDebounced } from "./hooks";
 import {
   CardHead,
@@ -147,6 +147,14 @@ export function TopList({
                 change: compare ? r.change : null,
                 verdict: r.verdict,
                 onClick: onRow ? () => onRow(r) : undefined,
+                title: [
+                  r.label,
+                  `${num(r.value)} · ${pct(r.share)}`,
+                  r.change ? changeText(r.change) : "",
+                  onRow ? "click for the log" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · "),
               }))}
               other={l.data.other}
             />

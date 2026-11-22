@@ -385,7 +385,7 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
                       {t.kind}
                       {t.count > 1 ? ` × ${num(t.count)}` : ""}
                     </span>
-                    <span className="font-mono text-[12.5px] break-all">
+                    <span className="font-mono text-[12.5px] wrap-anywhere">
                       {trailText(t)}
                     </span>
                   </li>

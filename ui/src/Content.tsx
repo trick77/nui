@@ -4,7 +4,7 @@ import { type Col, TopList } from "./lists";
 import { Delta, SectionHead, useDash } from "./ui";
 
 const mono = (s: string) => (
-  <span className="font-mono text-[12.5px] break-all">{s}</span>
+  <span className="font-mono text-[12.5px] wrap-anywhere">{s}</span>
 );
 const change: Col = {
   head: "Change",
@@ -19,7 +19,7 @@ export function Content() {
     { head: "Path", cell: (r) => mono(r.label) },
     { head: "Visitors", num: true, cell: (r) => num(r.value) },
     { head: "Views", num: true, cell: (r) => num(r.second) },
-    // Entries per page are not in the contract yet: shown when sent.
+    // Shown only when the backend sends entries per page.
     {
       head: "Entry",
       num: true,

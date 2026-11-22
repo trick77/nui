@@ -1,5 +1,4 @@
-// The dashboard API's wire types and a typed client, as the API contract
-// describes them. Every number is computed by the backend; the UI formats
+// The dashboard API's wire types and a typed client. Every number is computed by the backend; the UI formats
 // and draws only. JSON keys are snake_case, times RFC 3339 UTC.
 
 export type Range = "24h" | "7d" | "30d" | "90d" | "12mo";
@@ -121,8 +120,8 @@ export type ListRow = {
   change: Change;
   verdict: Verdict | null;
   expandable?: boolean;
-  // Not in the contract yet: entries for pages, the map shade for
-  // countries (1 lightest to 4). Shown only when the backend sends them.
+  // Optional: entries for pages, the map shade for countries (1 lightest
+  // to 4). Shown only when the backend sends them.
   entry?: number;
   level?: number;
 };
@@ -345,8 +344,8 @@ export const api = {
       sort?: "volume" | "change";
       limit?: number;
       within?: string;
-      // Not in the contract: a search term and the custom-event filter
-      // the full table and the Events tab need.
+      // The full table's search term and the Events tab's custom-event
+      // filter.
       q?: string;
       sub?: string;
     },
@@ -392,7 +391,7 @@ export const api = {
       },
       signal,
     ),
-  // cursor: not in the contract (trail_next is, the parameter is not).
+  // cursor: a previous answer's trail_next, for earlier trail entries.
   visitor: (s: Scope, key: string, cursor?: string, signal?: AbortSignal) =>
     dash<Visitor>("visitor", s, { key, cursor }, signal),
   log: (s: Scope, f: LogFilter, cursor?: string, signal?: AbortSignal) =>
