@@ -214,12 +214,29 @@ describe("dashboard on a domain with a server feed", () => {
       ).toHaveLength(0),
     );
     expect(screen.getByText(/no comparison/)).toBeInTheDocument();
-    // Back restores the previous view.
+    // Back restores the previous view: the comparison on again, range and
+    // audience as they were.
     act(() => {
       window.history.back();
     });
     await waitFor(() =>
       expect(window.location.search).not.toContain("cmp=off"),
+    );
+    const pressed = (group: string) =>
+      within(screen.getByRole("group", { name: group }))
+        .getAllByRole("button", { pressed: true })
+        .map((b) => b.textContent);
+    await waitFor(() =>
+      expect(pressed("Compare")).toEqual(["vs previous period"]),
+    );
+    expect(pressed("Range")).toEqual(["30d"]);
+    expect(pressed("Audience")).toEqual(["Bots"]);
+    expect(screen.queryByText(/no comparison/)).toBeNull();
+    expect(
+      await screen.findAllByRole("button", { name: "By change" }),
+    ).not.toHaveLength(0);
+    await waitFor(() =>
+      expect(lastCall("/api/dash/overview").get("cmp")).toBe("prev"),
     );
   });
 
@@ -759,6 +776,16 @@ describe("dashboard on a domain without a server feed", () => {
     expect(screen.queryByRole("link", { name: "Traffic" })).toBeNull();
     const d = screen.getByRole("region", { name: "This domain" });
     expect(await within(d).findByText(/not connected/)).toBeInTheDocument();
+    await within(v).findAllByRole("row");
+    // Nothing only the feed can answer was asked for.
+    const serverOnly = calls.filter(
+      (c) =>
+        c.startsWith("/api/dash/classes") ||
+        c.startsWith("/api/dash/status") ||
+        /[?&]dim=(probed|refused)\b/.test(c),
+    );
+    expect(serverOnly).toEqual([]);
+    expect(calls.some((c) => c.startsWith("/api/dash/list"))).toBe(true);
     // The domain switch keeps the other filters.
     fireEvent.change(screen.getByRole("combobox", { name: "Domain" }), {
       target: { value: "lens.example.com" },
