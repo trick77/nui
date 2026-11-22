@@ -91,7 +91,7 @@ export function DomainFooter() {
               {counters.map(([k, v, warn], i) => (
                 <div
                   key={k}
-                  className={`px-[18px] py-3.5 ${i ? "border-l border-border" : ""}`}
+                  className={`flex flex-col justify-between px-[18px] py-3.5 ${i ? "border-l border-border" : ""}`}
                 >
                   <div className="eyebrow">{k}</div>
                   <div
