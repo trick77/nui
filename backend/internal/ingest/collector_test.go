@@ -500,6 +500,23 @@ func TestFeed_Hostile(t *testing.T) {
 	}
 }
 
+// The feed's Retry-After covers the retry: the refused batch, sent again once it has passed, is taken.
+func TestFeed_RetryAfterCoversTheRetry(t *testing.T) {
+	r := newRig(t, 0, true)
+	body := feedBody(domain, MaxFeedEvents, `{"t":1,"ip":"192.0.2.1"}`)
+	var w *httptest.ResponseRecorder
+	for w = r.feed(body, feedKey); w.Code != http.StatusTooManyRequests; w = r.feed(body, feedKey) {
+	}
+	secs, err := strconv.Atoi(w.Header().Get("Retry-After"))
+	if err != nil || secs < 1 {
+		t.Fatalf("Retry-After %q", w.Header().Get("Retry-After"))
+	}
+	r.advance(time.Duration(secs) * time.Second)
+	if w := r.feed(body, feedKey); w.Code != http.StatusNoContent {
+		t.Errorf("retry after Retry-After: %d", w.Code)
+	}
+}
+
 // A batch refused for the rate is sent again whole: its dropped events are counted when it is taken, once.
 func TestFeed_DroppedCountedOnce(t *testing.T) {
 	r := newRig(t, 0, true)
