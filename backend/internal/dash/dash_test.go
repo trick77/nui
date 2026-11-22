@@ -547,6 +547,32 @@ func TestTrailPaging(t *testing.T) {
 	}
 }
 
+// A session crossing a bucket boundary is one visit, not one per bucket it touches.
+func TestVisitsAcrossBuckets(t *testing.T) {
+	r := newRig(t, 0, 0, nil)
+	site, _ := r.s.Sites.Lookup(plainSite)
+	ev := func(ago time.Duration, sid string) store.Event {
+		return store.Event{SiteID: site.ID, TS: r.end.Add(-ago).UnixMilli(), Source: "browser", Kind: "page_view",
+			Visitor: "v1", SID: sid, IP: "192.0.2.40", IPKey: "192.0.2.40", Template: "/", Cls: store.ClsHuman}
+	}
+	// s1 runs from 12:50 to 13:10 UTC, across the 13:00 hour; s2 is a second visit.
+	evs := []store.Event{ev(40*time.Minute, "s1"), ev(20*time.Minute, "s1"), ev(5*time.Minute, "s2")}
+	if err := r.s.DB.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	for _, rng := range []string{"24h", "7d"} {
+		_, body := r.get(t, "visitors", p(plainSite, "range", rng))
+		rows := body["rows"].([]any)
+		if len(rows) != 1 {
+			t.Fatalf("%s: %d rows", rng, len(rows))
+		}
+		row := rows[0].(map[string]any)
+		if row["visits"] != 2.0 || row["views"] != 3.0 {
+			t.Errorf("%s: visits %v views %v, want 2 and 3", rng, row["visits"], row["views"])
+		}
+	}
+}
+
 func TestLog(t *testing.T) {
 	r := newRig(t, 2, 6, nil)
 	code, body := r.get(t, "log", p(feedSite, "range", "24h"))

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"net/http"
 	"net/netip"
@@ -20,11 +21,18 @@ import (
 	"github.com/trick77/nui/backend/internal/insight"
 )
 
-// actors sums every address key over the range's buckets.
+// actors sums every address key over the range's buckets. Visits are distinct sessions over the whole range: a
+// session crossing a bucket boundary is one visit, so they are counted from (key, session) pairs, never summed per
+// bucket.
 func (s *Server) actors(ctx context.Context, q *query) (map[string]*actor, error) {
 	out := map[string]*actor{}
+	// A hash per (key, session) seen: a few bytes each, not the strings.
+	sessions := map[uint64]struct{}{}
 	for i := 0; i < q.p.n(); i++ {
-		rows, err := s.query(ctx, `SELECT ip_key, COUNT(DISTINCT CASE WHEN sid != '' THEN sid END),
+		if err := s.actorSessions(ctx, q, q.p.Bounds[i], q.p.Bounds[i+1], sessions, out); err != nil {
+			return nil, err
+		}
+		rows, err := s.query(ctx, `SELECT ip_key,
 			SUM(kind = 'page_view'), SUM(source = 'server'), SUM(source = 'server' AND status >= 400),
 			SUM(source = 'browser' AND `+eventKinds+`), MAX(ts), MAX(ua), MAX(asn), MAX(country), MAX(cls),
 			MAX(source = 'browser')
@@ -35,17 +43,12 @@ func (s *Server) actors(ctx context.Context, q *query) (map[string]*actor, error
 		}
 		for rows.Next() {
 			var a actor
-			if err := rows.Scan(&a.key, &a.visits, &a.views, &a.requests, &a.refused, &a.events, &a.last, &a.ua,
+			if err := rows.Scan(&a.key, &a.views, &a.requests, &a.refused, &a.events, &a.last, &a.ua,
 				&a.asn, &a.country, &a.cls, &a.browser); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
-			g, ok := out[a.key]
-			if !ok {
-				g = &actor{key: a.key}
-				out[a.key] = g
-			}
-			g.visits += a.visits
+			g := actorOf(out, a.key)
 			g.views += a.views
 			g.requests += a.requests
 			g.refused += a.refused
@@ -67,6 +70,42 @@ func (s *Server) actors(ctx context.Context, q *query) (map[string]*actor, error
 		}
 	}
 	return out, nil
+}
+
+func actorOf(m map[string]*actor, key string) *actor {
+	g, ok := m[key]
+	if !ok {
+		g = &actor{key: key}
+		m[key] = g
+	}
+	return g
+}
+
+// actorSessions counts the sessions of one bucket that no earlier bucket had, per key.
+func (s *Server) actorSessions(ctx context.Context, q *query, from, to time.Time, seen map[uint64]struct{},
+	out map[string]*actor) error {
+	rows, err := s.query(ctx, `SELECT ip_key, sid FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND sid != ''
+		AND `+audWhere(q.aud)+` GROUP BY ip_key, sid`, q.site.ID, ms(from), ms(to))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var key, sid string
+		if err := rows.Scan(&key, &sid); err != nil {
+			return err
+		}
+		h := fnv.New64a()
+		_, _ = h.Write([]byte(key))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(sid))
+		if _, dup := seen[h.Sum64()]; dup {
+			continue
+		}
+		seen[h.Sum64()] = struct{}{}
+		actorOf(out, key).visits++
+	}
+	return rows.Err()
 }
 
 // classes is each key's latest stored class and reasons within the range.
