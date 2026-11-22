@@ -46,13 +46,26 @@ func TestRoutes(t *testing.T) {
 		path, wantLocation string
 		wantCode           int
 	}{
-		{"/", "/dashboard/", http.StatusFound},
 		{"/dashboard", "/dashboard/", http.StatusTemporaryRedirect},
 	} {
 		w := do(h, httptest.NewRequest("GET", tt.path, nil))
 		if w.Code != tt.wantCode || w.Header().Get("Location") != tt.wantLocation {
 			t.Errorf("GET %s: %d %q", tt.path, w.Code, w.Header().Get("Location"))
 		}
+	}
+	// The root is a 404 like any unknown path: same status, body and headers, no hint of the dashboard.
+	root, other := do(h, httptest.NewRequest("GET", "/", nil)), do(h, httptest.NewRequest("GET", "/other", nil))
+	if root.Code != http.StatusNotFound || root.Body.String() != other.Body.String() ||
+		strings.Contains(root.Body.String(), "dashboard") || root.Header().Get("Location") != "" {
+		t.Errorf("GET /: %d %v %q", root.Code, root.Header(), root.Body)
+	}
+	for k := range other.Header() {
+		if k != "X-Request-Id" && root.Header().Get(k) != other.Header().Get(k) {
+			t.Errorf("GET / header %s = %q, an unknown path's %q", k, root.Header().Get(k), other.Header().Get(k))
+		}
+	}
+	if len(root.Header()) != len(other.Header()) {
+		t.Errorf("GET / headers %v, an unknown path's %v", root.Header(), other.Header())
 	}
 	for path, want := range map[string]string{"/dashboard/": "dashboard /", "/dashboard/log": "dashboard /log",
 		"/nui.js": "tracker /nui.js"} {

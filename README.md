@@ -30,7 +30,8 @@ and open <http://localhost:8080/dashboard/>. `-demo 30` fills an empty database 
 ## Running it
 
 `compose.yaml` runs the released image behind an existing Traefik. A deployment is three files in one directory:
-`compose.yaml`, `.env` and `data/sites.json`.
+`compose.yaml`, `.env` and `data/sites.json`. The dashboard is at `https://<PUBLIC_FQDN>/dashboard/`; the bare host
+answers 404 like any unknown path and does not lead there.
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/trick77/nui/master/compose.yaml

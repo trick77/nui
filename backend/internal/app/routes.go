@@ -37,9 +37,9 @@ type Routes struct {
 // Build returns the root handler.
 func Build(rt Routes) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /{$}", http.RedirectHandler(DashboardPath+"/", http.StatusFound))
 	// The bare /dashboard redirects to /dashboard/ (the mux does that itself). No catch-all: /api and every other
-	// path outside the dashboard is the mux's 404, never the shell.
+	// path outside the dashboard, the root included, is the mux's 404, never the shell or a pointer to it: the bare
+	// host does not lead to the dashboard.
 	if rt.Dashboard != nil {
 		mux.Handle("GET "+DashboardPath+"/", http.StripPrefix(DashboardPath, rt.Dashboard))
 	}
