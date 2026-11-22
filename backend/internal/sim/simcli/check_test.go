@@ -60,6 +60,12 @@ type sharedHistory struct {
 }
 
 func TestMain(m *testing.M) {
+	// Two ranges keep an export short (the long ones read a year a day at a time; the command exports all five), one
+	// under -race. Set before any test runs, not by the export's test: that one runs beside the others.
+	exportRanges = []string{"24h", "7d"}
+	if raceOn {
+		exportRanges = exportRanges[:1]
+	}
 	code := m.Run()
 	for _, h := range shared.histories {
 		if h.st != nil {
@@ -273,9 +279,10 @@ func dashboardOf(t *testing.T, st *store.Store, w *sim.World) *Dashboard {
 }
 
 // Every scenario, played with the baseline alone, shows on the real dashboard what it says it shows. The tests
-// that set a package variable (exportRanges, checkWorld) or time the wall clock (live sends) are not parallel: they
-// run before the parallel ones, alone.
+// that set a package variable (checkWorld) or time the wall clock (live sends) are not parallel: they run before the
+// parallel ones, alone. This one is: its subtests would hold the parallel ones back until they end.
 func TestScenarioExpectations(t *testing.T) {
+	t.Parallel()
 	for _, sc := range sim.Catalogue() {
 		t.Run(sc.Name, func(t *testing.T) {
 			t.Parallel()
