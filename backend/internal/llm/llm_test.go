@@ -385,7 +385,14 @@ func TestHelpers(t *testing.T) {
 		"Half the traffic": false, "zero errors": false, "a share of 5%": false,
 		// "one" as a determiner or pronoun states no quantity.
 		"One operator is walking the API": true, "One API path drew most probes": true, "No one signed in": true,
-		"One of the scanners returns daily": true, "The same one comes back": true, "Everyone left early": true,
+		"One of the scanners returns": true, "The same one comes back": true, "Everyone left early": true,
+		// Frequencies and counts without a number word: a cached reading is shown beside actors of another pace.
+		"Checks the homepage once a minute": false, "Polls twice an hour": false, "Comes back thrice": false,
+		"Checks the homepage every minute": false, "Polls per hour": false, "A few times a day": false,
+		"One of the scanners returns daily": false, "Probes each night": false, "Runs hourly": false,
+		"Sent a single request": false, "Single requests from rotating addresses": false, "single probe": false,
+		"Loads a single-page app": true, "Every page loads its assets": true, "Polls the status endpoint": true,
+		"Requests arrive in bursts, then pause": true,
 		// "one" as a quantity, alone or beside another number word.
 		"Only one address sends requests": false, "More than one client": false, "At least one probe": false,
 		"One request per minute": false, "one probe an hour": false, "one out of the lot": false, "One or more scanners": false,

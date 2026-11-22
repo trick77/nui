@@ -341,8 +341,14 @@ func clip(s string, n int) string {
 // where it does.
 var figureRE = regexp.MustCompile(`(?i)[0-9%]|\b(zero|two|three|four|five|six|seven|eight|nine|ten|eleven|` +
 	`twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|` +
-	`seventy|eighty|ninety|hundreds?|thousands?|millions?|billions?|dozens?|half|twice|double|triple|` +
+	`seventy|eighty|ninety|hundreds?|thousands?|millions?|billions?|dozens?|half|once|twice|thrice|double|triple|` +
 	`percent|per\s+cent|first|second|third|quarters?|(four|fif|six|seven|eigh|nin|ten)ths?)\b`)
+
+// rateRE matches a frequency or a count without a number word: a rate per interval ("every minute", "per hour", "a
+// few times a day", "each night", "daily") and "single" as a count ("a single probe", "single requests"), not the
+// compound ("a single-page app"). A cached reading is shown beside actors whose own pace differs.
+var rateRE = regexp.MustCompile(`(?i)\b(every|per|each|an?)\s+(\w+\s+)?(second|minute|hour|day|night|week|month|` +
+	`year)s?\b|\b(hourly|daily|nightly|weekly|monthly|yearly|annually)\b|\bsingle([^-\w]|$)`)
 
 // oneRE matches "one" as a quantity: bounded, compared, counted or a rate ("only one", "more than one", "at least
 // one", "one out of", "one or more", "one request per minute", "one probe an hour"). With another number word ("one in ten", "twenty-one", "one
@@ -354,7 +360,7 @@ var oneRE = regexp.MustCompile(`(?i)\b(only|just|exactly|about|around|roughly|ne
 // noFigures reports whether a text the model wrote holds no figure: the dashboard shows every figure beside the
 // text, computed, so the model's words carry none (one written out would appear twice or contradict it).
 func noFigures(text string) bool {
-	return !figureRE.MatchString(text) && !oneRE.MatchString(text)
+	return !figureRE.MatchString(text) && !oneRE.MatchString(text) && !rateRE.MatchString(text)
 }
 
 func contains(list []string, v string) bool { return slices.Contains(list, v) }
