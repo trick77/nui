@@ -2,9 +2,12 @@ package sim
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -144,6 +147,52 @@ func TestSend(t *testing.T) {
 	}
 	if _, err := Send(t.Context(), l, SendOptions{Target: "http://127.0.0.1:1", For: time.Second}); err == nil {
 		t.Error("an unreachable target is no error")
+	}
+}
+
+// A 429 is honoured: the refused batch comes again, whole, no earlier than its Retry-After.
+func TestSendBacksOff(t *testing.T) {
+	w := testWorld(t, 1, "baseline")
+	var mu sync.Mutex
+	refused := map[string]time.Time{} // the first event of each refused batch → when
+	var retried []time.Duration
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		var b struct {
+			Events []json.RawMessage `json:"events"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &b)
+		key := r.URL.Path + string(b.Events[0])
+		mu.Lock()
+		defer mu.Unlock()
+		if at, ok := refused[key]; ok {
+			retried = append(retried, time.Since(at))
+			rw.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if len(refused) < 3 {
+			refused[key] = time.Now()
+			rw.Header().Set("Retry-After", "1")
+			rw.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		rw.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	s, err := Send(t.Context(), NewLive(w, time.Now(), 3600), SendOptions{Target: srv.URL, For: 2500 * time.Millisecond,
+		Every: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if s.Retried != 3 || s.Refused[http.StatusTooManyRequests] != 3 || len(retried) != 3 {
+		t.Fatalf("stats %v, retried %v", s, retried)
+	}
+	for _, d := range retried {
+		if d < time.Second {
+			t.Errorf("sent again after %v, Retry-After said 1 s", d)
+		}
 	}
 }
 

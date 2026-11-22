@@ -104,7 +104,11 @@ func TestBackfillDeterministic(t *testing.T) {
 		_ = st.DB.QueryRow(`SELECT COUNT(DISTINCT class) FROM actor_class`).Scan(&classes)
 		_ = st.DB.QueryRow(`SELECT COUNT(DISTINCT kind) FROM event`).Scan(&kinds)
 		_ = st.DB.QueryRow(`SELECT MAX(ts) FROM event`).Scan(&newest)
-		if classes != 4 || kinds < 10 || newest >= anchor.UnixMilli() {
+		minKinds := 10
+		if raceOn {
+			minKinds = 8 // a day of a small world may miss a rare kind
+		}
+		if classes != 4 || kinds < minKinds || newest >= anchor.UnixMilli() {
 			t.Errorf("classes %d, kinds %d, newest %v", classes, kinds, time.UnixMilli(newest))
 		}
 	}

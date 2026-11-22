@@ -118,8 +118,8 @@ func (b *backfill) clock() time.Time { return b.now }
 
 // Drain thresholds: the writer's queue is written out before it nears its bounds (a full queue drops).
 const (
-	drainEvents = 10_000
-	drainBytes  = 12 << 20
+	drainEvents = 1000 // one insert transaction of the writer's: a drain is never near its time bound
+	drainBytes  = 4 << 20
 )
 
 // BackfillOptions shape a backfill.
@@ -137,7 +137,7 @@ type BackfillOptions struct {
 // requests the clients would have sent, in time order, answered by the collector's own handlers on a virtual clock,
 // its writer enriching with the world's reference data, its counters flushed into the hourly rows, the classifier's
 // pass run at the end of every day. The world's sites must be in st (SyncSites, or a sites file).
-func Backfill(ctx context.Context, st *store.Store, w *World, o BackfillOptions) (Stats, error) {
+func Backfill(ctx context.Context, st *store.Store, w *World, o BackfillOptions) (_ Stats, err error) {
 	start := time.Now()
 	b := &backfill{ctx: ctx, st: st, log: o.Log, stats: Stats{Refused: map[int]int{}}}
 	if b.log == nil {
@@ -171,6 +171,26 @@ func Backfill(ctx context.Context, st *store.Store, w *World, o BackfillOptions)
 	b.col = &ingest.Collector{Sites: reg, Counters: counters, Browser: ingest.BrowserTiers(0, b.clock),
 		Feed: ingest.FeedLimiter(b.clock), Now: b.clock}
 	b.col.Writer = b.writer()
+	dropped := func() (int64, error) {
+		var n int64
+		err := st.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(dropped), 0) FROM ingest_stat`).Scan(&n)
+		return n, err
+	}
+	before, err := dropped()
+	if err != nil {
+		return b.stats, err
+	}
+	defer func() {
+		// A write the writer gave up on is only counted: a history with a hole is no fixture.
+		after, derr := dropped()
+		switch {
+		case err != nil:
+		case derr != nil:
+			err = derr
+		case after > before:
+			err = fmt.Errorf("the writer dropped %d events", after-before)
+		}
+	}()
 	from := w.Anchor.Add(-time.Duration(o.Days) * day)
 	var retries reqHeap
 	for t := from; t.Before(w.Anchor); {
