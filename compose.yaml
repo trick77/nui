@@ -3,8 +3,9 @@
 #
 #   docker compose pull && docker compose up -d
 #
-# No port is published: Traefik reaches the container on the shared `traefik` network. The host comes from .env only
-# (cp .env.example .env): without PUBLIC_FQDN every compose command refuses to run.
+# No port is published: Traefik reaches the container on the shared `traefik` network. The host comes from .env only:
+# without PUBLIC_FQDN every compose command refuses to run. .env holds only what differs from the defaults (README,
+# "Running it"); .env.example lists every variable, copy a line from it to change one.
 services:
   nui:
     # Every release moves latest: `docker compose pull && docker compose up -d` updates.
