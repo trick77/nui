@@ -186,13 +186,6 @@ func OpenReference(dir string) (*Reference, error) {
 	return ref, nil
 }
 
-// WorldReference reports whether dir holds the simulator's own reference data: its bots' documentation addresses
-// have no reverse DNS, so a server on it must not verify their claims by rDNS (a lookup would refute them).
-func WorldReference(dir string) bool {
-	b, err := os.ReadFile(filepath.Join(dir, crawlersFile)) //nolint:gosec // the server's own reference directory
-	return err == nil && strings.Contains(string(b), `"Examplebot"`)
-}
-
 // Stamp dates the reference files at t and loads them again: the dashboard states when its reference data was
 // updated (the files' time), and an export must not carry the wall clock.
 func (r *Reference) Stamp(t time.Time) error {
@@ -211,10 +204,15 @@ func (r *Reference) role(name string) (botRole, bool) {
 	return b, ok
 }
 
-// WriteReference writes the world's reference data into dir, in the files refdata caches: a development server
-// started with BACKEND_REFDATA_DISABLED=true on that directory enriches the simulated addresses as backfill did.
+// WriteReference writes the world's reference data into dir, in the files refdata caches, and marks it
+// (RefMarkerFile): a server in a simulator mode on that directory enriches the simulated addresses as backfill did,
+// a normal one discards it.
 func WriteReference(dir string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+	if err := mark(filepath.Join(dir, RefMarkerFile), "the simulator's made-up reference data: a normal server "+
+		"discards it and fetches the real data"); err != nil {
 		return err
 	}
 	for name, list := range map[string]map[string]botService{crawlersFile: worldCrawlers, monitorFile: worldMonitors} {

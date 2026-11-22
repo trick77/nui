@@ -97,7 +97,10 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
 
 Every address is a documentation address (RFC 5737, 2544, 3849). Real reference data knows none of them, so the
 simulator brings its own (made-up networks, their countries, three made-up bots) wherever it backfills; with a real
-bot list loaded, its crawlers and probe take a real service's ranges from it. In a Go test,
+bot list loaded, its crawlers and probe take a real service's ranges from it. Its reference data is marked
+(`ref/nui-sim-ref.json`) and only its modes (`-sim`, `-demo`) use it, without rDNS verification of the bots; a
+normal start discards it and fetches the real data, always verifies, warns loudly in a directory the simulator
+wrote and refuses one with `PUBLIC_FQDN` set. In a Go test,
 `sim.History(ctx, st, sim.HistoryOptions{...})` backfills a seeded history; its world's `Expectations()` are the
 scenarios' checks, which `simcli.Check` runs against the dashboard.
 

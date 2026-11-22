@@ -144,7 +144,8 @@ func TestCommands(t *testing.T) {
 		!strings.Contains(errs, "NUI_SIM_SEED=x") {
 		t.Fatalf("backfill: %d %s %s", code, out, errs)
 	}
-	for _, f := range []string{"nui.db", "sites.json", "ref/crawlers.json", "ref/as-ip-blocks.tar.gz", sim.OwnerFile} {
+	for _, f := range []string{"nui.db", "sites.json", "ref/crawlers.json", "ref/as-ip-blocks.tar.gz", sim.OwnerFile,
+		"ref/" + sim.RefMarkerFile} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Error(err)
 		}
