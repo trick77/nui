@@ -21,6 +21,8 @@ type Server struct {
 	Knobs sim.Knobs
 	Dir   string
 	World *sim.World
+
+	live *sim.Live
 }
 
 // NewServer prepares a simulated server's data directory for the knobs, the world anchored at now.
@@ -73,10 +75,12 @@ func (s *Server) Backfill(ctx context.Context, st *store.Store) error {
 	return err
 }
 
-// Wrap advances the world live from its anchor at every request to dash, into the collector's handlers.
+// Wrap advances the world live at every request to dash, into the collector's handlers: world time is the anchor
+// when Wrap is called (serving begins, the history written) and runs on from there, whatever wall time the anchor
+// names (NUI_SIM_START in the past or the future).
 func (s *Server) Wrap(dash http.Handler, h sim.Handlers) http.Handler {
-	l := sim.NewLive(s.World, s.World.Anchor, s.Knobs.Speed)
-	return l.Wrap(dash, h, time.Duration(s.Knobs.SlowMS)*time.Millisecond)
+	s.live = sim.NewLive(s.World, time.Now(), s.Knobs.Speed)
+	return s.live.Wrap(dash, h, time.Duration(s.Knobs.SlowMS)*time.Millisecond)
 }
 
 // Close removes the data directory.
