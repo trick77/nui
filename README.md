@@ -90,7 +90,7 @@ The key goes to the product's feed emitter (`Authorization: Bearer <key>` on `PO
 
 ### Browser script
 
-On a page, include the script:
+Adding a product, script and feed: [docs/integrate.md](docs/integrate.md). On a page, include the script:
 
 ```html
 <script src="https://nui.example.com/nui.js" defer></script>

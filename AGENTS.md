@@ -3,6 +3,9 @@
 Self-hosted, passive usage analytics for the user's own web products. One host: the collector under `/api`, the
 dashboard SPA under `/dashboard` (OIDC, an admin token, or both). `backend/`: Go on ship's kit, embeds the UI. `ui/`: React 19, Vite, Tailwind v4.
 
+Adding nui to another product ("integrate nui"): `docs/integrate.md`. It is what other repos' agents read: a change
+to `/nui.js`, `/api/in`, `/api/feed` or `sites.json` updates it in the same commit.
+
 ## Decisions
 - The app mounts `/dashboard` itself, no Traefik StripPrefix: collector and dashboard share the host. Vite base `./`,
   the server rewrites the shell's `./` refs to `/dashboard/` (kit's CSP has `base-uri 'none'`, so no `<base href>`),
