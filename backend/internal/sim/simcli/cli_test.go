@@ -99,6 +99,29 @@ func TestCommands(t *testing.T) {
 			t.Errorf("%v accepted", args)
 		}
 	}
+	// The flags pass the knobs' ranges: refused at once with the reason, never a panic or an endless loop.
+	for _, args := range [][]string{
+		{"live", "-target", "http://127.0.0.1:1", "-speed", "0", "-rate", "50"},
+		{"live", "-target", "http://127.0.0.1:1", "-rate", "NaN"},
+		{"live", "-target", "http://127.0.0.1:1", "-rate", "0"},
+		{"live", "-target", "http://127.0.0.1:1", "-rate", "-5"},
+		{"live", "-target", "http://127.0.0.1:1", "-for", "-1s"},
+		{"export", "-out", t.TempDir(), "-scale", "NaN"},
+		{"export", "-out", t.TempDir(), "-scale", "+Inf"},
+		{"export", "-out", t.TempDir(), "-scale", "1e9"},
+		{"backfill", "-data", t.TempDir(), "-days", "-1"},
+		{"check", "-scenarios", "nope"},
+	} {
+		code, _, errs := run(t, nil, args...)
+		if code != 2 || !strings.Contains(errs, "sim: ") {
+			t.Errorf("%v: %d %s", args, code, errs)
+		}
+	}
+	// A rate whose scale is out of range says what to change.
+	if code, _, errs := run(t, nil, "live", "-target", "http://127.0.0.1:1", "-speed", "0.01", "-rate", "1000"); code != 1 ||
+		!strings.Contains(errs, "-speed") {
+		t.Errorf("rate beyond the scale: %d %s", code, errs)
+	}
 	code, out, _ := run(t, nil, "scenarios")
 	if code != 0 || !strings.Contains(out, "api-walker (always)") || !strings.Contains(out, "Noteworthy lists the new referrer") {
 		t.Errorf("scenarios: %d %s", code, out)
@@ -256,7 +279,7 @@ func TestServerReadsSimulatedAddresses(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
-	l := sim.NewLive(s.World, time.Now(), 4*86400) // four days of the world a second
+	l := sim.NewLive(s.World, time.Now(), sim.SpeedLimit.Max())
 	if _, err := sim.Send(t.Context(), l, sim.SendOptions{Target: srv.URL, For: 500 * time.Millisecond,
 		Every: 20 * time.Millisecond}); err != nil {
 		t.Fatal(err)

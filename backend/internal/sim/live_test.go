@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -39,6 +40,31 @@ func TestKnobs(t *testing.T) {
 	if d := DefaultKnobs(); k.Seed != d.Seed || k.Scale != d.Scale || k.Speed != d.Speed || k.Port != d.Port ||
 		k.Days != d.Days || !k.Start.IsZero() || !k.Classify || k.Flood != "" || k.LateFeed != -1 || len(warned) != 9 {
 		t.Errorf("bad values %+v, warned %d: %v", k, len(warned), warned)
+	}
+	// The variables' ranges are the flags' too: Validate refuses what ReadKnobs would have ignored.
+	if err := DefaultKnobs().Validate(); err != nil {
+		t.Errorf("defaults invalid: %v", err)
+	}
+	for _, f := range []func(*Knobs){
+		func(k *Knobs) { k.Scale = math.NaN() }, func(k *Knobs) { k.Scale = math.Inf(1) }, func(k *Knobs) { k.Scale = 0 },
+		func(k *Knobs) { k.Scale = 1e9 }, func(k *Knobs) { k.Speed = 0 }, func(k *Knobs) { k.Speed = math.NaN() },
+		func(k *Knobs) { k.Speed = math.Inf(1) }, func(k *Knobs) { k.Speed = -1 }, func(k *Knobs) { k.Days = -1 },
+		func(k *Knobs) { k.Days = 100_000 }, func(k *Knobs) { k.Port = 0 }, func(k *Knobs) { k.SlowMS = -1 },
+		func(k *Knobs) { k.FeedOutage = -time.Minute }, func(k *Knobs) { k.Flood = "huge" },
+		func(k *Knobs) { k.Scenarios = "nope" },
+	} {
+		k := DefaultKnobs()
+		f(&k)
+		if k.Validate() == nil {
+			t.Errorf("accepted %+v", k)
+		}
+	}
+	// Nothing out of range reaches a world or a live run.
+	if _, err := NewWorld(Options{Scale: math.NaN(), Ref: &Reference{}}); err == nil {
+		t.Error("a NaN scale made a world")
+	}
+	if r := newRng(1); r.poisson(math.NaN()) != 0 || r.poisson(math.Inf(1)) != 0 {
+		t.Error("poisson of no number")
 	}
 	// The awkward behaviours become live windows; an empty site joins the default ones.
 	k = ReadKnobs(env(map[string]string{"NUI_SIM_FEED_OUTAGE": "15", "NUI_SIM_FLOOD": "addr", "NUI_SIM_LATE_FEED": "5",
@@ -91,8 +117,10 @@ func TestLiveTick(t *testing.T) {
 	if l.Retry(&Request{batch: &batch{hammer: true}}, time.Second) {
 		t.Error("a hammer retried")
 	}
-	if NewLive(w, start, 0).Speed != 1 {
-		t.Error("speed 0 not defaulted")
+	for _, s := range []float64{0, -1, math.NaN(), math.Inf(1), 1e12} {
+		if NewLive(w, start, s).Speed != 1 {
+			t.Errorf("speed %v not defaulted", s)
+		}
 	}
 }
 

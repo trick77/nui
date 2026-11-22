@@ -40,21 +40,91 @@ func DefaultKnobs() Knobs {
 		LateFeed: -1}
 }
 
+// Limit is a numeric knob's range, the same for its NUI_SIM_* variable and its flag.
+type Limit struct {
+	lo, hi float64
+	whole  bool
+}
+
+// The knobs' ranges. Scale and speed bound the work: a day's plan grows with the scale, a live tick's span with the
+// speed.
+var (
+	ScaleLimit   = Limit{lo: 0.01, hi: 10_000}
+	SpeedLimit   = Limit{lo: 0.01, hi: 100_000}
+	portLimit    = Limit{lo: 1, hi: 65535, whole: true}
+	daysLimit    = Limit{lo: 0, hi: 3650, whole: true}
+	minutesLimit = Limit{lo: 0, hi: 7 * 24 * 60}
+	slowLimit    = Limit{lo: 0, hi: 60_000, whole: true}
+)
+
+// Max is the range's upper bound.
+func (l Limit) Max() float64 { return l.hi }
+
+// Check is nil when v is in the range: a finite number from lo to hi, whole where it must be.
+func (l Limit) Check(v float64) error {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < l.lo || v > l.hi {
+		return fmt.Errorf("not %s", l)
+	}
+	if l.whole && v != math.Trunc(v) {
+		return fmt.Errorf("not a whole number")
+	}
+	return nil
+}
+
+func (l Limit) String() string {
+	what := "a number"
+	if l.whole {
+		what = "a whole number"
+	}
+	return what + " from " + strconv.FormatFloat(l.lo, 'f', -1, 64) + " to " + strconv.FormatFloat(l.hi, 'f', -1, 64)
+}
+
+// Validate checks every knob against its range: what the flags set over the variables must pass it too.
+func (k Knobs) Validate() error {
+	for _, c := range []struct {
+		name string
+		v    float64
+		l    Limit
+	}{
+		{"scale", k.Scale, ScaleLimit}, {"speed", k.Speed, SpeedLimit}, {"port", float64(k.Port), portLimit},
+		{"days", float64(k.Days), daysLimit}, {"feed outage minutes", k.FeedOutage.Minutes(), minutesLimit},
+		{"slow ms", float64(k.SlowMS), slowLimit},
+	} {
+		if err := c.l.Check(c.v); err != nil {
+			return fmt.Errorf("%s %v: %w", c.name, c.v, err)
+		}
+	}
+	if k.LateFeed != -1 {
+		if err := minutesLimit.Check(k.LateFeed.Minutes()); err != nil {
+			return fmt.Errorf("late feed minutes %v: %w", k.LateFeed.Minutes(), err)
+		}
+	}
+	switch k.Flood {
+	case "", "addr", "64", "48":
+	default:
+		return fmt.Errorf("flood %q: not addr, 64 or 48", k.Flood)
+	}
+	_, err := Scenarios(k.Scenarios)
+	return err
+}
+
 // ReadKnobs reads the knobs from getenv; warn gets one line per value it had to ignore.
 func ReadKnobs(getenv func(string) string, warn func(string)) Knobs {
 	k := DefaultKnobs()
 	bad := func(name, raw, want string, fallback any) {
 		warn(fmt.Sprintf("%s=%s is not %s; using %v", name, raw, want, fallback))
 	}
-	num := func(name string, fallback, lo, hi float64) float64 {
+	num := func(name string, fallback float64, l Limit) float64 {
 		raw := strings.TrimSpace(getenv(name))
 		if raw == "" {
 			return fallback
 		}
 		v, err := strconv.ParseFloat(raw, 64)
-		if err != nil || math.IsNaN(v) || v < lo || v > hi {
-			bad(name, raw, "a number from "+strconv.FormatFloat(lo, 'f', -1, 64)+" to "+
-				strconv.FormatFloat(hi, 'f', -1, 64), fallback)
+		if err == nil {
+			err = l.Check(v)
+		}
+		if err != nil {
+			bad(name, raw, l.String(), fallback)
 			return fallback
 		}
 		return v
@@ -71,13 +141,8 @@ func ReadKnobs(getenv func(string) string, warn func(string)) Knobs {
 		}
 		return v
 	}
-	whole := func(name string, fallback, lo, hi int) int {
-		v := num(name, float64(fallback), float64(lo), float64(hi))
-		if v != math.Trunc(v) {
-			bad(name, getenv(name), "a whole number", fallback)
-			return fallback
-		}
-		return int(v)
+	whole := func(name string, fallback int, l Limit) int {
+		return int(num(name, float64(fallback), l))
 	}
 	if raw := strings.TrimSpace(getenv("NUI_SIM_SEED")); raw != "" {
 		if s, err := strconv.ParseUint(raw, 10, 64); err == nil {
@@ -86,10 +151,10 @@ func ReadKnobs(getenv func(string) string, warn func(string)) Knobs {
 			bad("NUI_SIM_SEED", raw, "a whole number from 0", k.Seed)
 		}
 	}
-	k.Scale = num("NUI_SIM_SCALE", k.Scale, 0, 10_000)
-	k.Speed = num("NUI_SIM_SPEED", k.Speed, 0.01, 100_000)
-	k.Port = whole("NUI_SIM_PORT", k.Port, 1, 65535)
-	k.Days = whole("NUI_SIM_DAYS", k.Days, 0, 3650)
+	k.Scale = num("NUI_SIM_SCALE", k.Scale, ScaleLimit)
+	k.Speed = num("NUI_SIM_SPEED", k.Speed, SpeedLimit)
+	k.Port = whole("NUI_SIM_PORT", k.Port, portLimit)
+	k.Days = whole("NUI_SIM_DAYS", k.Days, daysLimit)
 	if raw := strings.TrimSpace(getenv("NUI_SIM_SCENARIOS")); raw != "" {
 		var keep []string
 		for _, n := range strings.Split(raw, ",") {
@@ -109,7 +174,7 @@ func ReadKnobs(getenv func(string) string, warn func(string)) Knobs {
 		}
 	}
 	k.Classify = flag("NUI_SIM_CLASSIFY", k.Classify)
-	k.FeedOutage = time.Duration(num("NUI_SIM_FEED_OUTAGE", 0, 0, 7*24*60) * float64(time.Minute))
+	k.FeedOutage = time.Duration(num("NUI_SIM_FEED_OUTAGE", 0, minutesLimit) * float64(time.Minute))
 	switch raw := strings.TrimSpace(getenv("NUI_SIM_FLOOD")); raw {
 	case "", "addr", "64", "48":
 		k.Flood = raw
@@ -121,11 +186,11 @@ func ReadKnobs(getenv func(string) string, warn func(string)) Knobs {
 	case "never":
 		k.LateFeed = 0
 	default:
-		if m := num("NUI_SIM_LATE_FEED", -1, 0, 7*24*60); m >= 0 {
+		if m := num("NUI_SIM_LATE_FEED", -1, minutesLimit); m >= 0 {
 			k.LateFeed = time.Duration(m * float64(time.Minute))
 		}
 	}
-	k.SlowMS = whole("NUI_SIM_SLOW_MS", 0, 0, 60_000)
+	k.SlowMS = whole("NUI_SIM_SLOW_MS", 0, slowLimit)
 	k.EmptySite = flag("NUI_SIM_EMPTY_SITE", false)
 	return k
 }

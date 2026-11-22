@@ -100,8 +100,9 @@ type World struct {
 
 // NewWorld builds the world for o.
 func NewWorld(o Options) (*World, error) {
-	if o.Scale < 0 {
-		return nil, fmt.Errorf("scale %v below 0", o.Scale)
+	// Zero is allowed here (a world of its fixed actors alone); the knobs start at ScaleLimit's lower bound.
+	if !(o.Scale >= 0 && o.Scale <= ScaleLimit.Max()) {
+		return nil, fmt.Errorf("scale %v: not from 0 to %v", o.Scale, ScaleLimit.Max())
 	}
 	if o.Ref == nil {
 		return nil, fmt.Errorf("no reference data")
