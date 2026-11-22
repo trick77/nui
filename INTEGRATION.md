@@ -5,7 +5,7 @@ For whoever adds nui to another product, an agent included. A product sends one 
 - **Browser script**: page views, clicks, forms, errors and web vitals of the people on its pages.
 - **Server feed**: every request its backend serves, so bots, probes and API callers show up too.
 
-The collector's limits are in the [README](../README.md#browser-script); this page says what to build.
+The collector's limits are in the [README](README.md#browser-script); this page says what to build.
 
 ## On the nui host (not in the product's repo)
 
@@ -17,7 +17,7 @@ feed, the name of the variable the product reads its key from.
 - `product`: the product's name in the dashboard. `kind`: `site` (pages) or `api`.
 - `path_rules`: raw paths to templates, first match wins, unmatched paths go to a heuristic. Placeholders: `{int}`,
   `{seg}` (one segment), `{text}` (one segment that is no file name), `{any}` (slashes included), `{ipv4}`,
-  `{ipv6}`, `{cidr}`. Literal text matches case-insensitively. Example: [sites.example.json](sites.example.json).
+  `{ipv6}`, `{cidr}`. Literal text matches case-insensitively. Example: [docs/sites.example.json](docs/sites.example.json).
 - `feed_key_sha256`: empty without a feed. With one, `docker compose run --rm nui -new-feed-key` prints a key (to
   the product's secrets) and its hash (here).
 - nui reads the file at start: restart it after the change.
