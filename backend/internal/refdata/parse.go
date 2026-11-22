@@ -168,7 +168,7 @@ func parseNetworks(r io.Reader) (*Networks, error) {
 	}
 	slices.SortFunc(entries, func(a, b asEntry) int { return int(a.ASN - b.ASN) })
 	for i, e := range entries {
-		n.ASes = append(n.ASes, AS{ASN: e.ASN, Handle: e.Metadata.Handle, Name: e.Metadata.Description,
+		n.AS = append(n.AS, AS{ASN: e.ASN, Handle: e.Metadata.Handle, Name: e.Metadata.Description,
 			Country: e.Metadata.CountryCode, Category: e.Metadata.Category})
 		for _, c := range slices.Concat(e.Prefixes.IPv4, e.Prefixes.IPv6) {
 			pfx, err := netip.ParsePrefix(c)

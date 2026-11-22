@@ -300,7 +300,7 @@ func TestData_RefreshCacheAndFailure(t *testing.T) {
 	if d3.Networks() != nil {
 		t.Error("a broken tarball was installed")
 	}
-	if n, err := loadNetworks(d3.path(networksFile)); err != nil || len(n.ASes) == 0 {
+	if n, err := loadNetworks(d3.path(networksFile)); err != nil || len(n.AS) == 0 {
 		t.Errorf("previous cache file lost: %v", err)
 	}
 	// Run returns when its context ends.

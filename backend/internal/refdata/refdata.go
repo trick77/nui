@@ -82,7 +82,7 @@ type AS struct {
 
 // Networks is one load of the AS data.
 type Networks struct {
-	ASes     []AS
+	AS       []AS
 	table    PrefixTable
 	Updated  time.Time
 	Rejected Rejected
@@ -97,7 +97,7 @@ func (n *Networks) Lookup(a netip.Addr) (AS, bool) {
 	if !ok {
 		return AS{}, false
 	}
-	return n.ASes[i], true
+	return n.AS[i], true
 }
 
 // ByASN is an AS by number.
@@ -105,18 +105,18 @@ func (n *Networks) ByASN(asn int64) (AS, bool) {
 	if n == nil {
 		return AS{}, false
 	}
-	// ASes is sorted by number at load.
-	lo, hi := 0, len(n.ASes)
+	// AS is sorted by number at load.
+	lo, hi := 0, len(n.AS)
 	for lo < hi {
 		m := (lo + hi) / 2
-		if n.ASes[m].ASN < asn {
+		if n.AS[m].ASN < asn {
 			lo = m + 1
 		} else {
 			hi = m
 		}
 	}
-	if lo < len(n.ASes) && n.ASes[lo].ASN == asn {
-		return n.ASes[lo], true
+	if lo < len(n.AS) && n.AS[lo].ASN == asn {
+		return n.AS[lo], true
 	}
 	return AS{}, false
 }

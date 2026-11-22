@@ -118,7 +118,7 @@ func (d *Data) installBots(b *Bots) {
 
 func (d *Data) installNetworks(n *Networks) {
 	d.networks.Store(n)
-	d.o.Log.Info("AS data loaded", "ases", len(n.ASes), "prefixes", n.table.Len())
+	d.o.Log.Info("AS data loaded", "as", len(n.AS), "prefixes", n.table.Len())
 	d.logRejected("AS data", n.Rejected)
 }
 
