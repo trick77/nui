@@ -28,8 +28,8 @@ dashboard SPA under `/dashboard` (OIDC). `backend/`: Go on ship's kit, embeds th
   failed the 1k-star rule. AS prefixes nest across owners: one sorted level per prefix length, never flat ranges.
 - The model never makes a figure or an action: it picks fact ids and verdicts from fixed lists and writes short
   fields; any digit or number word stating a quantity drops the text (first real run: every briefing line repeated
-  the figure shown beside it, "four pages" slipped through). "one" counts only as a quantity ("only one", "more than
-  one", "one per minute"): as a determiner or pronoun ("One operator…", "no one") it dropped plain lines. Every fixed choice is spelled out in the prompt: with the
+  the figure shown beside it, "four pages" slipped through). "one" only as a quantity ("only one"): as a determiner it
+  dropped plain lines ("One operator…"). Every fixed choice is spelled out in the prompt: with the
   options only in the schema's enum the model mapped 4 of 4 readings onto a verdict its own summary contradicted.
   Readings are cached per behaviour signature, so they hold no address, network name or date; evidence ids resolve
   against the actor shown. A briefing shows only for the fact-id set it was written for (ids carry direction).
