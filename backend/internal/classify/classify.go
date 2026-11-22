@@ -1,7 +1,11 @@
 // Package classify decides what kind of actor an address key is on a day: human, known bot, uptime probe or unknown
 // automated, with the reasons the dashboard shows. Two steps: an instant guess when an event is written (the bot
-// list and the client string, nothing that needs history), and a periodic pass over the recent window that weighs
-// the actor's whole day (script beacon, assets, headers, network) and stamps the result on its events.
+// list, the client string, a script beacon, nothing that needs history), and a periodic pass over the recent window
+// that weighs the actor's whole day (script beacon, assets, headers, network) and stamps the result on its events.
+//
+// A person is shown, never assumed: on a site whose script or feed can show a browser, a client is human only with a
+// browser's evidence (a script beacon, engagement or assets loaded). A browser user agent alone proves nothing: a
+// crawler wearing one (PetalBot reads "Safari · Android") once counted as a person for want of a contrary sign.
 //
 // An address is often shared (an office, a carrier's NAT): the pass weighs each of its user agents on its own. The
 // actor's class follows the majority of its events; the clients that differ keep their own class on their own events,
@@ -11,6 +15,7 @@ package classify
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -53,11 +58,16 @@ const reasonMachinePace = "machine pace"
 const maxRecheck = 10_000
 
 // automationUA matches clients that are no browser: HTTP libraries, command-line tools, headless and scripted
-// browsers, scanners, and the generic bot words a crawler not on the list still uses.
+// browsers, scanners, and the generic bot words a crawler not on the list still uses: a contact URL ("+https://"; no
+// browser has one) and a bot named in the compatible part ("(compatible; PetalBot;"). A bare "…bot" word is not
+// enough: phones are named CUBOT.
 var automationUA = regexp.MustCompile(`(?i)(curl|wget|python|go-http-client|okhttp|java/|apache-httpclient|libwww|` +
 	`scrapy|httpx|aiohttp|axios|node-fetch|undici|headlesschrome|phantomjs|puppeteer|playwright|selenium|` +
 	`\bbot\b|bot/|crawler|spider|scanner|nikto|nmap|masscan|zgrab|nuclei|sqlmap|postman|insomnia|guzzle|` +
-	`ruby|perl|php/|powershell|winhttp|dataprovider|censys|shodan)`)
+	`ruby|perl|php/|powershell|winhttp|dataprovider|censys|shodan|\+https?://|compatible;[^)]*bot)`)
+
+// reasonNoBrowser is the verdict on a client that showed none of a browser's evidence where the site would show it.
+const reasonNoBrowser = "no sign of a browser"
 
 // Classifier holds the reference data and the classes of the current day's actors.
 type Classifier struct {
@@ -111,13 +121,16 @@ func (c *Classifier) Enrich(e *store.Event) {
 		}
 		e.Country = c.Ref.Countries().Lookup(a)
 	}
-	inst := c.instant(a, e.UA)
+	inst := c.instantEvent(a, e)
 	c.mu.Lock()
 	k, ok := c.known[e.SiteID][e.IPKey]
 	sameDay := e.TS/dayMS == c.today
 	c.mu.Unlock()
 	switch {
 	case !ok || !sameDay:
+		e.Cls = inst
+	case inst == store.ClsHuman && (k.ua[e.UA] == store.ClsUnknown || k.ua[e.UA] == 0 && k.cls == store.ClsUnknown):
+		// A beacon after a pass that saw only the page request: the person's evidence, not yet weighed.
 		e.Cls = inst
 	case k.ua[e.UA] != 0:
 		e.Cls = k.ua[e.UA]
@@ -146,6 +159,28 @@ func (c *Classifier) instant(a netip.Addr, ua string) int {
 		return store.ClsUnknown
 	}
 	return store.ClsPending
+}
+
+// instantEvent is instant for one event: a script beacon from a browser user agent is a person's evidence itself
+// (the pass then confirms it), unless the browser says it is scripted. Only a batch's first event carries the
+// browser's context (navigator.webdriver): the others wait for the pass, counted with the key's person meanwhile.
+func (c *Classifier) instantEvent(a netip.Addr, e *store.Event) int {
+	inst := c.instant(a, e.UA)
+	if inst != store.ClsPending || e.Source != "browser" || !looksLikeBrowser(e.UA) {
+		return inst
+	}
+	var p struct {
+		Ctx *struct {
+			Webdriver bool `json:"webdriver"`
+		} `json:"ctx"`
+	}
+	if json.Unmarshal([]byte(e.Props), &p) != nil || p.Ctx == nil {
+		return inst
+	}
+	if p.Ctx.Webdriver {
+		return store.ClsUnknown
+	}
+	return store.ClsHuman
 }
 
 // Run passes every Every until ctx ends.
@@ -280,6 +315,9 @@ func (c *Classifier) passSite(ctx context.Context, s *sites.Site, after, upto, s
 			}
 			fd.assets = seen
 		}
+		if err := c.beaconsElsewhere(ctx, s.ID, m, a.uas, fd); err != nil {
+			return nil, err
+		}
 		d := c.Decide(a, fd)
 		c.setRecheck(m, d.pending)
 		if err := c.DB.SetActorClass(ctx, store.ActorClass{SiteID: s.ID, IPKey: m.key, Day: m.day, Class: d.class,
@@ -308,6 +346,31 @@ func (c *Classifier) setRecheck(k actorKey, pending bool) {
 	case len(c.recheck) < maxRecheck:
 		c.recheck[k] = true
 	}
+}
+
+// beaconWindow is how far a page request and its beacon may lie apart.
+const beaconWindow = int64(time.Minute / time.Millisecond)
+
+// beaconsElsewhere marks the clients without a browser's evidence on their own address whose page drew a beacon
+// from another: the page reaches the product and the beacon nui over different paths (dual stack, a relay that
+// leaves per host), so their address keys differ. The beacon must name the same page with the same user agent within
+// a minute: a crawler wearing a browser's user agent rarely meets a person's beacon for the same page that closely.
+func (c *Classifier) beaconsElsewhere(ctx context.Context, site int64, m actorKey, uas []uaDay, f siteFacts) error {
+	for i, g := range uas {
+		if !f.script || g.browser > 0 || g.engaged > 0 || g.assets > 0 || g.pages == 0 {
+			continue
+		}
+		err := c.DB.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM (SELECT site_id, ts, ua, path, ip_key
+				FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ? AND ua = ? AND source = 'server'
+				AND `+pageRequest+`) s
+			JOIN event b ON b.site_id = s.site_id AND b.ts >= s.ts - ? AND b.ts <= s.ts + ? AND b.source = 'browser'
+			AND b.kind = 'page_view' AND b.ua = s.ua AND b.path = s.path AND b.ip_key != s.ip_key)`,
+			site, m.key, m.day*dayMS, (m.day+1)*dayMS, g.ua, beaconWindow, beaconWindow).Scan(&uas[i].beaconElsewhere)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // hasBrowser reports whether the site's script delivered in the last week: only then is a missing beacon a signal.
@@ -339,12 +402,17 @@ func (c *Classifier) hasAssets(ctx context.Context, site, day int64) (bool, erro
 // assetRequest is a feed record that fetched an asset.
 const assetRequest = `(name IN ('script', 'style', 'image', 'font') OR path LIKE '/assets/%')`
 
+// pageRequest is a feed record that loaded a page. Sec-Fetch-Dest says so when the client sends it, and a crawler
+// does not: then a GET answered below 400 that is no asset, no API call and no file (no dot in the last segment).
+const pageRequest = `(name = 'document' OR (name = '' AND method = 'GET' AND status < 400 AND NOT ` + assetRequest +
+	` AND path NOT LIKE '/api/%' AND instr(substr(path, length(rtrim(path, replace(path, '/', ''))) + 1), '.') = 0))`
+
 // actorDay reads an actor's day per user agent, the most frequent first.
 func (c *Classifier) actorDay(ctx context.Context, site int64, key string, day int64) (actorDay, error) {
 	a := actorDay{key: key}
 	rows, err := c.DB.DB.QueryContext(ctx, `SELECT ua, COUNT(*),
 		SUM(source = 'browser'), SUM(source = 'server'),
-		SUM(source = 'server' AND name = 'document'),
+		SUM(source = 'server' AND name = 'document'), SUM(source = 'server' AND `+pageRequest+`),
 		SUM(source = 'server' AND `+assetRequest+`),
 		SUM(source = 'server' AND status >= 400 AND status < 500),
 		MAX(source = 'browser' AND props LIKE '%"webdriver":true%'),
@@ -365,7 +433,7 @@ func (c *Classifier) actorDay(ctx context.Context, site int64, key string, day i
 		var g uaDay
 		var ip string
 		var asn int64
-		if err := rows.Scan(&g.ua, &g.n, &g.browser, &g.server, &g.docs, &g.assets, &g.refused, &g.webdriver,
+		if err := rows.Scan(&g.ua, &g.n, &g.browser, &g.server, &g.docs, &g.pages, &g.assets, &g.refused, &g.webdriver,
 			&g.noFetch, &g.noLang, &g.engaged, &g.pageView, &g.first, &g.last, &ip, &asn); err != nil {
 			return a, err
 		}
@@ -397,9 +465,9 @@ type clientVerdict struct {
 
 // Decide weighs an actor-day: the bot list by address first (authoritative, or confirmed by rDNS), then every
 // client on its own (a bot list's client string, an automation client, a scripted browser, a browser without the
-// headers every browser sends, a machine's pace), then the majority. Weak signals are only reasons: each, and any
-// two, fit an ordinary visitor (a blocked tracker, cached assets, a single-page app's API calls, a VPN), so they
-// never make people automated. Clients that differ from the majority keep their own class.
+// headers every browser sends, a machine's pace, no browser's evidence where the site would show it), then the
+// majority. Weak signals are only reasons: each fits an ordinary visitor (a blocked tracker, cached assets, a
+// single-page app's API calls, a VPN). Clients that differ from the majority keep their own class.
 func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 	addr, _ := netip.ParseAddr(a.ip)
 	var bots *refdata.Bots
@@ -467,7 +535,8 @@ func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 		switch {
 		case v.class != "" && !slices.Contains(d.reasons, v.reason):
 			d.reasons = append(d.reasons, v.reason)
-		case v.class == "" && (a.uas[i].browser > 0 || a.uas[i].assets > 0 || a.uas[i].engaged > 0):
+		case v.class == "" && (a.uas[i].browser > 0 || a.uas[i].assets > 0 || a.uas[i].engaged > 0 ||
+			a.uas[i].beaconElsewhere):
 			// A person's browser behind an automated address keeps its own class.
 			d.byUA[a.uas[i].ua] = "human"
 		}
@@ -477,7 +546,8 @@ func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 	}
 	if d.class == "unknown" {
 		for _, w := range c.weakSignals(sumDays(a.uas), f, nets, addr) {
-			if w == "rapid requests" && slices.Contains(d.reasons, reasonMachinePace) {
+			if w == "rapid requests" && slices.Contains(d.reasons, reasonMachinePace) ||
+				(w == "no script beacon" || w == "no assets") && slices.Contains(d.reasons, reasonNoBrowser) {
 				continue
 			}
 			d.reasons = append(d.reasons, w)
@@ -544,6 +614,10 @@ func (c *Classifier) clientVerdict(ip string, addr netip.Addr, g uaDay, f siteFa
 		return clientVerdict{class: "unknown", reason: "missing browser headers"}
 	case g.server >= machineRequests && apiOnly(g) && avgGap(g) < machineGap:
 		return clientVerdict{class: "unknown", reason: reasonMachinePace}
+	case f.script && g.browser == 0 && g.engaged == 0 && g.assets == 0 && !g.beaconElsewhere:
+		// The site's script shows a browser by its beacon (its assets too, but on a feed alone one cached visit would
+		// be no person), and this client showed neither.
+		return clientVerdict{class: "unknown", reason: reasonNoBrowser}
 	}
 	return clientVerdict{}
 }
@@ -563,10 +637,10 @@ func avgGap(g uaDay) time.Duration {
 func (c *Classifier) weakSignals(g uaDay, f siteFacts, nets *refdata.Networks, addr netip.Addr) []string {
 	var weak []string
 	if f.feed {
-		if f.script && g.docs > 0 && g.browser == 0 {
+		if f.script && g.pages > 0 && g.browser == 0 && !g.beaconElsewhere {
 			weak = append(weak, "no script beacon")
 		}
-		if f.assets && g.docs > 0 && g.assets == 0 {
+		if f.assets && g.pages > 0 && g.assets == 0 {
 			weak = append(weak, "no assets")
 		}
 		if !f.fetchMeta && g.server >= 3 && g.noFetch == g.server && g.noLang == g.server && looksLikeBrowser(g.ua) {
@@ -593,6 +667,8 @@ func goodSignals(g uaDay) []string {
 	var good []string
 	if g.browser > 0 {
 		good = append(good, "script beacon")
+	} else if g.beaconElsewhere {
+		good = append(good, "script beacon from another address")
 	}
 	if g.engaged > 0 {
 		good = append(good, "engaged")
@@ -612,7 +688,9 @@ func addDay(a, b uaDay) uaDay {
 	a.browser += b.browser
 	a.server += b.server
 	a.docs += b.docs
+	a.pages += b.pages
 	a.assets += b.assets
+	a.beaconElsewhere = a.beaconElsewhere || b.beaconElsewhere
 	a.refused += b.refused
 	a.webdriver = a.webdriver || b.webdriver
 	a.noFetch += b.noFetch

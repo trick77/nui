@@ -24,6 +24,7 @@ import (
 	"github.com/trick77/nui/backend/internal/apix"
 	"github.com/trick77/nui/backend/internal/classify"
 	"github.com/trick77/nui/backend/internal/insight"
+	"github.com/trick77/nui/backend/internal/store"
 )
 
 // actors sums every address key over the range, a piece (at most a day) at a time. Visits are distinct sessions
@@ -42,7 +43,7 @@ func (s *Server) actors(ctx context.Context, q *query, from, to time.Time) (map[
 		rows, err := s.query(ctx, `SELECT ip_key,
 			SUM(kind = 'page_view'), SUM(source = 'server'), SUM(source = 'server' AND status >= 400),
 			SUM(source = 'browser' AND `+eventKinds+`), MAX(ts), ua, asn, country, cls,
-			SUM(source = 'browser') > 0
+			SUM(source = 'browser') > 0, SUM(cls = 1) > 0
 			FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND `+audWhere(q.aud)+` GROUP BY ip_key`,
 			q.site.ID, ms(pc[0]), ms(pc[1]))
 		if err != nil {
@@ -51,7 +52,7 @@ func (s *Server) actors(ctx context.Context, q *query, from, to time.Time) (map[
 		for rows.Next() {
 			var a actor
 			if err := rows.Scan(&a.key, &a.views, &a.requests, &a.refused, &a.events, &a.last, &a.ua,
-				&a.asn, &a.country, &a.cls, &a.browser); err != nil {
+				&a.asn, &a.country, &a.cls, &a.browser, &a.human); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
@@ -61,6 +62,7 @@ func (s *Server) actors(ctx context.Context, q *query, from, to time.Time) (map[
 			g.refused += a.refused
 			g.events += a.events
 			g.browser = g.browser || a.browser
+			g.human = g.human || a.human
 			// The latest event's client, network and country, as the visitor detail shows them.
 			if a.last >= g.last {
 				g.last, g.ua, g.cls = a.last, a.ua, a.cls
@@ -451,12 +453,21 @@ func readQueue(all, page []visitorRow) map[string]bool {
 	return out
 }
 
+// actorClass is the class of a key without a pass's verdict: its latest event's, a pending one counted with the
+// key's people when it has any (a visitor's page request waits for the pass, its beacon is human at once).
+func actorClass(a *actor) string {
+	if a.cls == store.ClsPending && a.human {
+		return "human"
+	}
+	return classOf(a.cls)
+}
+
 func (s *Server) visitorRow(q *query, a *actor, ci classInfo) visitorRow {
 	row := visitorRow{Key: a.key, Display: a.key, Country: a.country, Client: classify.Client(a.ua),
 		Views: a.views, Events: a.events, Last: iso(time.UnixMilli(a.last)), Signals: ci.signals,
 		Class: ci.class, ua: a.ua}
 	if row.Class == "" {
-		row.Class = classOf(a.cls)
+		row.Class = actorClass(a)
 	}
 	if row.Signals == nil {
 		row.Signals = []string{}
@@ -1116,10 +1127,10 @@ func (s *Server) actorOne(ctx context.Context, q *query, key string) (*actor, er
 	err := s.row(ctx, `SELECT COUNT(DISTINCT CASE WHEN sid != '' THEN sid END),
 		COALESCE(SUM(kind = 'page_view'), 0), COALESCE(SUM(source = 'server'), 0),
 		COALESCE(SUM(source = 'server' AND status >= 400), 0), COALESCE(SUM(source = 'browser' AND `+eventKinds+`), 0),
-		MIN(ts), MAX(ts), COALESCE(SUM(source = 'browser'), 0) > 0
+		MIN(ts), MAX(ts), COALESCE(SUM(source = 'browser'), 0) > 0, COALESCE(SUM(cls = 1), 0) > 0
 		FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?`,
 		q.site.ID, key, ms(q.p.From()), ms(q.p.Bounds[q.p.n()])).Scan(&a.visits, &a.views, &a.requests, &a.refused,
-		&a.events, &first, &last, &a.browser)
+		&a.events, &first, &last, &a.browser, &a.human)
 	if err != nil || last == nil {
 		return nil, err
 	}

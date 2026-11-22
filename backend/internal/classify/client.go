@@ -2,6 +2,7 @@ package classify
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -10,6 +11,9 @@ func looksLikeBrowser(ua string) bool {
 }
 
 var productRE = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9._-]*)(?:/([0-9][0-9A-Za-z._-]*))?`)
+
+// botToken is a product token naming a bot: "PetalBot", "PetalBot/1.0".
+var botToken = regexp.MustCompile(`(?i)^[a-z][a-z0-9._-]*bot(/[0-9][0-9a-z._-]*)?$`)
 
 // Client is a short client name for a user agent: browser and OS for a browser, the product token for anything
 // else ("curl/8.4.0").
@@ -24,11 +28,25 @@ func Client(ua string) string {
 	// A tool behind the Mozilla/5.0 compatibility prefix (Mozilla/5.0 zgrab/0.x, HeadlessChrome, Googlebot): the
 	// token naming the tool, not the prefix.
 	if looksLikeBrowser(ua) {
-		for _, tok := range strings.FieldsFunc(ua, func(r rune) bool { return strings.ContainsRune(" ();,+", r) }) {
-			if automationUA.MatchString(tok) {
+		toks := strings.FieldsFunc(ua, func(r rune) bool { return strings.ContainsRune(" ();,+", r) })
+		for _, tok := range toks {
+			// A contact URL names no tool ("https://babbar.tech/crawler" would read "https").
+			if automationUA.MatchString(tok) && !strings.Contains(tok, "://") {
 				if m := productRE.FindStringSubmatch(tok); m != nil {
 					return strings.TrimSuffix(m[0], "/")
 				}
+			}
+		}
+		// A crawler known only by its compatible part or its contact URL ("(compatible; PetalBot;+https://…"): the
+		// token naming the bot, else the product after "compatible".
+		for _, tok := range toks {
+			if botToken.MatchString(tok) {
+				return tok
+			}
+		}
+		if i := slices.Index(toks, "compatible"); i >= 0 && i+1 < len(toks) && !strings.Contains(toks[i+1], "://") {
+			if m := productRE.FindStringSubmatch(toks[i+1]); m != nil {
+				return strings.TrimSuffix(m[0], "/")
 			}
 		}
 	}

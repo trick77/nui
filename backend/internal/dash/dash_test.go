@@ -750,6 +750,52 @@ func TestVisitorReadsOwnClass(t *testing.T) {
 	}
 }
 
+// A pending event is no person's until the pass shows one: it counts as unknown automated, and a visitor whose page
+// request waits while its beacon is human is one person, not also an automated address.
+func TestPendingCountsAutomated(t *testing.T) {
+	r := newRig(t, 0, 0, nil)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	at := r.end.UnixMilli()
+	ev := func(ip, src string, cls int) store.Event {
+		return store.Event{SiteID: site.ID, TS: at, Source: src, Kind: "request", IP: ip, IPKey: ip,
+			UA: "Mozilla/5.0", Template: "GET /", Status: 200, Cls: cls}
+	}
+	// A visitor: the beacon first, the page's later API request still pending.
+	later := ev("192.0.2.1", "server", store.ClsPending)
+	later.TS++
+	if err := r.s.DB.InsertEvents(t.Context(), []store.Event{
+		later, ev("192.0.2.1", "browser", store.ClsHuman),
+		ev("192.0.2.2", "server", store.ClsPending),                                            // a crawler before the pass
+		ev("192.0.2.3", "server", store.ClsHuman), ev("192.0.2.3", "server", store.ClsUnknown), // people and a curl
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, ov := r.get(t, "overview", p(feedSite, "range", "24h"))
+	if l := ov["live"].(map[string]any); l["humans"] != 2.0 || l["automated"] != 2.0 {
+		t.Errorf("live = %v, want 2 humans, 2 automated", l)
+	}
+	for key, want := range map[string]string{"192.0.2.1": "human", "192.0.2.2": "unknown"} {
+		if _, v := r.get(t, "visitor", p(feedSite, "key", key, "range", "24h")); v["class"] != want {
+			t.Errorf("visitor %s class = %v, want %s", key, v["class"], want)
+		}
+	}
+	_, vs := r.get(t, "visitors", p(feedSite, "range", "24h"))
+	var cls any
+	for _, row := range listRows(vs) {
+		if row["key"] == "192.0.2.1" {
+			cls = row["class"]
+		}
+	}
+	if cls != "human" {
+		t.Errorf("visitors row of the visitor: %v", cls)
+	}
+	for cls, want := range map[string]float64{"human": 2, "unknown": 3} {
+		if _, log := r.get(t, "log", p(feedSite, "range", "24h", "class", cls)); log["total"] != want {
+			t.Errorf("log class %s: %v events, want %v", cls, log["total"], want)
+		}
+	}
+}
+
 func TestTrailPaging(t *testing.T) {
 	r := newRig(t, 0, 0, nil)
 	site, _ := r.s.Sites.Lookup(feedSite)

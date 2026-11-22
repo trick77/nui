@@ -5,10 +5,14 @@ package classify
 //
 // Table: event
 type uaDay struct {
-	ua                string
-	n                 int64
-	browser, server   int64
-	docs, assets      int64
+	ua              string
+	n               int64
+	browser, server int64
+	// docs are the page loads Sec-Fetch-Dest names; pages adds those of a client without it (a crawler).
+	docs, pages, assets int64
+	// beaconElsewhere: a beacon with the client's user agent for one of its pages came from another address key
+	// (dual stack, a relay that leaves per host).
+	beaconElsewhere   bool
 	refused           int64
 	webdriver         bool
 	noFetch, noLang   int64

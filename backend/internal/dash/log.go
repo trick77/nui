@@ -72,8 +72,8 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 			apix.Error(w, http.StatusBadRequest, "class must be human, bot, monitor or unknown")
 			return
 		}
-		if c == "human" {
-			where = append(where, "cls IN (0, 1)")
+		if c == "unknown" { // pending counted as unknown, as classOf does
+			where = append(where, "cls IN (0, 4)")
 		} else {
 			where, args = append(where, "cls = ?"), append(args, store.ClassCode(c))
 		}

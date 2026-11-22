@@ -32,7 +32,7 @@ func (s *Server) bucketPiece(ctx context.Context, site int64, aud string, from, 
 		COALESCE(SUM(`+cond+` AND kind = 'page_view'), 0),
 		COALESCE(SUM(`+cond+` AND source = 'browser' AND `+eventKinds+`), 0),
 		COALESCE(SUM(`+cond+` AND source = 'server'), 0),
-		COALESCE(SUM(source = 'server' AND cls = 4), 0),
+		COALESCE(SUM(source = 'server' AND cls IN (0, 4)), 0),
 		COALESCE(SUM(source = 'server'), 0),
 		COALESCE(SUM(`+cond+` AND (kind = 'js_error' OR (source = 'server' AND status >= 500))), 0)
 		FROM event WHERE site_id = ? AND ts >= ? AND ts < ?`, site, ms(from), ms(to)).
@@ -217,12 +217,15 @@ func totalOf(bs []bucketStats, f func(bucketStats) float64) float64 {
 	return t
 }
 
-// live counts the address keys seen in the last five minutes, people apart from the automated.
+// live counts the address keys seen in the last five minutes, people apart from the automated. A pending event
+// counts as automated only for an address without a person's: a visitor's page request waits for the pass, its
+// beacon is human at once, and the visitor is one person, not also an automated address.
 func (s *Server) live(ctx context.Context, site int64) (live, error) {
 	var l live
-	err := s.row(ctx, `SELECT COUNT(DISTINCT CASE WHEN cls IN (0, 1) THEN ip_key END),
-		COUNT(DISTINCT CASE WHEN cls IN (2, 3, 4) THEN ip_key END)
-		FROM event WHERE site_id = ? AND ts >= ?`, site, ms(s.now().Add(-5*time.Minute))).Scan(&l.Humans, &l.Automated)
+	err := s.row(ctx, `SELECT COALESCE(SUM(h), 0), COALESCE(SUM(a OR (p AND NOT h)), 0) FROM (
+		SELECT MAX(cls = 1) AS h, MAX(cls IN (2, 3, 4)) AS a, MAX(cls = 0) AS p
+		FROM event WHERE site_id = ? AND ts >= ? GROUP BY ip_key)`,
+		site, ms(s.now().Add(-5*time.Minute))).Scan(&l.Humans, &l.Automated)
 	return l, err
 }
 

@@ -1,7 +1,9 @@
 package store
 
-// Class codes of event.cls. Pending events wait for the classifier's next pass; the dashboard counts them with the
-// humans until then (the pass runs every few minutes).
+// Class codes of event.cls. Pending events wait for the classifier's next pass (every few minutes); the dashboard
+// counts them as unknown automated until then, a person being shown, never assumed. A key with a human event (a
+// beacon is human at once) counts its pending events as the person's where a figure is per key (live, the visitor
+// table).
 const (
 	ClsPending = 0
 	ClsHuman   = 1

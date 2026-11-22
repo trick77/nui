@@ -42,4 +42,6 @@ type actor struct {
 	country                 string
 	cls                     int
 	browser                 bool
+	// human: an event of the key is stamped human (a beacon is at once); its pending events are then a person's.
+	human bool
 }
