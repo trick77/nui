@@ -227,6 +227,8 @@ func TestBadParameters(t *testing.T) {
 		{"visitor", p(feedSite), 400},
 		{"visitor", p(feedSite, "key", "192.0.2.1", "cursor", "x"), 400},
 		{"log", p(feedSite, "addr", "not-an-address"), 400},
+		{"log", p(feedSite, "addr", "2001:db8:1::/48"), 400},
+		{"log", p(feedSite, "addr", "192.0.2.0/24"), 400},
 		{"log", p(feedSite, "class", "x"), 400},
 		{"log", p(feedSite, "status", "6xx"), 400},
 		{"log", p(feedSite, "cursor", "1"), 400},

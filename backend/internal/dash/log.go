@@ -43,7 +43,8 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 	if a := strings.TrimSpace(v.Get("addr")); a != "" {
 		if _, err := netip.ParseAddr(a); err == nil {
 			where, args = append(where, "ip_key = ?", "ip = ?"), append(args, ratelimit.Key(a), netip.MustParseAddr(a).Unmap().String())
-		} else if p, err := netip.ParsePrefix(a); err == nil {
+		} else if p, err := netip.ParsePrefix(a); err == nil && p.Addr().Is6() && p.Bits() == 64 {
+			// Keys are addresses or /64s: any other prefix would match nothing, silently.
 			where, args = append(where, "ip_key = ?"), append(args, p.Masked().String())
 		} else {
 			apix.Error(w, http.StatusBadRequest, "addr is an address or a /64")
