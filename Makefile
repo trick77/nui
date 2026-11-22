@@ -36,10 +36,16 @@ sim:
 	@port=$$($(SIM_SERVER) sim port) || exit 1; \
 	$(SIM_SERVER) -sim & pid=$$!; trap 'kill $$pid 2>/dev/null' EXIT INT TERM; \
 	echo "make sim: waiting for the simulated server (pid $$pid) on 127.0.0.1:$$port"; \
+	waited=0; \
 	until curl -s -o /dev/null -D - "http://127.0.0.1:$$port/api/dash/sites" 2>/dev/null | tr -d '\r' | \
 		grep -qix "x-nui-sim-pid: $$pid"; do \
 		if ! kill -0 $$pid 2>/dev/null; then \
 			echo "make sim: the simulated server stopped before it answered on port $$port (in use? its log is above; NUI_SIM_PORT picks another)" >&2; \
+			exit 1; \
+		fi; \
+		waited=$$((waited + 1)); \
+		if [ $$waited -gt 1200 ]; then \
+			echo "make sim: no answer from the simulated server on port $$port in 10 minutes (curl missing? its log is above)" >&2; \
 			exit 1; \
 		fi; \
 		sleep 0.5; \
