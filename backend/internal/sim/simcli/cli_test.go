@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -148,15 +149,15 @@ func TestLiveCommand(t *testing.T) {
 		Browser: ingest.BrowserTiers(1, nil), Feed: ingest.FeedLimiter(nil), TrustedHops: 1}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/in", c.HandleBrowser)
-	var feeds, unauthorized int
+	var feeds, unauthorized atomic.Int64
 	mux.HandleFunc("POST /api/feed", func(w http.ResponseWriter, r *http.Request) {
 		rec := httptest.NewRecorder()
 		c.HandleFeed(rec, r)
 		if r.Header.Get("Authorization") == "Bearer custom-key" {
-			feeds++
+			feeds.Add(1)
 		}
 		if rec.Code == http.StatusUnauthorized {
-			unauthorized++
+			unauthorized.Add(1)
 		}
 		w.WriteHeader(rec.Code)
 	})
@@ -164,8 +165,8 @@ func TestLiveCommand(t *testing.T) {
 	defer srv.Close()
 	code, out, errs := run(t, map[string]string{"NUI_SIM_SPEED": "3600"}, "live", "-target", srv.URL, "-for", "1s",
 		"-rate", "200", "-key", "lens.example.com=custom-key")
-	if code != 0 || !strings.Contains(out, "live:") || feeds == 0 || unauthorized != 0 {
-		t.Errorf("live: %d %s %s, lens feeds %d, unauthorized %d", code, out, errs, feeds, unauthorized)
+	if code != 0 || !strings.Contains(out, "live:") || feeds.Load() == 0 || unauthorized.Load() != 0 {
+		t.Errorf("live: %d %s %s, lens feeds %d, unauthorized %d", code, out, errs, feeds.Load(), unauthorized.Load())
 	}
 	if code, _, _ := run(t, nil, "live", "-target", srv.URL, "-key", "nope.example.com=k"); code != 1 {
 		t.Errorf("a key for no site: %d", code)

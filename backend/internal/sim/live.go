@@ -77,7 +77,8 @@ func (l *Live) Retry(q *Request, wait time.Duration) bool {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	q.At = l.cursor.Add(time.Duration(float64(wait) * l.Speed))
+	// From now, not from the last tick: the wait is the server's, counted from its answer.
+	q.At = l.WorldTime(time.Now()).Add(time.Duration(float64(wait) * l.Speed))
 	heap.Push(&l.retries, q)
 	return true
 }
