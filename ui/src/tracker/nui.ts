@@ -705,7 +705,8 @@ export function start(
           disabled = true;
           queue.length = 0;
           return;
-        } else if (st === 429 || st >= 500) {
+        } else if (st === 408 || st === 429 || st >= 500) {
+          // 408: the body came in too slowly, the batch itself is fine.
           let ra = 0;
           try {
             // Seconds or an HTTP date; anything else (NaN) counts as 0.

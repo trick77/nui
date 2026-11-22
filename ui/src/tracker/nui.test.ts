@@ -481,6 +481,18 @@ describe("sending", () => {
     expect(t.state().dropped).toBe(2);
   });
 
+  it("sends again a batch whose body came in too slowly", async () => {
+    const t = boot();
+    fetchMock.mockImplementationOnce(() => reply(408));
+    t.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.state().queued).toBe(2);
+    expect(t.state().dropped).toBe(0);
+    await vi.advanceTimersByTimeAsync(LIMITS.flushAfterMs + 10);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(t.state().queued).toBe(0);
+  });
+
   it("requeues after a network error", async () => {
     const t = boot();
     fetchMock.mockImplementationOnce(() =>
