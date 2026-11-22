@@ -1341,38 +1341,76 @@ describe("separators", () => {
     return texts.flatMap((t) => t.match(/.{0,24}(?: ·|· ).{0,24}/g) ?? []);
   };
 
-  it("spaces every dot with en spaces on the main screens", async () => {
-    // The dashboard with a feed: every section, a tooltip, a visitor's detail.
-    const first = start();
+  it("spaces every dot with en spaces on every screen", async () => {
+    const body = () => document.body.textContent ?? "";
+    // The dashboard with a feed, no model and full lists cut at their
+    // limit: every section and a visitor's detail.
+    const first = start("/dashboard/", { beyond: 600, noModel: true });
     const footer = await screen.findByRole("region", { name: "This domain" });
     await within(footer).findByText("Rate limit");
+    expect(footer.textContent).toContain(
+      `no model configured${SEP}computed texts only`,
+    );
     const pages = await screen.findByRole("region", { name: "Pages" });
     await within(pages).findByText("/AS:n");
     const v = panel("Visitors by address");
     fireEvent.click(await within(v).findByText("203.0.113.42"));
     const d = screen.getByRole("region", { name: "Visitor" });
     await within(d).findByText("Person");
+    expect(body()).toContain(`Chrome${SEP}macOS`);
+    expect(plainDots()).toEqual([]);
+
+    // Each chart's tooltip on its last point, still filling.
+    const ov = panel("Overview");
+    const hit = within(ov).getByTestId("chart-hit");
+    fireEvent.mouseMove(hit, { clientX: 1e6, clientY: 100 });
+    expect(screen.getByRole("tooltip").textContent).toContain(
+      `${SEP}still filling`,
+    );
+    expect(plainDots()).toEqual([]);
+    fireEvent.mouseLeave(hit);
     const t = screen.getByRole("region", { name: "Requests by class" });
     const bars = await within(t).findAllByTestId("stack-hit");
     fireEvent.mouseMove(bars[6], { clientX: 900, clientY: 100 });
-    expect(document.body.textContent).toContain(`${SEP}still filling`);
-    expect(document.body.textContent).toContain(`Chrome${SEP}macOS`);
+    expect(screen.getByRole("tooltip").textContent).toContain(
+      `${SEP}still filling`,
+    );
+    expect(plainDots()).toEqual([]);
+    fireEvent.mouseLeave(bars[6]);
+
+    // A full list cut at its limit.
+    fireEvent.click(within(pages).getByRole("button", { name: /Show all 8/ }));
+    const dlg = screen.getByRole("dialog");
+    await within(dlg).findByText("/privacy");
+    expect(dlg.textContent).toContain(`${SEP}the first 500 are shown`);
+    expect(plainDots()).toEqual([]);
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    // The filter bar without a comparison.
+    fireEvent.click(screen.getByRole("button", { name: "off" }));
+    await waitFor(() => expect(body()).toContain(`${SEP}no comparison`));
     expect(plainDots()).toEqual([]);
     first.unmount();
 
-    // A domain without a feed: the footer's other texts.
-    const second = start("/dashboard/?site=console.example.com");
-    await screen.findByText(/not connected/);
+    // A domain whose script and feed never delivered, and one without a
+    // feed: the footer's other source texts.
+    const second = start("/dashboard/?site=blog.example.org");
+    await screen.findByText(/configured, no events yet/);
+    expect(body()).toContain(`no events yet${SEP}load the script`);
     expect(plainDots()).toEqual([]);
     second.unmount();
+    const third = start("/dashboard/?site=console.example.com");
+    await screen.findByText(/not connected/);
+    expect(plainDots()).toEqual([]);
+    third.unmount();
 
     // The log.
-    const third = start("/dashboard/log?site=lens.example.com&range=30d");
+    const fourth = start("/dashboard/log?site=lens.example.com&range=30d");
     const log = await screen.findByRole("region", { name: "Log" });
     await within(log).findByText("100 of 250 events in this range");
     expect(log.textContent).toContain(SEP);
     expect(plainDots()).toEqual([]);
-    third.unmount();
+    fourth.unmount();
 
     // The sign-in card.
     start("/dashboard/", { me: 401 });
