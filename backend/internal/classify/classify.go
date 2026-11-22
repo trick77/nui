@@ -517,12 +517,12 @@ func (c *Classifier) weakSignals(g uaDay, f siteFacts, nets *refdata.Networks, a
 		if g.server >= 10 && g.refused*2 >= g.server {
 			weak = append(weak, "mostly refused")
 		}
-		if g.server >= apiOnlyRequests && g.docs == 0 && g.assets == 0 && g.browser == 0 {
+		// A page load fires its assets and API calls in a burst: pace says something only without any page.
+		if apiOnly := g.server >= apiOnlyRequests && g.docs == 0 && g.assets == 0 && g.browser == 0; apiOnly {
 			weak = append(weak, "API only, no page loaded")
-		}
-		if g.server >= apiOnlyRequests && g.last > g.first &&
-			time.Duration(g.last-g.first)*time.Millisecond/time.Duration(g.server-1) < rapidGap {
-			weak = append(weak, "rapid requests")
+			if g.last > g.first && time.Duration(g.last-g.first)*time.Millisecond/time.Duration(g.server-1) < rapidGap {
+				weak = append(weak, "rapid requests")
+			}
 		}
 	}
 	if as, ok := nets.Lookup(addr); ok && refdata.NetworkKind(as.Category) == "hosting" {

@@ -274,6 +274,18 @@ func TestPass_SharedAddressAndPace(t *testing.T) {
 	// A real browser blocking the tracker: page and assets with its headers, no beacon. A person.
 	evs = append(evs, req("192.0.2.84", browserUA, "document", "/", 200, ""),
 		req("192.0.2.84", browserUA, "style", "/assets/a.css", 200, ""))
+	// The same, loading one page with 25 assets and API calls within 3 s: a burst, still a person.
+	burst := req("192.0.2.85", browserUA, "document", "/", 200, "")
+	burst.TS = r.now.UnixMilli() - 3000
+	evs = append(evs, burst)
+	for i := range 25 {
+		e := req("192.0.2.85", browserUA, "script", "/assets/c.js", 200, "")
+		if i%2 == 0 {
+			e = req("192.0.2.85", browserUA, "empty", "/api/v1/ip/1", 200, "")
+		}
+		e.TS = r.now.UnixMilli() - 3000 + int64(i)*100
+		evs = append(evs, e)
+	}
 	r.insert(t, evs...)
 	if err := r.c.Pass(t.Context()); err != nil {
 		t.Fatal(err)
@@ -282,10 +294,11 @@ func TestPass_SharedAddressAndPace(t *testing.T) {
 	for key, want := range map[string]string{
 		nat: "human|script beacon,engaged,assets loaded," +
 			"also unknown automated: curl/8.4.0, 3 of 15 events (client curl/8.4.0)",
-		"192.0.2.81": "unknown|client Go-http-client/1.1,no script beacon,no assets,rapid requests",
+		"192.0.2.81": "unknown|client Go-http-client/1.1,no script beacon,no assets",
 		"192.0.2.82": "unknown|API only, no page loaded,rapid requests",
 		"192.0.2.83": "unknown|missing browser headers,no script beacon,no assets",
 		"192.0.2.84": "human|assets loaded,no script beacon",
+		"192.0.2.85": "human|assets loaded,no script beacon",
 	} {
 		a := classes[key]
 		if got := a.Class + "|" + strings.Join(a.Reasons, ","); got != want {
