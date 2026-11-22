@@ -6,7 +6,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { api, type Dim, type List, type ListRow } from "./api";
 import { BarRows } from "./charts";
-import { changeText, num, pct } from "./format";
+import { SEP, changeText, joinSep, num, pct } from "./format";
 import { useApi, useDebounced } from "./hooks";
 import {
   CardHead,
@@ -157,14 +157,13 @@ export function TopList({
                 change: compare ? r.change : null,
                 verdict: r.verdict,
                 onClick: onRow ? () => onRow(r) : undefined,
-                title: [
+                title: joinSep([
                   r.label,
-                  `${num(r.value)} · ${pct(r.share)}`,
-                  r.change ? changeText(r.change) : "",
-                  onRow ? "click for the log" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" · "),
+                  num(r.value),
+                  pct(r.share),
+                  r.change && changeText(r.change),
+                  onRow && "click for the log",
+                ]),
               }))}
               other={l.data.other}
             />
@@ -183,7 +182,7 @@ export function TopList({
       )}
       {all && (
         <AllRows
-          title={t.label === title ? title : `${title} · ${t.label}`}
+          title={t.label === title ? title : `${title}${SEP}${t.label}`}
           tab={t}
           cols={cols}
           label={label}
@@ -237,7 +236,10 @@ function RowsTable({
         ))}
         {list.other.count > 0 && (
           <tr>
-            <td className="text-muted">Other · {num(list.other.count)}</td>
+            <td className="text-muted">
+              Other{SEP}
+              {num(list.other.count)}
+            </td>
             {cols.slice(1).map((c, j) => (
               <td key={c.head} className="n text-muted">
                 {j + 1 === cols.findIndex((x) => x.num)
@@ -484,7 +486,7 @@ function AllRows({
             <p className="mt-2.5 mb-0 text-[12.5px] text-muted">
               {num(l.data.rows.length)} of {num(l.data.total)}
               {l.data.total > l.data.rows.length &&
-                ` · the first ${num(ALL_LIMIT)} are shown, search to narrow`}
+                `${SEP}the first ${num(ALL_LIMIT)} are shown, search to narrow`}
             </p>
           </div>
         )}

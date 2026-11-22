@@ -11,6 +11,7 @@ import { setFetcher } from "./api";
 import App from "./App";
 import { MainChart, StackChart } from "./charts";
 import { type FixtureOptions, TRAIL_NEXT, fixtureFetch } from "./fixtures";
+import { SEP } from "./format";
 
 let calls: string[] = [];
 
@@ -56,6 +57,12 @@ function startHeld(url: string) {
 }
 
 const panel = (name: string) => screen.getByRole("region", { name });
+// Text as rendered: the default normalizer folds an en space into a plain
+// one, this one collapses only ASCII whitespace.
+const asIs = {
+  normalizer: (s: string) =>
+    s.replace(/[ \t\r\n]+/g, " ").replace(/^ +| +$/g, ""),
+};
 const lastCall = (path: string) =>
   new URL(calls.filter((c) => c.startsWith(path)).at(-1)!, "http://x")
     .searchParams;
@@ -128,7 +135,7 @@ describe("sign-in", () => {
       target: { value: "fixture-token" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Log in" }));
-    expect(await screen.findByText("dev ·")).toBeInTheDocument();
+    expect(await screen.findByText(`dev${SEP}`, asIs)).toBeInTheDocument();
     expect(calls.filter((c) => c === "/api/me")).toHaveLength(2);
     // The signed-in dashboard never fetches the art.
     expect(cover()).toBeNull();
@@ -261,8 +268,8 @@ describe("dashboard on a domain with a server feed", () => {
         within(panel("Overview")).getAllByRole("button", { pressed: true }),
       );
     expect(tiles).toHaveLength(6);
-    expect(document.querySelector(".topbar")).toHaveTextContent(
-      "7 humans online · 3 automated",
+    expect(document.querySelector(".topbar")?.textContent).toContain(
+      `7 humans online${SEP}3 automated`,
     );
     expect(await screen.findByText("Who is asking")).toBeInTheDocument();
     await screen.findByText("Requests by class");
@@ -275,10 +282,10 @@ describe("dashboard on a domain with a server feed", () => {
   it("switches the main chart with a tile", async () => {
     start();
     const ov = await screen.findByRole("region", { name: "Overview" });
-    await within(ov).findByText("Visitors per day · all");
+    await within(ov).findByText(`Visitors per day${SEP}all`, asIs);
     fireEvent.click(within(ov).getByRole("button", { name: /Page views/ }));
     expect(
-      within(ov).getByText("Page views per day · all"),
+      within(ov).getByText(`Page views per day${SEP}all`, asIs),
     ).toBeInTheDocument();
     const hit = within(ov).getByTestId("chart-hit");
     fireEvent.mouseMove(hit, { clientX: 500, clientY: 100 });
@@ -292,7 +299,7 @@ describe("dashboard on a domain with a server feed", () => {
   it("draws no comparison with the comparison off", async () => {
     start("/dashboard/?cmp=off");
     const ov = await screen.findByRole("region", { name: "Overview" });
-    await within(ov).findByText("Visitors per day · all");
+    await within(ov).findByText(`Visitors per day${SEP}all`, asIs);
     // The backend sends an empty previous series, not none.
     expect(lastCall("/api/dash/overview").get("cmp")).toBe("off");
     fireEvent.mouseMove(within(ov).getByTestId("chart-hit"), {
@@ -328,7 +335,7 @@ describe("dashboard on a domain with a server feed", () => {
 
   it("keeps range, audience and comparison in the URL", async () => {
     start();
-    await screen.findByText("Visitors per day · all");
+    await screen.findByText(`Visitors per day${SEP}all`, asIs);
     fireEvent.click(screen.getByRole("button", { name: "30d" }));
     expect(window.location.search).toContain("range=30d");
     await waitFor(() =>
@@ -338,7 +345,7 @@ describe("dashboard on a domain with a server feed", () => {
     expect(window.location.search).toContain("aud=bots");
     expect(localStorage.getItem("nui.aud")).toBe("bots");
     expect(
-      await screen.findByText("Addresses per day · bots"),
+      await screen.findByText(`Addresses per day${SEP}bots`, asIs),
     ).toBeInTheDocument();
     // Traffic and the errors show every class whatever the switch says.
     await waitFor(() =>
@@ -520,7 +527,7 @@ describe("dashboard on a domain with a server feed", () => {
     // A run the page bound splits: shown as going on, not as complete.
     const run = () =>
       within(d)
-        .getByText(/^view \/:text ·/)
+        .getByText(new RegExp(`^view /:text${SEP}`), asIs)
         .closest("li") as HTMLElement;
     expect(run()).toHaveTextContent("page_view × 3+");
     expect(run()).toHaveTextContent("every 10 s, continues earlier");
@@ -634,7 +641,7 @@ describe("dashboard on a domain with a server feed", () => {
     start();
     const pages = await screen.findByRole("region", { name: "Pages" });
     await within(pages).findByText("/AS:n");
-    expect(within(pages).getByText("Other · 2")).toBeInTheDocument();
+    expect(within(pages).getByText(`Other${SEP}2`, asIs)).toBeInTheDocument();
     // Entry is the share of visits that began on the page.
     expect(within(pages).getByText("6.6 %")).toBeInTheDocument();
     fireEvent.click(within(pages).getByRole("button", { name: "By change" }));
@@ -766,7 +773,9 @@ describe("dashboard on a domain with a server feed", () => {
     const bars = await within(t).findAllByTestId("stack-hit");
     expect(bars).toHaveLength(7);
     fireEvent.mouseMove(bars[6], { clientX: 900, clientY: 100 });
-    expect(screen.getByRole("tooltip")).toHaveTextContent("still filling");
+    expect(screen.getByRole("tooltip").textContent).toContain(
+      `${SEP}still filling`,
+    );
     fireEvent.mouseLeave(bars[6]);
     const who = screen.getByRole("region", { name: "Who is asking" });
     const parts = within(who).getAllByTestId("strip-part");
@@ -850,7 +859,7 @@ describe("dashboard on a domain with a server feed", () => {
     expect(await within(d).findByText("Rate-limited")).toBeInTheDocument();
     // The collector-wide figure: unknown domains and wrong feed keys.
     expect(
-      within(d).getByText("Unknown site or wrong key · all sites"),
+      within(d).getByText(`Unknown site or wrong key${SEP}all sites`, asIs),
     ).toBeInTheDocument();
     expect(within(d).getByText("412 MB")).toBeInTheDocument();
     expect(
@@ -919,7 +928,7 @@ describe("while an answer is on its way", () => {
   it("keeps the same domain's answer dimmed, without paging from it", async () => {
     startHeld("/dashboard/");
     const ov = await screen.findByRole("region", { name: "Overview" });
-    await within(ov).findByText("Visitors per day · all");
+    await within(ov).findByText(`Visitors per day${SEP}all`, asIs);
     const v = panel("Visitors by address");
     await within(v).findByText("198.51.100.7");
     const mainChart = () => within(ov).getByTestId("chart-hit").closest("svg");
@@ -1317,6 +1326,58 @@ describe("log page", () => {
     expect(within(log).queryByRole("combobox", { name: "Status" })).toBeNull();
     expect(within(log).queryByText("Source")).toBeNull();
     expect(within(log).queryByRole("option", { name: "request" })).toBeNull();
+  });
+});
+
+describe("separators", () => {
+  // A separating dot with a plain space beside it, in the rendered text or in
+  // a title or label that mirrors it: SEP's en spaces are the only spacing.
+  const plainDots = () => {
+    const texts = [document.body.textContent ?? ""];
+    for (const el of document.querySelectorAll("[title], [aria-label]")) {
+      texts.push(el.getAttribute("title") ?? "");
+      texts.push(el.getAttribute("aria-label") ?? "");
+    }
+    return texts.flatMap((t) => t.match(/.{0,24}(?: ·|· ).{0,24}/g) ?? []);
+  };
+
+  it("spaces every dot with en spaces on the main screens", async () => {
+    // The dashboard with a feed: every section, a tooltip, a visitor's detail.
+    const first = start();
+    const footer = await screen.findByRole("region", { name: "This domain" });
+    await within(footer).findByText("Rate limit");
+    const pages = await screen.findByRole("region", { name: "Pages" });
+    await within(pages).findByText("/AS:n");
+    const v = panel("Visitors by address");
+    fireEvent.click(await within(v).findByText("203.0.113.42"));
+    const d = screen.getByRole("region", { name: "Visitor" });
+    await within(d).findByText("Person");
+    const t = screen.getByRole("region", { name: "Requests by class" });
+    const bars = await within(t).findAllByTestId("stack-hit");
+    fireEvent.mouseMove(bars[6], { clientX: 900, clientY: 100 });
+    expect(document.body.textContent).toContain(`${SEP}still filling`);
+    expect(document.body.textContent).toContain(`Chrome${SEP}macOS`);
+    expect(plainDots()).toEqual([]);
+    first.unmount();
+
+    // A domain without a feed: the footer's other texts.
+    const second = start("/dashboard/?site=console.example.com");
+    await screen.findByText(/not connected/);
+    expect(plainDots()).toEqual([]);
+    second.unmount();
+
+    // The log.
+    const third = start("/dashboard/log?site=lens.example.com&range=30d");
+    const log = await screen.findByRole("region", { name: "Log" });
+    await within(log).findByText("100 of 250 events in this range");
+    expect(log.textContent).toContain(SEP);
+    expect(plainDots()).toEqual([]);
+    third.unmount();
+
+    // The sign-in card.
+    start("/dashboard/", { me: 401 });
+    await screen.findByRole("link", { name: "Sign in" });
+    expect(plainDots()).toEqual([]);
   });
 });
 

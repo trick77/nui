@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { api, type Domain, type SourceState } from "./api";
-import { bytes, date, dateTime, num } from "./format";
+import { SEP, bytes, date, dateTime, joinSep, num } from "./format";
 import { useApi } from "./hooks";
 import { scopeKey } from "./lists";
 import { ErrorBox, Panel, SectionHead, Skeleton, useDash } from "./ui";
@@ -53,13 +53,17 @@ export function DomainFooter() {
     ? [
         ["Accepted", x.counters.accepted, false],
         ["Rate-limited", x.counters.rate_limited, x.counters.rate_limited > 0],
-        ["Rejected · invalid", x.counters.rejected, false],
-        ["Dropped · queue full", x.counters.dropped, x.counters.dropped > 0],
+        [joinSep(["Rejected", "invalid"]), x.counters.rejected, false],
+        [
+          joinSep(["Dropped", "queue full"]),
+          x.counters.dropped,
+          x.counters.dropped > 0,
+        ],
         // Counted for the collector, not per site: a body naming no
         // configured domain, or a feed request with a key no site has,
         // belongs to none.
         [
-          "Unknown site or wrong key · all sites",
+          joinSep(["Unknown site or wrong key", "all sites"]),
           x.counters.unknown_domain,
           x.counters.unknown_domain > 0,
         ],
@@ -100,14 +104,20 @@ export function DomainFooter() {
             </div>
             <div className="grid grid-cols-1 border-t border-border min-[1000px]:grid-cols-3">
               <section className="px-[18px] py-4">
-                <div className="eyebrow">Sources · {site.site}</div>
+                <div className="eyebrow">
+                  Sources{SEP}
+                  {site.site}
+                </div>
                 <Dl
                   rows={[
                     [
                       "Browser",
                       <Source
                         s={x.sources.browser}
-                        missing="no events yet · load the script on the site"
+                        missing={joinSep([
+                          "no events yet",
+                          "load the script on the site",
+                        ])}
                       />,
                     ],
                     [
@@ -116,8 +126,14 @@ export function DomainFooter() {
                         s={x.sources.server}
                         missing={
                           x.sources.feed
-                            ? "configured, no events yet · requests, status codes and bots without JavaScript show once the feed delivers"
-                            : "not connected · bots without JavaScript, requests and status codes are not visible for this domain"
+                            ? joinSep([
+                                "configured, no events yet",
+                                "requests, status codes and bots without JavaScript show once the feed delivers",
+                              ])
+                            : joinSep([
+                                "not connected",
+                                "bots without JavaScript, requests and status codes are not visible for this domain",
+                              ])
                         }
                       />,
                     ],
@@ -125,7 +141,7 @@ export function DomainFooter() {
                       "Script",
                       <>
                         <span className="font-mono">{x.sources.script}</span>
-                        {x.sources.build && ` · build ${x.sources.build}`}
+                        {x.sources.build && `${SEP}build ${x.sources.build}`}
                       </>,
                     ],
                     ["First event", date(x.sources.first)],
@@ -155,18 +171,28 @@ export function DomainFooter() {
                     ["Batch limit", x.rules.batch],
                     [
                       "Bot list",
-                      `ipverse · ${num(x.rules.botlist.services)} services · updated ${dateTime(x.rules.botlist.updated)}`,
+                      joinSep([
+                        "ipverse",
+                        `${num(x.rules.botlist.services)} services`,
+                        `updated ${dateTime(x.rules.botlist.updated)}`,
+                      ]),
                     ],
                     [
                       "Networks",
-                      `ipverse as-ip-blocks · updated ${dateTime(x.rules.networks.updated)}`,
+                      joinSep([
+                        "ipverse as-ip-blocks",
+                        `updated ${dateTime(x.rules.networks.updated)}`,
+                      ]),
                     ],
                     ["Times shown in", x.rules.tz],
                     [
                       "Model budget",
                       x.rules.llm.configured
                         ? `${num(x.rules.llm.calls_today)} of ${num(x.rules.llm.budget)} calls today`
-                        : "no model configured · computed texts only",
+                        : joinSep([
+                            "no model configured",
+                            "computed texts only",
+                          ]),
                     ],
                   ]}
                 />
