@@ -1,5 +1,5 @@
 import type { ListRow } from "./api";
-import { num } from "./format";
+import { num, pct } from "./format";
 import { type Col, TopList } from "./lists";
 import { Delta, SectionHead, useDash } from "./ui";
 
@@ -19,11 +19,12 @@ export function Content() {
     { head: "Path", cell: (r) => mono(r.label) },
     { head: "Visitors", num: true, cell: (r) => num(r.value) },
     { head: "Views", num: true, cell: (r) => num(r.second) },
-    // Shown only when the backend sends entries per page.
+    // The share of visits that began on the page, shown only when the
+    // backend sends it.
     {
       head: "Entry",
       num: true,
-      cell: (r) => num(r.entry),
+      cell: (r) => pct(r.entry),
       show: (rows) => rows.some((r) => r.entry != null),
     },
     ...(cmp ? [change] : []),

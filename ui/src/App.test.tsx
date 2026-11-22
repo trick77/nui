@@ -551,6 +551,8 @@ describe("dashboard on a domain with a server feed", () => {
     const pages = await screen.findByRole("region", { name: "Pages" });
     await within(pages).findByText("/AS:n");
     expect(within(pages).getByText("Other · 2")).toBeInTheDocument();
+    // Entry is the share of visits that began on the page.
+    expect(within(pages).getByText("6.6 %")).toBeInTheDocument();
     fireEvent.click(within(pages).getByRole("button", { name: "By change" }));
     await waitFor(() =>
       expect(calls.some((c) => c.includes("dim=pages&sort=change"))).toBe(true),
@@ -605,8 +607,9 @@ describe("dashboard on a domain with a server feed", () => {
     await waitFor(() =>
       expect(window.location.pathname).toBe("/dashboard/log"),
     );
+    // The method and template, as the log's path filter matches them.
     expect(new URLSearchParams(window.location.search).get("path")).toBe(
-      "GET /.env → 404",
+      "GET /.env",
     );
   });
 

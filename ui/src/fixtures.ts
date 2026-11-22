@@ -364,38 +364,45 @@ const row = (
   sub: "",
   gen: null,
   value,
-  second,
+  // Always a figure: views, requests or events beside the value.
+  second: second ?? Math.round(value * 1.3),
   share: 0,
   change,
   verdict,
+  expandable: false,
   ...more,
 });
 
 const LISTS: Record<string, ListRow[]> = {
   pages: [
-    row("/", 1210, 1890, { pct: 3 }, "good", { expandable: false, entry: 980 }),
+    // entry: percent of all visits that began there; every top-level row
+    // opens into its raw paths.
+    row("/", 1210, 1890, { pct: 3 }, "good", { expandable: true, entry: 43.3 }),
     row("/AS:n", 840, 2310, { pct: 21 }, "good", {
       expandable: true,
-      entry: 610,
+      entry: 27,
     }),
     row("/:ipv4", 512, 1104, { pct: 9 }, "good", {
       expandable: true,
-      entry: 402,
+      entry: 17.8,
     }),
     row("/:text", 388, 902, { pct: -4 }, "bad", {
       expandable: true,
-      entry: 150,
+      entry: 6.6,
     }),
     row("/:cidr", 141, 260, { pct: 2 }, "flat", {
       expandable: true,
-      entry: 77,
+      entry: 3.4,
     }),
     row("/:ipv6", 62, 71, { new: true }, "good", {
       expandable: true,
-      entry: 40,
+      entry: 1.8,
     }),
-    row("/about", 31, 33, { pct: -11 }, "bad", { entry: 3 }),
-    row("/privacy", 12, 12, null, null, { entry: 1 }),
+    row("/about", 31, 33, { pct: -11 }, "bad", {
+      expandable: true,
+      entry: 0.1,
+    }),
+    row("/privacy", 12, 12, null, "flat", { expandable: true, entry: 0 }),
   ],
   entry: [
     row("/", 980, 1210, { pct: 4 }, "good"),
@@ -407,7 +414,7 @@ const LISTS: Record<string, ListRow[]> = {
     row("/about", 3, 31, { pct: -50 }, "bad"),
   ],
   events: [
-    row("scroll", 912, 640, { pct: 4 }, "good", { sub: "auto" }),
+    row("form", 912, 640, { pct: 4 }, "good", { sub: "auto" }),
     row("outbound_click", 486, 301, { pct: 18 }, "good", { sub: "auto" }),
     row("search", 388, 240, { pct: 11 }, "good", { sub: "auto" }),
     row("download", 133, 97, { pct: -9 }, "bad", { sub: "auto" }),
@@ -415,14 +422,14 @@ const LISTS: Record<string, ListRow[]> = {
     row("js_error", 21, 14, { pct: 5 }, "bad", { sub: "auto" }),
     row("share_link", 9, 9, { pct: -20 }, "bad", { sub: "custom" }),
   ],
+  // By the link's host.
   outbound: [
-    row("github.com/ipverse/as-ip-blocks", 210, 160, { pct: 12 }, "good"),
+    row("github.com", 271, 208, { pct: 12 }, "good"),
     row("console.example.com", 140, 101, { pct: 31 }, "good"),
-    row("github.com/ipverse/rir-ip", 61, 48, { pct: -3 }, "bad"),
     row("ipverse.net", 40, 33, { new: true }, "good"),
   ],
+  // Only visits with a referrer: "direct" is no row.
   referrers: [
-    row("Direct / none", 1320, null, { pct: 4 }, "good"),
     row("github.com", 690, null, { pct: 12 }, "good"),
     row("google.com", 402, null, { pct: -6 }, "bad"),
     row("news.ycombinator.com", 188, null, { new: true }, "good"),
@@ -432,44 +439,49 @@ const LISTS: Record<string, ListRow[]> = {
     row("reddit.com", 12, null, { new: true }, "good"),
   ],
   networks: [
-    row("AS64500", 410, null, { pct: 6 }, "good", {
+    row("64500", 410, null, { pct: 6 }, "good", {
       label: "AS64500 Example Broadband",
     }),
-    row("AS64501", 330, null, { pct: -3 }, "bad", {
+    row("64501", 330, null, { pct: -3 }, "bad", {
       label: "AS64501 ExampleNet Fiber",
     }),
-    row("AS64502", 260, null, { pct: 22 }, "good", {
+    row("64502", 260, null, { pct: 22 }, "good", {
       label: "AS64502 Example Mobile",
     }),
-    row("AS64503", 140, null, { pct: 41 }, "good", {
+    row("64503", 140, null, { pct: 41 }, "good", {
       label: "AS64503 Example University",
     }),
-    row("AS64504", 90, null, { pct: 0 }, "flat", {
+    row("64504", 90, null, { pct: 0 }, "flat", {
       label: "AS64504 Example Telecom",
     }),
-    row("AS64505", 61, null, { new: true }, "good", {
+    row("64505", 61, null, { new: true }, "good", {
       label: "AS64505 Example Cable",
     }),
-    row("AS64506", 30, null, { pct: 2 }, "flat", {
+    row("64506", 30, null, { pct: 2 }, "flat", {
       label: "AS64506 Example Net",
     }),
   ],
+  // A method and template, its most frequent status as sub.
   probed: [
-    row("GET /api/v1/ip/{addr} → 401", 2340, null, { pct: 640 }, "bad", {
+    row("GET /api/v1/ip/{addr}", 2340, 2, { pct: 640 }, "bad", {
       gen: "API walked in order",
+      sub: "401",
     }),
-    row("GET /.env → 404", 96, null, { new: true }, "bad", {
+    row("GET /.env", 96, 9, { new: true }, "bad", {
       gen: "looking for leaked secrets",
+      sub: "404",
     }),
-    row("GET /wp-login.php → 404", 71, null, { pct: 12 }, "bad", {
+    row("GET /wp-login.php", 71, 7, { pct: 12 }, "bad", {
       gen: "WordPress login scan",
+      sub: "404",
     }),
-    row("GET /.git/config → 404", 45, null, { new: true }, "bad", {
+    row("GET /.git/config", 45, 5, { new: true }, "bad", {
       gen: null,
-      sub: "403 and 404",
+      sub: "403",
     }),
-    row("GET /admin → 404", 31, null, { pct: -30 }, "good", {
+    row("GET /admin", 31, 4, { pct: -30 }, "good", {
       gen: "admin panel guess",
+      sub: "404",
     }),
   ],
   refused: [
@@ -479,27 +491,23 @@ const LISTS: Record<string, ListRow[]> = {
     row("198.51.100.201", 301, null, { new: true }, "bad", {
       sub: "AS64511 Example Hosting",
     }),
-    row("192.0.2.66", 14, null, { pct: -8 }, "good", { sub: "Googlebot" }),
+    row("192.0.2.66", 14, null, { pct: -8 }, "good", {
+      sub: "AS15169 Google LLC",
+    }),
     row("2001:db8:4f2:1a00::/64", 2, null, { pct: 0 }, "flat", {
       sub: "AS64501 ExampleNet Fiber",
     }),
   ],
   errors: [
-    row("e1", 84, 14, { new: true }, "bad", {
-      label: 'TypeError: cannot read "prefixes"',
-      sub: "/AS:n · Safari",
+    // A script error by its message, a server one by its request.
+    row('TypeError: cannot read "prefixes"', 84, 14, { new: true }, "bad", {
+      sub: "js",
     }),
-    row("e2", 37, 21, { pct: 12 }, "bad", {
-      label: "500 Internal Server Error",
-      sub: "GET /api/v1/search",
+    row("GET /api/v1/search", 37, 21, { pct: 12 }, "bad", {
+      sub: "server 500",
     }),
-    row("e3", 19, 19, { pct: -40 }, "good", {
-      label: "Failed to load /assets/index-a41c.js",
-      sub: "/ · after deploy 20.11.",
-    }),
-    row("e4", 11, 9, { pct: 0 }, "flat", {
-      label: "Unhandled rejection: AbortError",
-      sub: "/:text",
+    row("Unhandled rejection: AbortError", 11, 9, { pct: 0 }, "flat", {
+      sub: "js",
     }),
   ],
   countries: [
@@ -567,7 +575,7 @@ function list(q: URLSearchParams, feed: boolean): List | null {
       ),
     );
   } else rows = [...(LISTS[dim] ?? [])];
-  if (dim === "errors" && !feed) rows = rows.filter((r) => r.key !== "e2");
+  if (dim === "errors" && !feed) rows = rows.filter((r) => r.sub === "js");
   if (q.get("sub")) rows = rows.filter((r) => r.sub === q.get("sub"));
   if (term)
     rows = rows.filter((r) =>

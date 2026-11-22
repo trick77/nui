@@ -121,8 +121,9 @@ export type ListRow = {
   change: Change;
   verdict: Verdict | null;
   expandable?: boolean;
-  // Optional: entries for pages, the map shade for countries (1 lightest
-  // to 4). Shown only when the backend sends them.
+  // Optional: for pages and entry pages the percent of visits that began
+  // there, the map shade for countries (1 lightest to 4). Shown only when
+  // the backend sends them.
   entry?: number;
   level?: number;
 };
