@@ -120,8 +120,6 @@ type Briefing struct {
 type Reading struct {
 	Signature string
 	Body      string
-	BasisFrom int64
-	BasisTo   int64
 	CreatedAt int64
 }
 

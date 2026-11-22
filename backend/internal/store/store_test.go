@@ -120,11 +120,11 @@ func TestStatsAndLLM(t *testing.T) {
 		t.Fatalf("briefing %+v %v %v", got, ok, err)
 	}
 
-	if err := st.PutReading(t.Context(), Reading{Signature: "s", Body: "{}", BasisFrom: 1, BasisTo: 2}); err != nil {
+	if err := st.PutReading(t.Context(), Reading{Signature: "s", Body: "{}", CreatedAt: 2}); err != nil {
 		t.Fatal(err)
 	}
 	rs, err := st.Readings(t.Context(), []string{"s", "t"})
-	if err != nil || len(rs) != 1 || rs["s"].BasisTo != 2 {
+	if err != nil || len(rs) != 1 || rs["s"].CreatedAt != 2 {
 		t.Fatalf("readings %+v %v", rs, err)
 	}
 	if rs, err := st.Readings(t.Context(), nil); err != nil || len(rs) != 0 {

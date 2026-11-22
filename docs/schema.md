@@ -139,8 +139,6 @@ Go types:
 | --- | --- | --- | --- | --- |
 | `signature` | TEXT | yes |  | 1 |
 | `body` | TEXT | no |  |  |
-| `basis_from` | INTEGER | no |  |  |
-| `basis_to` | INTEGER | no |  |  |
 | `created_at` | INTEGER | no |  |  |
 
 ## llm_usage
@@ -272,8 +270,6 @@ erDiagram
     llm_reading {
         TEXT signature PK
         TEXT body
-        INTEGER basis_from
-        INTEGER basis_to
         INTEGER created_at
     }
     llm_usage {

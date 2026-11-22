@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -55,8 +54,10 @@ func (s *Server) handleNoteworthy(w http.ResponseWriter, r *http.Request, q *que
 		s.fail(w, r, err)
 		return
 	}
+	// The briefing is the model's only for the very set of fact ids it was written for (the model answers nil
+	// otherwise, and for no findings): the computed text stands in until a new one is written.
 	var b *insight.Briefing
-	if s.Model != nil && s.Model.Configured() {
+	if s.Model != nil && s.Model.Configured() && len(in.Facts) > 0 {
 		b = s.Model.Briefing(ctx, in)
 	}
 	items, more := noteItems(in.Facts, b)
@@ -64,10 +65,15 @@ func (s *Server) handleNoteworthy(w http.ResponseWriter, r *http.Request, q *que
 	if len(in.Facts) == 1 {
 		headline["text"] = "1 finding against the " + fq.p.prevL
 	}
-	if b != nil && b.Headline != "" {
-		headline["gen"] = b.Headline
+	asOf := in.AsOf
+	if b != nil {
+		if b.Headline != "" {
+			headline["gen"] = b.Headline
+		}
+		// The briefing's own time: its words were written for the facts as of then.
+		asOf = b.AsOf
 	}
-	apix.JSON(w, http.StatusOK, map[string]any{"headline": headline, "as_of": iso(in.AsOf), "items": items, "more": more})
+	apix.JSON(w, http.StatusOK, map[string]any{"headline": headline, "as_of": iso(asOf), "items": items, "more": more})
 }
 
 // noteItems orders the findings: the briefing's lines first (its order, its words, related facts merged), then
@@ -152,13 +158,19 @@ func (s *Server) briefingInput(ctx context.Context, q *query) (insight.BriefingI
 		return in, err
 	}
 	in.Facts = facts
-	h := sha256.New()
-	_ = json.NewEncoder(h).Encode(struct {
-		T []insight.TileFact
-		F []insight.Fact
-	}{in.Tiles, in.Facts})
-	in.Hash = hex.EncodeToString(h.Sum(nil))
+	in.Hash = factsHash(facts)
 	return in, nil
+}
+
+// factsHash identifies a set of fact ids, in any order: a briefing written for it fits it whatever the figures.
+func factsHash(facts []insight.Fact) string {
+	ids := make([]string, 0, len(facts))
+	for _, f := range facts {
+		ids = append(ids, f.ID)
+	}
+	slices.Sort(ids)
+	sum := sha256.Sum256([]byte(strings.Join(ids, "\x00")))
+	return hex.EncodeToString(sum[:])
 }
 
 // closedQuery restricts q to its closed buckets and its comparison's: the bounds a finding is computed on.
@@ -187,7 +199,8 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insigh
 		case t.Key == "visitors" && t.Change != nil && t.Change["pct"] != nil && t.Value >= minVisitorsForTrend:
 			p := t.Change["pct"].(float64)
 			if math.Abs(p) >= trendPct {
-				add(insight.Fact{ID: "trend:visitors", Kind: "people", Figure: signed(p) + " %", Unit: "visitors",
+				// The direction is part of the id: a line written for a rise never sits beside a fall.
+				add(insight.Fact{ID: "trend:visitors:" + upDown(p), Kind: "people", Figure: signed(p) + " %", Unit: "visitors",
 					Text:  fmt.Sprintf("Visitors %s against the %s (%s, was %s)", upDown(p), q.p.prevL, num(t.Value), num(*t.Prev)),
 					Score: 100 + math.Abs(p), Target: insight.Target{Panel: "log",
 						Filter: map[string]string{"kind": "page_view"}}})
@@ -195,7 +208,7 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insigh
 		case t.Key == "auto_share" && t.Change != nil && t.Change["pp"] != nil:
 			pp := t.Change["pp"].(float64)
 			if math.Abs(pp) >= autoShareSwingPP {
-				add(insight.Fact{ID: "trend:auto_share", Kind: "automation", Figure: num(t.Value) + " %",
+				add(insight.Fact{ID: "trend:auto_share:" + upDown(pp), Kind: "automation", Figure: num(t.Value) + " %",
 					Unit: "unknown automated", Text: fmt.Sprintf("Unknown automated share %s by %s pp", upDown(pp),
 						num(math.Abs(pp))), Score: 400 + math.Abs(pp), Target: insight.Target{Panel: "log",
 						Filter: map[string]string{"class": "unknown"}}})

@@ -4,8 +4,10 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"math"
@@ -14,7 +16,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode"
 
 	"github.com/trick77/nui/backend/internal/apix"
 	"github.com/trick77/nui/backend/internal/classify"
@@ -24,11 +28,11 @@ import (
 // actors sums every address key over the range, a piece (at most a day) at a time. Visits are distinct sessions
 // over the whole range: a session crossing a piece boundary is one visit, so they are counted from (key, session)
 // pairs, never summed per piece.
-func (s *Server) actors(ctx context.Context, q *query) (map[string]*actor, error) {
+func (s *Server) actors(ctx context.Context, q *query, from, to time.Time) (map[string]*actor, error) {
 	out := map[string]*actor{}
 	// A hash per (key, session) seen: a few bytes each, not the strings.
 	sessions := map[uint64]struct{}{}
-	for _, pc := range pieces(q.p.From(), q.p.Bounds[q.p.n()]) {
+	for _, pc := range pieces(from, to) {
 		if err := s.actorSessions(ctx, q, pc[0], pc[1], sessions, out); err != nil {
 			return nil, err
 		}
@@ -194,23 +198,62 @@ func (s *Server) handleVisitors(w http.ResponseWriter, r *http.Request, q *query
 		apix.Error(w, http.StatusBadRequest, "bad limit")
 		return
 	}
-	offset, err := intParam(v.Get("cursor"), 0, 0, math.MaxInt32)
+	after, err := parseVisitorCursor(v.Get("cursor"), q.p.Now)
 	if err != nil {
 		apix.Error(w, http.StatusBadRequest, "bad cursor")
 		return
 	}
+	// The first page freezes the span [range start, now); every later page reads the same span (its cursor says
+	// which) from the same snapshot, so rows neither move between pages nor repeat.
+	span := visitorCursor{From: ms(q.p.From()), To: ms(q.p.Now)}
+	if after != nil {
+		span.From, span.To = after.From, after.To
+	}
 	ctx := r.Context()
-	all, err := s.actors(ctx, q)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	cls, err := s.classes(ctx, q.site.ID, q.p.From(), q.p.Now)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
 	needle := strings.ToLower(strings.TrimSpace(v.Get("q")))
+	snapKey := fmt.Sprintf("%d|%s|%s|%s|%s|%d|%d", q.site.ID, q.aud, sortBy, class, needle, span.From, span.To)
+	rows, ok := s.snaps.get(snapKey, s.now())
+	if !ok {
+		if rows, err = s.visitorRows(ctx, q, span, sortBy, class, needle); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		s.snaps.put(snapKey, rows, s.now())
+	}
+	start := 0
+	if after != nil {
+		// The first row past the cursor's (value, key) in the snapshot's order.
+		start = len(rows)
+		for i := range rows {
+			if v := sortValue(rows[i], sortBy); v < after.Value || (v == after.Value && rows[i].Key > after.Key) {
+				start = i
+				break
+			}
+		}
+	}
+	end := min(start+limit, len(rows))
+	page := slices.Clone(rows[start:end])
+	resp := map[string]any{"total": len(rows), "next": ""}
+	if end < len(rows) {
+		last := page[len(page)-1]
+		resp["next"] = visitorCursor{From: span.From, To: span.To, Value: sortValue(last, sortBy), Key: last.Key}.String()
+	}
+	s.readRows(ctx, q, span, page, readQueue(rows, page))
+	resp["rows"] = page
+	apix.JSON(w, http.StatusOK, resp)
+}
+
+// visitorRows is the table over a span: every actor, filtered and sorted (by the sort value, then the key).
+func (s *Server) visitorRows(ctx context.Context, q *query, span visitorCursor, sortBy, class, needle string) ([]visitorRow, error) {
+	from, to := time.UnixMilli(span.From), time.UnixMilli(span.To)
+	all, err := s.actors(ctx, q, from, to)
+	if err != nil {
+		return nil, err
+	}
+	cls, err := s.classes(ctx, q.site.ID, from, to)
+	if err != nil {
+		return nil, err
+	}
 	rows := make([]visitorRow, 0, len(all))
 	for _, a := range all {
 		row := s.visitorRow(q, a, cls[a.key])
@@ -223,34 +266,147 @@ func (s *Server) handleVisitors(w http.ResponseWriter, r *http.Request, q *query
 		}
 		rows = append(rows, row)
 	}
-	key := func(r visitorRow) int64 {
-		switch sortBy {
-		case "requests":
-			return *r.Requests
-		case "refused":
-			return *r.Refused
-		case "events":
-			return r.Events
-		}
-		return r.Views
-	}
 	slices.SortFunc(rows, func(a, b visitorRow) int {
-		if c := cmp.Compare(key(b), key(a)); c != 0 {
+		if c := cmp.Compare(sortValue(b, sortBy), sortValue(a, sortBy)); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.Key, b.Key)
 	})
-	resp := map[string]any{"total": len(rows), "next": ""}
-	page := []visitorRow{}
-	if offset < len(rows) {
-		page = rows[offset:min(offset+limit, len(rows))]
-		if offset+limit < len(rows) {
-			resp["next"] = strconv.Itoa(offset + limit)
+	return rows, nil
+}
+
+func sortValue(r visitorRow, sortBy string) int64 {
+	switch sortBy {
+	case "requests":
+		return deref(r.Requests)
+	case "refused":
+		return deref(r.Refused)
+	case "events":
+		return r.Events
+	}
+	return r.Views
+}
+
+// visitorCursor is a visitors page's position: the frozen span and the last row's sort value and key, base64url
+// JSON on the wire.
+type visitorCursor struct {
+	From  int64  `json:"f"`
+	To    int64  `json:"t"`
+	Value int64  `json:"v"`
+	Key   string `json:"k"`
+}
+
+func (c visitorCursor) String() string {
+	b, _ := json.Marshal(c)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// parseVisitorCursor reads a cursor, nil for none. Its span must be one a range can have: at most 13 months, not
+// in the future.
+func parseVisitorCursor(s string, now time.Time) (*visitorCursor, error) {
+	if s == "" {
+		return nil, nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, err
+	}
+	var c visitorCursor
+	if err := json.Unmarshal(b, &c); err != nil {
+		return nil, err
+	}
+	if c.From <= 0 || c.To <= c.From || c.To > ms(now)+60_000 || c.To-c.From > 400*dayMS || len(c.Key) > 64 {
+		return nil, errors.New("cursor out of bounds")
+	}
+	return &c, nil
+}
+
+// snapshots keeps the sorted visitor tables a cursor pages through: a few, for minutes, bounded in rows.
+type snapshots struct {
+	mu sync.Mutex
+	m  map[string]snapshot
+}
+
+type snapshot struct {
+	rows []visitorRow
+	at   time.Time
+}
+
+const (
+	snapshotTTL     = 10 * time.Minute
+	snapshotMaxRows = 200_000 // all snapshots together
+)
+
+func (c *snapshots) get(key string, now time.Time) ([]visitorRow, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sn, ok := c.m[key]
+	if !ok || now.Sub(sn.at) > snapshotTTL {
+		return nil, false
+	}
+	return sn.rows, true
+}
+
+func (c *snapshots) put(key string, rows []visitorRow, now time.Time) {
+	if len(rows) > snapshotMaxRows {
+		return // too large to keep: later pages recompute the same frozen span
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.m == nil {
+		c.m = map[string]snapshot{}
+	}
+	total := len(rows)
+	for k, sn := range c.m {
+		if now.Sub(sn.at) > snapshotTTL {
+			delete(c.m, k)
+			continue
+		}
+		total += len(sn.rows)
+	}
+	// Over the bound: the oldest go first.
+	for total > snapshotMaxRows && len(c.m) > 0 {
+		var oldest string
+		for k, sn := range c.m {
+			if oldest == "" || sn.at.Before(c.m[oldest].at) {
+				oldest = k
+			}
+		}
+		total -= len(c.m[oldest].rows)
+		delete(c.m, oldest)
+	}
+	c.m[key] = snapshot{rows: rows, at: now}
+}
+
+// Readings queued per table view, and from where: the actors leading by requests and by refusals, and the unknown
+// automated, of the page shown.
+const (
+	readQueueTop = 5
+	readQueueMax = 5
+)
+
+// readQueue is the keys of page rows a missing reading is queued for: rows among the whole table's top by requests
+// or by refusals, or classed unknown; at most readQueueMax. Every other row only shows a cached reading.
+func readQueue(all, page []visitorRow) map[string]bool {
+	top := map[string]bool{}
+	for _, by := range []string{"requests", "refused"} {
+		ranked := slices.Clone(all)
+		slices.SortStableFunc(ranked, func(a, b visitorRow) int {
+			return cmp.Compare(sortValue(b, by), sortValue(a, by))
+		})
+		for _, r := range ranked[:min(readQueueTop, len(ranked))] {
+			if sortValue(r, by) > 0 {
+				top[r.Key] = true
+			}
 		}
 	}
-	s.readRows(ctx, q, page)
-	resp["rows"] = page
-	apix.JSON(w, http.StatusOK, resp)
+	out := map[string]bool{}
+	for _, r := range page {
+		if len(out) < readQueueMax && (top[r.Key] || r.Class == "unknown") {
+			out[r.Key] = true
+		}
+	}
+	return out
 }
 
 func (s *Server) visitorRow(q *query, a *actor, ci classInfo) visitorRow {
@@ -276,17 +432,27 @@ func (s *Server) visitorRow(q *query, a *actor, ci classInfo) visitorRow {
 	return row
 }
 
-// readRows fills the table's "What it does": the computed sentence always, the model's when a reading of the
-// row's behaviour is cached (missing ones are queued: the table is the only place that asks for them).
-func (s *Server) readRows(ctx context.Context, q *query, rows []visitorRow) {
+// readRows fills the table's "What it does": the computed sentence always, over the whole span, and the model's
+// when a reading of the row's behaviour is cached and every fact it cites exists for the row. Missing readings are
+// queued only for the rows in queue.
+func (s *Server) readRows(ctx context.Context, q *query, span visitorCursor, rows []visitorRow, queue map[string]bool) {
+	from, to := time.UnixMilli(span.From), time.UnixMilli(span.To)
 	ins := make([]insight.ReadingInput, 0, len(rows))
+	shown := map[string]map[string]string{}
 	for i := range rows {
-		tr, err := s.trail(ctx, q.site.ID, rows[i].Key, q.p.From(), q.p.Bounds[q.p.n()], cursor{}, 1)
+		counts, err := s.actions(ctx, q.site.ID, rows[i].Key, from, to)
 		if err != nil {
 			continue
 		}
-		rows[i].Does.Text = doesText(rows[i], tr)
-		ins = append(ins, s.readingInput(q.site.ID, rows[i], tr))
+		rows[i].Does.Text = doesText(rows[i], counts)
+		tr, err := s.trail(ctx, q.site.ID, rows[i].Key, from, to, cursor{}, 1)
+		if err != nil {
+			continue
+		}
+		in, facts := s.readingInput(q.site.ID, rows[i], counts, tr)
+		in.Queue = queue[rows[i].Key]
+		ins = append(ins, in)
+		shown[rows[i].Key] = facts
 	}
 	if s.Model == nil || !s.Model.Configured() {
 		return
@@ -294,8 +460,10 @@ func (s *Server) readRows(ctx context.Context, q *query, rows []visitorRow) {
 	got := s.Model.Readings(ctx, ins, false)
 	for i := range rows {
 		if rd, ok := got[rows[i].Key]; ok && rd.Summary != "" {
-			sum := rd.Summary
-			rows[i].Does.Gen = &sum
+			if _, ok := resolve(rd, shown[rows[i].Key]); ok {
+				sum := rd.Summary
+				rows[i].Does.Gen = &sum
+			}
 		}
 	}
 	// Unknown automated clients get a label for their user agent (one per distinct value, kept for good).
@@ -316,14 +484,74 @@ func (s *Server) readRows(ctx context.Context, q *query, rows []visitorRow) {
 	}
 }
 
-// doesText is the computed "What it does": the class and the actor's most frequent action.
-func doesText(row visitorRow, tr trailResult) string {
+// resolve is a reading's evidence as the actor's own statements, ok false when one cited fact does not exist for
+// the actor: then the reading is not shown at all.
+func resolve(rd insight.Reading, facts map[string]string) ([]string, bool) {
+	out := []string{}
+	for _, id := range rd.Evidence {
+		t, ok := facts[id]
+		if !ok {
+			return nil, false
+		}
+		out = append(out, t)
+	}
+	return out, true
+}
+
+// actorSpan is the longest span one statement over a single actor's events reads: the actor index keeps it short,
+// a month of a busy scraper is still a long read.
+const actorSpan = 31 * 24 * time.Hour
+
+// actions counts an actor's events per action ("GET /x → 401", "view /a") over the whole span.
+func (s *Server) actions(ctx context.Context, site int64, key string, from, to time.Time) (map[string]int64, error) {
+	out := map[string]int64{}
+	for _, win := range windows(ms(from), ms(to), actorSpan) {
+		rows, err := s.query(ctx, `SELECT source, kind, name, template, status, COUNT(*) FROM event
+			WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ? GROUP BY source, kind, name, template, status`,
+			site, key, win[0], win[1])
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var source, kind, name, tmpl string
+			var status int
+			var n int64
+			if err := rows.Scan(&source, &kind, &name, &tmpl, &status, &n); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			what, _ := describe(source, kind, name, tmpl, status)
+			out[what] += n
+		}
+		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// topActions orders actions by count, then name.
+func topActions(counts map[string]int64) []string {
+	whats := make([]string, 0, len(counts))
+	for w := range counts {
+		whats = append(whats, w)
+	}
+	slices.SortFunc(whats, func(a, b string) int {
+		if c := cmp.Compare(counts[b], counts[a]); c != 0 {
+			return c
+		}
+		return cmp.Compare(a, b)
+	})
+	return whats
+}
+
+// doesText is the computed "What it does": the class and the actor's most frequent action over the whole span.
+func doesText(row visitorRow, counts map[string]int64) string {
 	what := ""
 	var top int64
-	for w, n := range tr.counts {
-		if n > top || (n == top && w < what) {
-			what, top = w, n
-		}
+	if w := topActions(counts); len(w) > 0 {
+		what, top = w[0], counts[w[0]]
 	}
 	phrase := map[string]string{"human": "Person", "bot": "Known bot", "monitor": "Uptime probe",
 		"unknown": "Unknown automated"}[row.Class]
@@ -335,22 +563,24 @@ func doesText(row visitorRow, tr trailResult) string {
 
 // trailLine is one collapsed run of equal actions.
 type trailLine struct {
-	T         any     `json:"t"`
-	Kind      string  `json:"kind"`
-	What      string  `json:"what"`
-	Count     int64   `json:"count"`
-	From      any     `json:"from"`
-	To        any     `json:"to"`
+	T     any    `json:"t"`
+	Kind  string `json:"kind"`
+	What  string `json:"what"`
+	Count int64  `json:"count"`
+	From  any    `json:"from"`
+	To    any    `json:"to"`
+	// IntervalS is the run's median time between its events: what the run itself did, never an average over the
+	// days a run may span.
 	IntervalS float64 `json:"interval_s"`
 
 	fromMS, toMS int64
+	gaps         []float64
 }
 
 type trailResult struct {
-	lines  []trailLine
-	next   string
-	counts map[string]int64 // what → events, over the lines read
-	gaps   []float64        // seconds between consecutive events
+	lines []trailLine
+	next  string
+	gaps  []float64 // seconds between consecutive events read, newest first
 }
 
 // maxTrailLines bounds a trail page (and what the model is shown); maxTrailEvents the events read for one page.
@@ -362,7 +592,7 @@ const (
 // trail reads an actor's events newest first from before (a keyset cursor, zero for the newest) and collapses
 // runs. Ordered by (ts, id): the actor index holds both, so the read is an index walk, never a sort.
 func (s *Server) trail(ctx context.Context, site int64, key string, from, to time.Time, before cursor, pages int) (trailResult, error) {
-	tr := trailResult{counts: map[string]int64{}, lines: []trailLine{}}
+	tr := trailResult{lines: []trailLine{}}
 	args := []any{site, key, ms(from), ms(to)}
 	cond := ""
 	if before.ts > 0 {
@@ -387,7 +617,6 @@ func (s *Server) trail(ctx context.Context, site int64, key string, from, to tim
 			return tr, err
 		}
 		what, k := describe(source, kind, name, tmpl, status)
-		tr.counts[what]++
 		if prevTS != 0 {
 			tr.gaps = append(tr.gaps, float64(prevTS-ts)/1000)
 		}
@@ -395,8 +624,9 @@ func (s *Server) trail(ctx context.Context, site int64, key string, from, to tim
 		if n := len(tr.lines); n > 0 && tr.lines[n-1].What == what {
 			l := &tr.lines[n-1]
 			l.Count++
+			l.gaps = append(l.gaps, float64(l.fromMS-ts)/1000)
 			l.From, l.fromMS = iso(time.UnixMilli(ts)), ts
-			l.IntervalS = round1(float64(l.toMS-ts) / 1000 / float64(l.Count-1))
+			l.IntervalS = round1(median(l.gaps))
 			last = cursor{ts, id}
 			continue
 		}
@@ -452,11 +682,13 @@ func describe(source, kind, name, tmpl string, status int) (what, k string) {
 	return kind, kind
 }
 
-// readingInput is what the model reads about one actor: computed evidence it may cite by id, the trail, a
-// signature of the behaviour (not the address) to cache the reading by.
-func (s *Server) readingInput(site int64, row visitorRow, tr trailResult) insight.ReadingInput {
+// readingInput is what the model reads about one actor, and the actor's own statements by evidence id (what the
+// dashboard shows for a cited id). The ids name what a statement says, not its figures (requests:refused-most,
+// pace:fast), so a reading cached under the behaviour's signature resolves against each actor's own statements.
+// The model sees no address, network name or date: the reading is shared by every actor with the signature.
+func (s *Server) readingInput(site int64, row visitorRow, counts map[string]int64, tr trailResult) (insight.ReadingInput, map[string]string) {
 	in := insight.ReadingInput{SiteID: site, Key: row.Key, Class: row.Class, Client: row.Client,
-		Network: strings.TrimSpace(row.Network + " " + row.NetworkKind), Signals: row.Signals}
+		NetworkKind: row.NetworkKind, Signals: row.Signals}
 	for _, l := range tr.lines {
 		line := l.What
 		if l.Count > 1 {
@@ -464,53 +696,78 @@ func (s *Server) readingInput(site int64, row visitorRow, tr trailResult) insigh
 		}
 		in.Trail = append(in.Trail, line)
 	}
-	if len(tr.lines) > 0 {
-		in.To = time.UnixMilli(tr.lines[0].toMS).UTC()
-		in.From = time.UnixMilli(tr.lines[len(tr.lines)-1].fromMS).UTC()
+	shown := map[string]string{}
+	ev := func(id, model, own string) {
+		in.Evidence = append(in.Evidence, insight.Evidence{ID: id, Text: model})
+		shown[id] = own
 	}
-	ev := func(id, text string) { in.Evidence = append(in.Evidence, insight.Evidence{ID: id, Text: text}) }
 	if row.Requests != nil && *row.Requests > 0 {
-		ev("requests", fmt.Sprintf("%d requests, %.0f %% refused", *row.Requests, *row.RefusedShare))
+		t := fmt.Sprintf("%d requests, %.0f %% refused", *row.Requests, *row.RefusedShare)
+		ev("requests:refused-"+bucket(*row.RefusedShare, 10, 90, "none", "some", "most"), t, t)
 	}
 	if row.Views > 0 {
-		ev("views", fmt.Sprintf("%d page views in %d visits", row.Views, deref(row.Visits)))
+		t := fmt.Sprintf("%d page views in %d visits", row.Views, deref(row.Visits))
+		ev("views", t, t)
 	}
-	whats := make([]string, 0, len(tr.counts))
-	for w := range tr.counts {
-		whats = append(whats, w)
-	}
-	slices.SortFunc(whats, func(a, b string) int {
-		if c := cmp.Compare(tr.counts[b], tr.counts[a]); c != 0 {
-			return c
-		}
-		return cmp.Compare(a, b)
-	})
+	whats := topActions(counts)
 	if len(whats) > 0 {
-		ev("top", fmt.Sprintf("Most frequent: %s (%d×)", whats[0], tr.counts[whats[0]]))
-		ev("variety", fmt.Sprintf("%d different actions", len(whats)))
+		t := fmt.Sprintf("Most frequent: %s (%d×)", whats[0], counts[whats[0]])
+		ev("top", t, t)
+		t = fmt.Sprintf("%d different actions", len(whats))
+		ev("variety:"+bucket(float64(len(whats)), 2, 6, "one", "few", "many"), t, t)
 	}
+	pace := ""
 	if len(tr.gaps) >= 3 {
-		ev("pace", fmt.Sprintf("Median %.1f s between requests", median(tr.gaps)))
+		med := median(tr.gaps)
+		pace = bucket(med, 2, 60, "fast", "steady", "slow")
+		t := fmt.Sprintf("Median %.1f s between its latest %d events", med, len(tr.gaps)+1)
+		ev("pace:"+pace, t, t)
 	}
-	ev("client", "Client "+row.Client)
+	ev("client:"+clientFamily(row.Client), "Client "+row.Client, "Client "+row.Client)
 	if row.Network != "" {
-		ev("network", strings.TrimSpace("Network "+row.Network+" "+row.NetworkKind))
+		kind := row.NetworkKind
+		if kind == "" {
+			kind = "other"
+		}
+		ev("network:"+kind, "Network kind "+kind, strings.TrimSpace("Network "+row.Network+" ("+kind+")"))
 	}
-	for i, sg := range row.Signals {
-		ev("signal"+strconv.Itoa(i+1), "Signal: "+sg)
+	for _, sg := range row.Signals {
+		ev("signal:"+slug(sg), "Signal: "+sg, "Signal: "+sg)
 	}
 	// The signature: what it does (top actions, counts on a log scale), how fast, with what kind of client from what
-	// kind of network. Two addresses doing the same share it, and with it the reading.
-	sig := []string{row.Class, clientFamily(row.Client), row.NetworkKind}
+	// kind of network, and the statements the reading may cite. Two addresses doing the same share it, and with it
+	// the reading.
+	sig := []string{row.Class, clientFamily(row.Client), row.NetworkKind, "pace:" + pace}
 	for _, w := range whats[:min(8, len(whats))] {
-		sig = append(sig, fmt.Sprintf("%s:%d", w, int(math.Log2(float64(tr.counts[w])+1))))
+		sig = append(sig, fmt.Sprintf("%s:%d", w, int(math.Log2(float64(counts[w])+1))))
 	}
-	if len(tr.gaps) >= 3 {
-		sig = append(sig, fmt.Sprintf("pace:%d", int(math.Log2(median(tr.gaps)+1))))
+	ids := make([]string, 0, len(in.Evidence))
+	for _, e := range in.Evidence {
+		ids = append(ids, e.ID)
 	}
+	slices.Sort(ids)
+	sig = append(sig, ids...)
 	sum := sha256.Sum256([]byte(strings.Join(sig, "\x00")))
 	in.Signature = hex.EncodeToString(sum[:16])
-	return in
+	return in, shown
+}
+
+// bucket names where v falls: below lo, below hi, or above.
+func bucket(v, lo, hi float64, low, mid, high string) string {
+	switch {
+	case v < lo:
+		return low
+	case v < hi:
+		return mid
+	}
+	return high
+}
+
+// slug is a signal as an id: lower case, digits dropped (a client's version, a count), the rest joined by dashes.
+func slug(s string) string {
+	return strings.Join(strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r)
+	}), "-")
 }
 
 // clientFamily drops the version: curl/8.4 and curl/8.5 behave alike.
@@ -570,19 +827,29 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		"country": row.Country, "client": row.Client, "signals": row.Signals, "requests": row.Requests,
 		"addresses": addrs, "hours": hours, "trail": tr.lines, "trail_next": tr.next, "reading": nil}
 	if s.Model != nil && s.Model.Configured() {
-		in := s.readingInput(q.site.ID, row, tr)
-		if rd, ok := s.Model.Readings(ctx, []insight.ReadingInput{in}, true)[key]; ok {
-			evidence := []string{}
-			for _, id := range rd.Evidence {
-				for _, e := range in.Evidence {
-					if e.ID == id {
-						evidence = append(evidence, e.Text)
-					}
-				}
+		// The reading reads the newest trail page, whatever page the user is on.
+		latest := tr
+		if before.ts > 0 {
+			if latest, err = s.trail(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()], cursor{}, 1); err != nil {
+				s.fail(w, r, err)
+				return
 			}
-			related, _ := s.related(ctx, q, key, row.Class)
-			resp["reading"] = map[string]any{"verdict": rd.Verdict, "suspicious": insight.Suspicious(rd.Verdict),
-				"evidence": evidence, "related": related, "basis": map[string]any{"from": iso(rd.From), "to": iso(rd.To)}}
+		}
+		counts, err := s.actions(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()])
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		in, shown := s.readingInput(q.site.ID, row, counts, latest)
+		in.Queue = true // the user opened this actor
+		if rd, ok := s.Model.Readings(ctx, []insight.ReadingInput{in}, true)[key]; ok {
+			// Shown only when every fact it cites exists for this actor, with this actor's figures and span.
+			if evidence, ok := resolve(rd, shown); ok {
+				related, _ := s.related(ctx, q, key, row.Class)
+				resp["reading"] = map[string]any{"verdict": rd.Verdict, "suspicious": insight.Suspicious(rd.Verdict),
+					"evidence": evidence, "related": related,
+					"basis": map[string]any{"from": iso(time.UnixMilli(a.first)), "to": iso(time.UnixMilli(a.last))}}
+			}
 		}
 	}
 	apix.JSON(w, http.StatusOK, resp)

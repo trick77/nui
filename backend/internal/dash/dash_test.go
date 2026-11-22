@@ -453,18 +453,17 @@ func TestVisitorsAndDetail(t *testing.T) {
 	if body["total"].(float64) < 5 {
 		t.Errorf("total %v", body["total"])
 	}
-	// Paging, class filter, search.
+	// Paging (an opaque keyset cursor), class filter, search.
 	_, page1 := r.get(t, "visitors", p(feedSite, "limit", "2"))
-	if page1["next"] != "2" || len(page1["rows"].([]any)) != 2 {
+	if page1["next"] == "" || len(page1["rows"].([]any)) != 2 {
 		t.Errorf("page 1 %v", page1)
 	}
-	_, page2 := r.get(t, "visitors", p(feedSite, "limit", "2", "cursor", "2"))
-	if listRows(page2)[0]["key"] == listRows(page1)[0]["key"] {
+	_, page2 := r.get(t, "visitors", p(feedSite, "limit", "2", "cursor", page1["next"].(string)))
+	if listRows(page2)[0]["key"] == listRows(page1)[0]["key"] || listRows(page2)[0]["key"] == listRows(page1)[1]["key"] {
 		t.Error("page 2 repeats page 1")
 	}
-	_, far := r.get(t, "visitors", p(feedSite, "cursor", "100000"))
-	if len(far["rows"].([]any)) != 0 {
-		t.Error("cursor past the end")
+	if code, _ := r.get(t, "visitors", p(feedSite, "cursor", "100000")); code != http.StatusBadRequest {
+		t.Errorf("a foreign cursor: %d", code)
 	}
 	_, monitors := r.get(t, "visitors", p(feedSite, "class", "monitor"))
 	if rows := listRows(monitors); len(rows) != 1 || rows[0]["key"] != "69.162.124.230" {
@@ -480,13 +479,30 @@ func TestVisitorsAndDetail(t *testing.T) {
 	if rows := listRows(plain); len(rows) == 0 || rows[0]["requests"] != nil || rows[0]["refused"] != nil {
 		t.Errorf("plain visitors %v", plain)
 	}
-	// The table asked the model about its rows, not urgently.
-	if len(model.readIns) == 0 || model.urgentSet || model.readIns[0].Signature == "" {
-		t.Errorf("readings asked %+v", model.readIns)
+	// The table asked the model about its rows, not urgently, and queued readings for a few of them only.
+	queued := 0
+	for _, in := range model.readIns {
+		if in.Queue {
+			queued++
+		}
 	}
-	// Detail: a cached reading for the scanner, evidence picked by id.
+	if len(model.readIns) == 0 || model.urgentSet || model.readIns[0].Signature == "" || queued == 0 ||
+		queued > readQueueMax*4 {
+		t.Errorf("readings asked %d, queued %d", len(model.readIns), queued)
+	}
+	// A cached reading citing a fact this actor does not have is shown nowhere.
 	model.readings[scanner] = insight.Reading{Verdict: "Scraping attempt", Summary: "Walks the lookup API.",
-		Evidence: []string{"requests", "nope", "pace"}, From: r.end.Add(-time.Hour), To: r.end}
+		Evidence: []string{"requests:refused-most", "nope"}}
+	_, body = r.get(t, "visitors", p(feedSite, "sort", "refused", "range", "24h"))
+	if g := listRows(body)[0]["does"].(map[string]any)["gen"]; g != nil {
+		t.Errorf("unresolvable reading shown: %v", g)
+	}
+	if _, d := r.get(t, "visitor", p(feedSite, "key", scanner, "range", "24h")); d["reading"] != nil {
+		t.Errorf("unresolvable reading in the detail: %v", d["reading"])
+	}
+	// Detail: a cached reading for the scanner, evidence resolved to the actor's own figures and span.
+	model.readings[scanner] = insight.Reading{Verdict: "Scraping attempt", Summary: "Walks the lookup API.",
+		Evidence: []string{"requests:refused-most", "pace:fast"}}
 	_, body = r.get(t, "visitors", p(feedSite, "sort", "refused", "range", "24h"))
 	if g := listRows(body)[0]["does"].(map[string]any)["gen"]; g != "Walks the lookup API." {
 		t.Errorf("does.gen %v", g)
@@ -499,8 +515,12 @@ func TestVisitorsAndDetail(t *testing.T) {
 	reading := d["reading"].(map[string]any)
 	ev := reading["evidence"].([]any)
 	if reading["verdict"] != "Scraping attempt" || reading["suspicious"] != true || len(ev) != 2 ||
-		!strings.Contains(ev[0].(string), "refused") || !model.urgentSet {
+		!strings.Contains(ev[0].(string), "refused") || !strings.HasPrefix(ev[1].(string), "Median 0.8 s") ||
+		!model.urgentSet {
 		t.Errorf("reading %v", reading)
+	}
+	if b := reading["basis"].(map[string]any); b["from"] == nil || b["to"] == nil || b["from"] == b["to"] {
+		t.Errorf("basis %v", b)
 	}
 	if len(d["hours"].([]any)) != 24 {
 		t.Errorf("hours %v", d["hours"])

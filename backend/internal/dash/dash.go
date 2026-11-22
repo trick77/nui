@@ -33,6 +33,8 @@ type Server struct {
 	RetentionMonths int
 	Build           string
 	Now             func() time.Time
+
+	snaps snapshots // the visitor tables a cursor pages through
 }
 
 func (s *Server) now() time.Time {

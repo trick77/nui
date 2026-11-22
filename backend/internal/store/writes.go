@@ -214,7 +214,7 @@ func (s *Store) Readings(ctx context.Context, sigs []string) (map[string]Reading
 		args[i] = sg
 	}
 	//nolint:gosec // only placeholders are spliced in; values are bound
-	rows, err := s.DB.QueryContext(ctx, `SELECT signature, body, basis_from, basis_to, created_at FROM llm_reading
+	rows, err := s.DB.QueryContext(ctx, `SELECT signature, body, created_at FROM llm_reading
 		WHERE signature IN (`+placeholders(len(sigs))+`)`, args...)
 	if err != nil {
 		return nil, err
@@ -222,7 +222,7 @@ func (s *Store) Readings(ctx context.Context, sigs []string) (map[string]Reading
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var r Reading
-		if err := rows.Scan(&r.Signature, &r.Body, &r.BasisFrom, &r.BasisTo, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.Signature, &r.Body, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out[r.Signature] = r
@@ -232,10 +232,9 @@ func (s *Store) Readings(ctx context.Context, sigs []string) (map[string]Reading
 
 // PutReading stores a signature's reading.
 func (s *Store) PutReading(ctx context.Context, r Reading) error {
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO llm_reading (signature, body, basis_from, basis_to, created_at)
-		VALUES (?, ?, ?, ?, ?) ON CONFLICT (signature) DO UPDATE SET body = excluded.body,
-		basis_from = excluded.basis_from, basis_to = excluded.basis_to, created_at = excluded.created_at`,
-		r.Signature, r.Body, r.BasisFrom, r.BasisTo, r.CreatedAt)
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO llm_reading (signature, body, created_at)
+		VALUES (?, ?, ?) ON CONFLICT (signature) DO UPDATE SET body = excluded.body, created_at = excluded.created_at`,
+		r.Signature, r.Body, r.CreatedAt)
 	return err
 }
 

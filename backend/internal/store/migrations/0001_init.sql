@@ -89,12 +89,11 @@ CREATE TABLE llm_briefing (
     PRIMARY KEY (site_id, range)
 );
 
--- The model's reading of one behaviour signature (not one address: equal behaviour shares a reading).
+-- The model's reading of one behaviour signature (not one address: equal behaviour shares a reading). It holds no
+-- figure, address, network or time span: the dashboard takes those from the actor it shows.
 CREATE TABLE llm_reading (
     signature  TEXT    PRIMARY KEY,
     body       TEXT    NOT NULL,
-    basis_from INTEGER NOT NULL,
-    basis_to   INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );
 
