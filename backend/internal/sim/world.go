@@ -95,6 +95,7 @@ type World struct {
 
 	regulars [][]*person // per site, the people who come back
 	plans    map[int64]*dayPlan
+	most     int    // the most day plans held at once (TestPlansHeld)
 	seq      uint64 // numbers the requests handed out, their order at one instant
 }
 
@@ -203,6 +204,7 @@ func (w *World) plan(d int64) *dayPlan {
 	}
 	sort.SliceStable(p.batches, func(a, b int) bool { return p.batches[a].at.Before(p.batches[b].at) })
 	w.plans[d] = p
+	w.most = max(w.most, len(w.plans))
 	return p
 }
 
