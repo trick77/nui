@@ -19,8 +19,8 @@ export type SiteInfo = {
   site: string;
   product: string;
   kind: "site" | "api";
+  // null: the source has never delivered (for the server: or has no feed).
   browser: { last: string } | null;
-  // null: the domain has no server feed.
   server: { last: string } | null;
 };
 

@@ -826,11 +826,11 @@ describe("while an answer is on its way", () => {
   it("never pages the log with another filter's cursor", async () => {
     startHeld("/dashboard/log?site=lens.example.com");
     const log = await screen.findByRole("region", { name: "Log" });
-    await within(log).findByText("25 of 70 events in this range");
+    await within(log).findByText("100 of 250 events in this range");
     fireEvent.click(
       within(log).getByRole("button", { name: "Load earlier →" }),
     );
-    await within(log).findByText("50 of 70 events in this range");
+    await within(log).findByText("200 of 250 events in this range");
     hold.match = (u) => u.startsWith("/api/dash/log");
     fireEvent.change(within(log).getByRole("combobox", { name: "Kind" }), {
       target: { value: "request" },
@@ -849,7 +849,7 @@ describe("while an answer is on its way", () => {
   it("drops a page that arrives for a query already left", async () => {
     startHeld("/dashboard/log?site=lens.example.com");
     const log = await screen.findByRole("region", { name: "Log" });
-    await within(log).findByText("25 of 70 events in this range");
+    await within(log).findByText("100 of 250 events in this range");
     hold.match = (u) => u.startsWith("/api/dash/log");
     // The 7 d query's second page is asked for, then the range changes.
     fireEvent.click(
@@ -858,20 +858,20 @@ describe("while an answer is on its way", () => {
     fireEvent.click(screen.getByRole("button", { name: "30d" }));
     const old = (u: string) => u.includes("range=7d");
     await hold.release((u) => !old(u));
-    await within(log).findByText("25 of 70 events in this range");
+    await within(log).findByText("100 of 250 events in this range");
     expect(log).not.toHaveAttribute("aria-busy");
     // Its own paging is not stuck behind the old request.
     const earlier = within(log).getByRole("button", { name: "Load earlier →" });
     expect(earlier).toBeEnabled();
     fireEvent.click(earlier);
     await hold.release((u) => !old(u));
-    await within(log).findByText("50 of 70 events in this range");
+    await within(log).findByText("200 of 250 events in this range");
     // The old query's page lands last and changes nothing.
     await hold.release();
     expect(
-      within(log).getByText("50 of 70 events in this range"),
+      within(log).getByText("200 of 250 events in this range"),
     ).toBeInTheDocument();
-    expect(within(log).getAllByRole("row")).toHaveLength(51);
+    expect(within(log).getAllByRole("row")).toHaveLength(201);
   });
 
   it("never pages a visitor's trail with another visitor's cursor", async () => {
@@ -986,14 +986,14 @@ describe("log page", () => {
   it("filters, pages back and keeps domain and range", async () => {
     start("/dashboard/log?site=lens.example.com&range=30d");
     const log = await screen.findByRole("region", { name: "Log" });
-    await within(log).findByText("25 of 70 events in this range");
+    await within(log).findByText("100 of 250 events in this range");
     expect(screen.queryByRole("group", { name: "Audience" })).toBeNull();
     expect(screen.queryByRole("group", { name: "Compare" })).toBeNull();
     expect(lastCall("/api/dash/log").get("range")).toBe("30d");
     fireEvent.click(
       within(log).getByRole("button", { name: "Load earlier →" }),
     );
-    await within(log).findByText("50 of 70 events in this range");
+    await within(log).findByText("200 of 250 events in this range");
     fireEvent.change(within(log).getByRole("combobox", { name: "Kind" }), {
       target: { value: "request" },
     });
@@ -1004,7 +1004,7 @@ describe("log page", () => {
     fireEvent.change(within(log).getByRole("combobox", { name: "Status" }), {
       target: { value: "4xx" },
     });
-    await within(log).findByText(/of 10 events/);
+    await within(log).findByText(/of 36 events/);
     fireEvent.change(within(log).getByRole("combobox", { name: "Class" }), {
       target: { value: "unknown" },
     });
@@ -1019,7 +1019,7 @@ describe("log page", () => {
       { timeout: 2000 },
     );
     fireEvent.click(within(log).getByRole("button", { name: "Clear filters" }));
-    await within(log).findByText("25 of 70 events in this range");
+    await within(log).findByText("100 of 250 events in this range");
     fireEvent.click(
       within(log).getAllByRole("button", { name: "192.0.2.120" })[0],
     );
@@ -1068,7 +1068,7 @@ describe("log page", () => {
     it("keeps each of them", async () => {
       start("/dashboard/log?site=lens.example.com");
       const log = await screen.findByRole("region", { name: "Log" });
-      await within(log).findByText("25 of 70 events in this range");
+      await within(log).findByText("100 of 250 events in this range");
       fireEvent.change(box(log, "Address or /64"), {
         target: { value: "192.0.2.120" },
       });
@@ -1123,7 +1123,7 @@ describe("log page", () => {
     it("never pull the visitor back into the log", async () => {
       start("/dashboard/log?site=lens.example.com");
       const log = await screen.findByRole("region", { name: "Log" });
-      await within(log).findByText("25 of 70 events in this range");
+      await within(log).findByText("100 of 250 events in this range");
       fireEvent.change(box(log, "Path or event name"), {
         target: { value: "/api" },
       });
@@ -1132,6 +1132,27 @@ describe("log page", () => {
       expect(window.location.pathname).toBe("/dashboard/");
       expect(screen.queryByRole("region", { name: "Log" })).toBeNull();
     });
+  });
+
+  it("shows the source column only on a site with both sources", async () => {
+    for (const [site, column, kind] of [
+      ["lens.example.com", true, "request"],
+      ["api.example.com", false, "request"],
+      ["blog.example.org", false, null],
+    ] as const) {
+      const { unmount } = start(`/dashboard/log?site=${site}`);
+      const log = await screen.findByRole("region", { name: "Log" });
+      await within(log).findAllByText(/events in this range/);
+      if (kind) await within(log).findAllByText(kind);
+      expect(within(log).queryByText("Source") != null).toBe(column);
+      unmount();
+    }
+    // The footer says which source never delivered.
+    start("/dashboard/?site=api.example.com");
+    const footer = await screen.findByRole("region", { name: "This domain" });
+    expect(
+      await within(footer).findByText(/no events yet/),
+    ).toBeInTheDocument();
   });
 
   it("hides server kinds and the source column without a feed", async () => {

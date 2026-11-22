@@ -38,12 +38,21 @@ export const SITES: SiteInfo[] = [
     browser: { last: "2026-11-22T12:58:00Z" },
     server: null,
   },
+  // Nothing delivered yet.
   {
     site: "blog.example.org",
     product: "Blog",
     kind: "site",
     browser: null,
     server: null,
+  },
+  // A server feed only: the script never loaded.
+  {
+    site: "api.example.com",
+    product: "Example Lens",
+    kind: "api",
+    browser: null,
+    server: { last: "2026-11-22T13:19:00Z" },
   },
 ];
 
@@ -907,42 +916,48 @@ function visitor(key: string, feed: boolean): Visitor | null {
 }
 
 const LOG_CLIENTS: [string, ClassKey, string, string, LogRow["source"]][] = [
+  // what as the backend describes an event: a request by its template.
   ["192.0.2.120", "monitor", "request", "HEAD / → 200", "server"],
   [
     "198.51.100.7",
     "unknown",
     "request",
-    "GET /api/v1/ip/203.0.113.1 → 401",
+    "GET /api/v1/ip/{addr} → 401",
     "server",
   ],
-  ["192.0.2.66", "bot", "page_view", "/AS64496", "browser"],
+  ["192.0.2.66", "bot", "page_view", "view /AS:n", "browser"],
   [
     "203.0.113.42",
     "human",
     "outbound_click",
-    "github.com/ipverse/as-ip-blocks",
+    "outbound_click github.com",
     "browser",
   ],
-  ["203.0.113.42", "human", "engagement", "/AS64500 · 90 %", "browser"],
-  ["203.0.113.42", "human", "page_view", "/AS64500", "browser"],
+  ["203.0.113.42", "human", "engagement", "engagement", "browser"],
+  ["203.0.113.42", "human", "page_view", "view /AS:n", "browser"],
   [
     "2001:db8:4f2:1a00::7c",
     "human",
     "outbound_click",
-    "console.example.com",
+    "outbound_click console.example.com",
     "browser",
   ],
 ];
+// A browser as "<browser> · <OS>", a tool by its product token.
 const CLIENT_NAME: Record<string, string> = {
   "192.0.2.120": "UptimeRobot/2.0",
-  "198.51.100.7": "python-requests/2.32",
+  "198.51.100.7": "python-requests/2.32.3",
   "192.0.2.66": "Googlebot/2.1",
-  "203.0.113.42": "Chrome 142 · macOS",
-  "2001:db8:4f2:1a00::7c": "Firefox 145 · Windows",
+  "203.0.113.42": "Chrome · macOS",
+  "2001:db8:4f2:1a00::7c": "Firefox · Windows",
 };
 
-function log(q: URLSearchParams, feed: boolean): Log {
-  let rows: LogRow[] = Array.from({ length: 70 }, (_, i) => {
+// The backend's log page and keyset cursor ("<ms>.<row id>").
+const LOG_PAGE = 100;
+const LOG_ROWS = 250;
+
+function log(q: URLSearchParams, feed: boolean, script: boolean): Log | null {
+  let rows: LogRow[] = Array.from({ length: LOG_ROWS }, (_, i) => {
     const [addr, cls, kind, what, source] = LOG_CLIENTS[i % LOG_CLIENTS.length];
     return {
       t: new Date(NOW.getTime() - i * 47_000).toISOString(),
@@ -955,29 +970,43 @@ function log(q: URLSearchParams, feed: boolean): Log {
     };
   });
   if (!feed) rows = rows.filter((r) => r.source === "browser");
+  if (!script) rows = rows.filter((r) => r.source === "server");
   const addr = q.get("addr");
+  // An address or a /64; anything else is refused.
+  if (addr && /\/(?!64$)/.test(addr)) return null;
   if (addr)
-    rows = rows.filter((r) =>
-      r.addr.startsWith(addr.replace(/:?:?\/(64|48)$/, "")),
-    );
+    rows = rows.filter((r) => r.addr.startsWith(addr.replace(/:?:?\/64$/, "")));
   const path = q.get("path");
   if (path) rows = rows.filter((r) => r.what.includes(path));
-  for (const k of ["class", "kind"] as const) {
-    const v = q.get(k);
-    if (v) rows = rows.filter((r) => r[k] === v);
-  }
+  const cls = q.get("class");
+  if (cls) rows = rows.filter((r) => r.class === cls);
+  // kind: an event kind, or a whole source.
+  const kind = q.get("kind");
+  if (kind)
+    rows = rows.filter((r) =>
+      kind === "browser" || kind === "server"
+        ? r.source === kind
+        : r.kind === kind,
+    );
   const status = q.get("status");
   if (status) rows = rows.filter((r) => r.what.includes(`→ ${status[0]}`));
-  const from = Number(q.get("cursor") || 0);
-  const page = rows.slice(from, from + 25);
+  // Row i's id counts down from the newest.
+  const id = (r: LogRow) => `${Date.parse(r.t)}.${48211 - rows.indexOf(r)}`;
+  const cursor = q.get("cursor") || "";
+  if (cursor && !/^\d+\.\d+$/.test(cursor)) return null;
+  const from = cursor ? rows.findIndex((r) => id(r) === cursor) + 1 : 0;
+  const page = rows.slice(from, from + LOG_PAGE);
   return {
     rows: page,
     total: rows.length,
-    next: from + 25 < rows.length ? String(from + 25) : "",
+    next:
+      page.length === LOG_PAGE && from + LOG_PAGE < rows.length
+        ? id(page[page.length - 1])
+        : "",
   };
 }
 
-function domain(feed: boolean): Domain {
+function domain(feed: boolean, script: boolean): Domain {
   return {
     counters: {
       accepted: 48211,
@@ -987,7 +1016,10 @@ function domain(feed: boolean): Domain {
       unknown_domain: 1904,
     },
     sources: {
-      browser: { state: "receiving", last: "2026-11-22T13:12:00Z" },
+      // null: the script never delivered.
+      browser: script
+        ? { state: "receiving", last: "2026-11-22T13:12:00Z" }
+        : null,
       server: feed
         ? { state: "receiving", last: "2026-11-22T13:20:00Z" }
         : null,
@@ -1102,6 +1134,7 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
     if (me === 403) return json({ detail: "not in the dashboard group" }, 403);
     const site = q.get("site") || "";
     const feed = SITES.find((s) => s.site === site)?.server != null;
+    const script = SITES.find((s) => s.site === site)?.browser != null;
     const range = q.get("range") || "7d";
     switch (u.pathname) {
       case "/api/dash/sites":
@@ -1139,10 +1172,12 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
         const v = visitor(q.get("key") || "", feed);
         return v ? json(v) : json({ detail: "unknown address" }, 404);
       }
-      case "/api/dash/log":
-        return json(log(q, feed));
+      case "/api/dash/log": {
+        const l = log(q, feed, script);
+        return l ? json(l) : json({ detail: "bad log filter or cursor" }, 400);
+      }
       case "/api/dash/domain":
-        return json(domain(feed));
+        return json(domain(feed, script));
     }
     return json({ detail: "not found" }, 404);
   };

@@ -200,7 +200,7 @@ describe("api client", () => {
     await api.list(scope, { dim: "pages", within: "/AS:n", q: "" });
     await api.visitors(scope, { sort: "requests", class: "unknown" });
     await api.visitor(scope, "198.51.100.7");
-    await api.log(scope, { addr: "192.0.2.120" }, "25");
+    await api.log(scope, { addr: "192.0.2.120" }, "1795353582000.48211");
     const u = new URL(calls[0], "http://x");
     expect(u.pathname).toBe("/api/dash/overview");
     expect(Object.fromEntries(u.searchParams)).toMatchObject({
@@ -216,7 +216,7 @@ describe("api client", () => {
     expect(calls[1]).not.toContain("q=");
     expect(calls[2]).toContain("sort=requests&class=unknown&limit=7");
     expect(calls[3]).toContain("key=198.51.100.7");
-    expect(calls[4]).toContain("addr=192.0.2.120&cursor=25");
+    expect(calls[4]).toContain("addr=192.0.2.120&cursor=1795353582000.48211");
   });
 
   it("raises the backend's detail as an ApiError", async () => {
@@ -279,7 +279,23 @@ describe("api client", () => {
     expect((await api.noteworthy(scope)).items.length).toBeLessThanOrEqual(5);
     const d = await api.domain(noFeed);
     expect(d.sources.server).toBeNull();
-    expect((await api.log(scope, {}, "")).rows).toHaveLength(25);
+    // The backend's page and cursor.
+    const page = await api.log(scope, {}, "");
+    expect(page.rows).toHaveLength(100);
+    expect(page.next).toMatch(/^\d+\.\d+$/);
+    // Another site's sources: the script alone, a feed alone.
+    const only = (site: string) => api.log({ ...scope, site }, {}, "");
+    expect(
+      (await only("console.example.com")).rows.every(
+        (r) => r.source === "browser",
+      ),
+    ).toBe(true);
+    expect(
+      (await only("api.example.com")).rows.every((r) => r.source === "server"),
+    ).toBe(true);
+    await expect(
+      api.log(scope, { addr: "2001:db8:91::/48" }, ""),
+    ).rejects.toMatchObject({ status: 400 });
     expect((await api.logout()).status).toBe(204);
   });
 });
