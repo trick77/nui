@@ -216,9 +216,8 @@ describe("the built script", () => {
       "arrival",
       "pageInputs",
       "errorsSeen",
-      // the handle only tests use
+      // the handle only tests use (state is also PermissionStatus's: below)
       "stop",
-      "state",
       "queued",
       "errorKeys",
       ...props,
@@ -227,6 +226,10 @@ describe("the built script", () => {
       expect(source, n).toMatch(new RegExp("\\b" + n + "\\b"));
       expect(code, n).not.toMatch(new RegExp("\\b" + n + "\\b"));
     }
+    // The handle's state method: read as a property (a permission's state)
+    // it may stay.
+    expect(source).toMatch(/\bstate: \(\) =>/);
+    expect(code).not.toMatch(/\bstate:/);
     // Nor the bundle's global name.
     expect(code).not.toContain("nuiTracker");
     // What a page enforcing Trusted Types and a CSP refuses.

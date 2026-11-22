@@ -102,6 +102,174 @@ describe("strings", () => {
   });
 });
 
+describe("automation probes", () => {
+  // Idle callbacks the test runs by hand, with the idle time left it names.
+  const stubIdle = () => {
+    let next: ((d: { timeRemaining: () => number }) => void)[] = [];
+    vi.stubGlobal("requestIdleCallback", (f: (typeof next)[number]) =>
+      next.push(f),
+    );
+    vi.stubGlobal("cancelIdleCallback", () => {
+      next = [];
+    });
+    return {
+      run: (left: number) => {
+        const now = next;
+        next = [];
+        for (const f of now) f({ timeRemaining: () => left });
+      },
+      queued: () => next.length,
+    };
+  };
+  const ctxOf = async (t: Tracker) => {
+    t.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    return bodies().at(-1)!.ctx;
+  };
+
+  it("sends its own tokens for automation globals, never the page's names", async () => {
+    const w = win as unknown as Record<string, unknown>;
+    const d = document as unknown as Record<string, unknown>;
+    w.__pwInitScripts = {};
+    d.$cdc_asdjflasutopfhvcZLmcfl_Symbol = {};
+    // The page's own, with a tool's prefix: none of them a hit.
+    w.__pwaInstallPrompt = 1;
+    w.cdc_config = 1;
+    w.__driver_state = 1;
+    document.documentElement.setAttribute("webdriver", "");
+    try {
+      const ctx = await ctxOf(boot());
+      expect(ctx.auto).toEqual([
+        "playwright-init",
+        "chromedriver",
+        "selenium-attr",
+      ]);
+    } finally {
+      for (const k of [
+        "__pwInitScripts",
+        "__pwaInstallPrompt",
+        "cdc_config",
+        "__driver_state",
+      ])
+        delete w[k];
+      delete d.$cdc_asdjflasutopfhvcZLmcfl_Symbol;
+      document.documentElement.removeAttribute("webdriver");
+    }
+  });
+
+  it("sends nothing in auto for a plain page", async () => {
+    const ctx = await ctxOf(boot());
+    expect(ctx.auto).toEqual([]);
+    expect(ctx.outer).toHaveLength(2);
+    expect(ctx.plg).toHaveLength(2);
+    expect(ctx.synth).toBe(0);
+  });
+
+  it("tells where navigator.webdriver is defined", async () => {
+    expect((await ctxOf(boot())).wdd).toMatch(/^(proto|none)$/);
+    tracker!.stop();
+    Object.defineProperty(navigator, "webdriver", {
+      get: () => false,
+      configurable: true,
+    });
+    try {
+      expect((await ctxOf(boot())).wdd).toBe("own");
+    } finally {
+      delete (navigator as { webdriver?: boolean }).webdriver;
+    }
+  });
+
+  it("sends the notification permission beside the Permissions API's answer", async () => {
+    vi.stubGlobal("Notification", { permission: "denied" });
+    Object.defineProperty(navigator, "permissions", {
+      value: { query: () => Promise.resolve({ state: "prompt" }) },
+      configurable: true,
+    });
+    try {
+      const t = boot();
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await ctxOf(t)).perm).toEqual(["denied", "prompt"]);
+    } finally {
+      delete (navigator as { permissions?: unknown }).permissions;
+    }
+  });
+
+  it("sends a kept renderer, and ignores what the page wrote there", async () => {
+    localStorage.setItem("nui.gl", JSON.stringify(["Apple Inc.", "Apple GPU"]));
+    expect((await ctxOf(boot())).gl).toEqual(["Apple Inc.", "Apple GPU"]);
+    tracker!.stop();
+    localStorage.setItem("nui.gl", '{"x":1}');
+    expect((await ctxOf(boot())).gl).toBeUndefined();
+  });
+
+  it("measures the renderer when idle, offscreen, and keeps it", async () => {
+    const getParameter = (p: unknown) =>
+      ({
+        1: "WebKit",
+        2: "WebKit WebGL",
+        3: "Google Inc. (Google)",
+        4: "ANGLE (SwiftShader)",
+      })[p as number];
+    const loseContext = vi.fn();
+    const ctx3d = {
+      VENDOR: 1,
+      RENDERER: 2,
+      getParameter,
+      getExtension: () => ({
+        UNMASKED_VENDOR_WEBGL: 3,
+        UNMASKED_RENDERER_WEBGL: 4,
+        loseContext,
+      }),
+    };
+    vi.stubGlobal(
+      "OffscreenCanvas",
+      class {
+        getContext() {
+          return ctx3d;
+        }
+      },
+    );
+    const idle = stubIdle();
+    const t = boot();
+    // A short idle period is passed over, a long one taken.
+    idle.run(10);
+    expect(loseContext).not.toHaveBeenCalled();
+    idle.run(49);
+    expect((await ctxOf(t)).gl).toEqual([
+      "Google Inc. (Google)",
+      "ANGLE (SwiftShader)",
+    ]);
+    expect(loseContext).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem("nui.gl")).toContain("SwiftShader");
+  });
+
+  it("asks no more where asking threw, and not at all without idle callbacks", async () => {
+    const getContext = vi.fn(() => {
+      throw new Error("no");
+    });
+    vi.stubGlobal(
+      "OffscreenCanvas",
+      class {
+        getContext = getContext;
+      },
+    );
+    const idle = stubIdle();
+    boot();
+    idle.run(49);
+    expect(localStorage.getItem("nui.gl")).toBe("-");
+    tracker!.stop();
+    boot();
+    expect(idle.queued()).toBe(0);
+    tracker!.stop();
+    localStorage.clear();
+    vi.stubGlobal("requestIdleCallback", undefined);
+    const t = boot();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect((await ctxOf(t)).gl).toBeUndefined();
+    expect(getContext).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("sending", () => {
   it("sends a page view with context to the script's origin", async () => {
     const t = boot();
@@ -1152,7 +1320,14 @@ describe("capture", () => {
     await vi.advanceTimersByTimeAsync(0);
     const ev = bodies().flatMap((b) => b.events);
     const eng = ev.find((e) => e.k === "engagement")!;
-    expect(eng.p.inputs).toEqual({ pointer: 1, key: 1, touch: 0, scroll: 1 });
+    expect(eng.p.inputs).toEqual({
+      pointer: 1,
+      key: 1,
+      touch: 0,
+      scroll: 1,
+      move: 0,
+      mdown: 0,
+    });
     expect(ev.find((e) => e.k === "vital" && e.p.name === "CLS")).toBeTruthy();
     // A second hide does not repeat the vitals.
     window.dispatchEvent(new Event("pagehide"));
@@ -1184,8 +1359,8 @@ describe("capture", () => {
       .flatMap((b) => b.events)
       .filter((e) => e.k === "engagement");
     expect(eng.map((e) => e.p.inputs)).toEqual([
-      { pointer: 2, key: 0, touch: 0, scroll: 0 },
-      { pointer: 0, key: 1, touch: 0, scroll: 0 },
+      { pointer: 2, key: 0, touch: 0, scroll: 0, move: 0, mdown: 0 },
+      { pointer: 0, key: 1, touch: 0, scroll: 0, move: 0, mdown: 0 },
     ]);
     // The context keeps the document's totals.
     expect(bodies().at(-1)!.ctx.inputs).toEqual({
@@ -1193,7 +1368,29 @@ describe("capture", () => {
       key: 1,
       touch: 0,
       scroll: 0,
+      move: 0,
+      mdown: 0,
     });
+  });
+
+  it("counts mouse travel and presses apart, and input a script made", async () => {
+    const t = boot();
+    const mouse = (type: string) => {
+      const e = new Event(type);
+      Object.defineProperty(e, "pointerType", { value: "mouse" });
+      document.dispatchEvent(e);
+    };
+    for (let i = 0; i < 5; i++) mouse("pointermove");
+    mouse("pointerdown");
+    const pen = new Event("pointermove");
+    Object.defineProperty(pen, "pointerType", { value: "pen" });
+    document.dispatchEvent(pen);
+    t.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    const ctx = bodies().at(-1)!.ctx;
+    expect(ctx.inputs).toMatchObject({ pointer: 1, move: 5, mdown: 1 });
+    // Every event a test dispatches is untrusted.
+    expect(ctx.synth).toBe(1);
   });
 
   it("measures the scroll depth at most once a frame, never in the handler", async () => {
