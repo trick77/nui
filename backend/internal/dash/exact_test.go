@@ -296,6 +296,34 @@ func TestExact_Noteworthy(t *testing.T) {
 	}
 }
 
+// Both sources' last delivery is their newest stored event, right after a restart (counters on disk only) as
+// while running (this process's record).
+func TestExact_LastSeen(t *testing.T) {
+	r, insert := exactRig(t)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	b := pageLoad(at("2026-11-22T12:07:28Z"), "a", "192.0.2.1", "CH", "Mozilla/5.0", 0)
+	insert(b...)
+	insert(serverReq(at("2026-11-22T13:20:05Z"), "192.0.2.2", "GET /x", 200))
+	// After a restart: the hourly rows only (12:00 and 13:00), no record of this process for either source.
+	if err := r.s.DB.AddStats(t.Context(), []store.IngestStat{
+		{SiteID: site.ID, Hour: at("2026-11-22T12:00:00Z") / 3_600_000, Accepted: 3},
+		{SiteID: site.ID, Hour: at("2026-11-22T13:00:00Z") / 3_600_000, Accepted: 1, AcceptedServer: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	r.s.Counters = nil
+	_, body := r.get(t, "sites", nil)
+	var row map[string]any
+	for _, x := range body["sites"].([]any) {
+		if x.(map[string]any)["site"] == feedSite {
+			row = x.(map[string]any)
+		}
+	}
+	if row["browser"].(map[string]any)["last"] != "2026-11-22T12:07:28Z" ||
+		row["server"].(map[string]any)["last"] != "2026-11-22T13:20:05Z" {
+		t.Errorf("after a restart: %v", row)
+	}
+}
+
 // The client shown is the latest event's, in the table, the detail and the clients split alike.
 func TestExact_LatestClient(t *testing.T) {
 	r, insert := exactRig(t)

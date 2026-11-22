@@ -264,21 +264,48 @@ func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 	apix.JSON(w, http.StatusOK, map[string]any{"sites": rows})
 }
 
-// lastSeen is when the site's browser and server sources last delivered: this process's own record, else the last
-// hour the counters show (hour precision).
+// lastSeen is the time of each source's newest stored event, before and after a restart alike. Where to look comes
+// from when the source last delivered: this process's own record (exact), else the last hour the counters show. A
+// delivery dates its events at most lastSeenBack before it (the feed's hour, the browser's half hour) and a minute
+// after, so the newest event is searched in that window only: a short index range, even when the other source
+// floods the site and this one delivered long ago. Found nothing (written by now, or pruned): the delivery time.
 func (s *Server) lastSeen(ctx context.Context, site int64) (browser, server time.Time, err error) {
-	if s.Counters != nil {
-		browser, server = s.Counters.Last(site, "browser"), s.Counters.Last(site, "server")
-	}
 	var bh, sh int64
-	err = s.row(ctx, `SELECT COALESCE(MAX(CASE WHEN accepted > accepted_server THEN hour END), 0),
+	if err = s.row(ctx, `SELECT COALESCE(MAX(CASE WHEN accepted > accepted_server THEN hour END), 0),
 		COALESCE(MAX(CASE WHEN accepted_server > 0 THEN hour END), 0) FROM ingest_stat WHERE site_id = ?`, site).
-		Scan(&bh, &sh)
-	if browser.IsZero() && bh > 0 {
-		browser = time.Unix(bh*3600, 0)
+		Scan(&bh, &sh); err != nil {
+		return browser, server, err
 	}
-	if server.IsZero() && sh > 0 {
-		server = time.Unix(sh*3600, 0)
+	for _, src := range []struct {
+		name string
+		hour int64
+		out  *time.Time
+	}{{"browser", bh, &browser}, {"server", sh, &server}} {
+		var lo, hi time.Time
+		if s.Counters != nil {
+			if at := s.Counters.Last(site, src.name); !at.IsZero() {
+				lo, hi = at, at
+			}
+		}
+		if lo.IsZero() && src.hour > 0 {
+			lo, hi = time.Unix(src.hour*3600, 0), time.Unix((src.hour+1)*3600, 0)
+		}
+		if lo.IsZero() {
+			continue
+		}
+		var newest *int64
+		if err = s.row(ctx, `SELECT MAX(ts) FROM event WHERE site_id = ? AND ts >= ? AND ts <= ? AND source = ?`,
+			site, ms(lo.Add(-lastSeenBack)), ms(hi.Add(time.Minute)), src.name).Scan(&newest); err != nil {
+			return browser, server, err
+		}
+		*src.out = lo
+		if newest != nil {
+			*src.out = time.UnixMilli(*newest)
+		}
 	}
-	return browser, server, err
+	return browser, server, nil
 }
+
+// lastSeenBack is how far before its delivery an event may be dated: the feed's hour, plus the browser's half hour
+// of client offset as a margin.
+const lastSeenBack = 90 * time.Minute
