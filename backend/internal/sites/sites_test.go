@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/trick77/nui/backend/internal/store"
 )
@@ -33,29 +34,43 @@ func exampleRegistry(t *testing.T, key string) *Registry {
 
 func TestExample_LensTemplates(t *testing.T) {
 	reg := exampleRegistry(t, "")
-	s, ok := reg.Lookup("LENS.ipverse.net")
-	if !ok || s.Product != "ipverse Lens" || s.HasFeed {
+	s, ok := reg.Lookup("LENS.example.com")
+	if !ok || s.Product != "Lens" || s.HasFeed {
 		t.Fatalf("lookup = %+v %v", s, ok)
 	}
 	for path, want := range map[string]string{
-		"/":                      "/",
-		"":                       "/",
-		"/8.8.8.8":               "/:ipv4",
-		"/2001:db8::1":           "/:ipv6",
-		"/2001%3Adb8%3A%3A1":     "/:ipv6",
-		"/1.2.3.0/24":            "/:cidr",
-		"/1.2.3.0%2F24":          "/:cidr",
-		"/2001:db8::/32":         "/:cidr",
-		"/AS15169":               "/AS:n",
-		"/as15169":               "/AS:n",
-		"/google":                "/:text",
-		"/999.1.1.1":             "/:text", // shaped like an address, is none
-		"/1.2.3.4/99":            "/:text", // no such prefix length
-		"/Google%20LLC":          "/:text",
-		"/%zz":                   "/:text", // bad escape: matched raw
-		"/some/deep/path":        "/:text",
-		"/AS15169/extra?x":       "/:text",
-		"/2001:db8::1/64/x/y/zz": "/:text",
+		"/":                  "/",
+		"":                   "/",
+		"/8.8.8.8":           "/:ipv4",
+		"/2001:db8::1":       "/:ipv6",
+		"/2001%3Adb8%3A%3A1": "/:ipv6",
+		"/1.2.3.0/24":        "/:cidr",
+		"/1.2.3.0%2F24":      "/:cidr",
+		"/2001:db8::/32":     "/:cidr",
+		"/AS15169":           "/AS:n",
+		"/as15169":           "/AS:n",
+		"/google":            "/:text",
+		"/999.1.1.1":         "/:text", // shaped like an address, is none
+		"/Google%20LLC":      "/:text",
+		"/example.com":       "/:text", // a dot, but no file extension
+		"/%zz":               "/:text", // bad escape: matched raw
+		// A free-text search holding a slash (%2F) is one segment: text, not a deeper path.
+		"/foo%2Fbar": "/:text",
+		// What lens serves statically has its own rules.
+		"/assets/index-a41c.js": "/assets/*",
+		"/favicon.ico":          "/favicon.ico",
+		"/robots.txt":           "/robots.txt",
+		// Scanners and unknown paths fall through to the heuristic: literal segments stay readable.
+		"/.env":                  "/.env",
+		"/wp-login.php":          "/wp-login.php",
+		"/wp-admin/setup.php":    "/wp-admin/setup.php",
+		"/api/v1/nope":           "/api/v1/nope",
+		"/1.2.3.4/99":            "/:ip/:n", // no such prefix length
+		"/some/deep/path":        "/some/deep/path",
+		"/AS15169/extra":         "/AS15169/extra",
+		"/2001:db8::1/64/x/y/zz": "/:ip/:n/x/y/zz",
+		// Bytes that are no UTF-8 become U+FFFD: the key survives the dashboard's round trip.
+		"/%FF%FE/x": "/�/x",
 	} {
 		if got := s.Template(path); got != want {
 			t.Errorf("Template(%q) = %q, want %q", path, got, want)
@@ -77,7 +92,7 @@ func TestExample_LensTemplates(t *testing.T) {
 
 func TestByKey(t *testing.T) {
 	reg := exampleRegistry(t, "s3cret-key")
-	if s, ok := reg.ByKey("s3cret-key"); !ok || s.Domain != "lens.ipverse.net" || !s.HasFeed {
+	if s, ok := reg.ByKey("s3cret-key"); !ok || s.Domain != "lens.example.com" || !s.HasFeed {
 		t.Fatalf("ByKey = %+v %v", s, ok)
 	}
 	for _, k := range []string{"", "wrong", "s3cret-key "} {
@@ -99,7 +114,12 @@ func TestHeuristic(t *testing.T) {
 		"/a/b/c/d/e/f/g/h/i/j":                       "/a/b/c/d/e/f/g/h/:rest",
 		"/wp-login.php":                              "/wp-login.php",
 		"/.env":                                      "/.env",
+		"/wp-admin/setup.php":                        "/wp-admin/setup.php",
+		"/api/v1/nope":                               "/api/v1/nope",
 		"/assets/index-abc.js":                       "/assets/index-abc.js",
+		"/assets/index-a41c.js":                      "/assets/index-:hash.js",
+		"/assets/vendor-B3xZ9kQa.css":                "/assets/vendor-:hash.css",
+		"/assets/jquery-3.7.1.min.js":                "/assets/jquery-3.7.1.min.js",
 		"/" + strings.Repeat("segment/", 7) + "last": "/segment/segment/segment/segment/segment/segment/segment/last",
 	} {
 		if got := Heuristic(in); got != want {
@@ -109,6 +129,11 @@ func TestHeuristic(t *testing.T) {
 	long := "/" + strings.Repeat("abcdefghij/", 7) + strings.Repeat("y", 60)
 	if got := Heuristic(long); len(got) > maxTemplate {
 		t.Errorf("Heuristic too long: %d", len(got))
+	}
+	// The cut falls on a character boundary.
+	wide := "/" + strings.Repeat("é", 50) + "/" + strings.Repeat("ü", 60)
+	if got := Heuristic(wide); len(got) > maxTemplate || !utf8.ValidString(got) {
+		t.Errorf("Heuristic(%d bytes) = %d bytes, valid %v", len(wide), len(got), utf8.ValidString(got))
 	}
 }
 

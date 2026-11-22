@@ -1,17 +1,24 @@
 {
   "sites": [
     {
-      "domain": "lens.ipverse.net",
-      "product": "ipverse Lens",
+      "domain": "lens.example.com",
+      "product": "Lens",
       "kind": "site",
       "feed_key_sha256": "",
       "path_rules": [
         {"pattern": "/", "template": "/"},
+        {"pattern": "/assets/{any}", "template": "/assets/*"},
+        {"pattern": "/favicon.ico", "template": "/favicon.ico"},
+        {"pattern": "/favicon.svg", "template": "/favicon.svg"},
+        {"pattern": "/apple-touch-icon.png", "template": "/apple-touch-icon.png"},
+        {"pattern": "/robots.txt", "template": "/robots.txt"},
+        {"pattern": "/sitemap.xml", "template": "/sitemap.xml"},
+        {"pattern": "/manifest.webmanifest", "template": "/manifest.webmanifest"},
         {"pattern": "/{ipv4}", "template": "/:ipv4"},
         {"pattern": "/{ipv6}", "template": "/:ipv6"},
         {"pattern": "/{cidr}", "template": "/:cidr"},
         {"pattern": "/AS{int}", "template": "/AS:n"},
-        {"pattern": "/{any}", "template": "/:text"}
+        {"pattern": "/{text}", "template": "/:text"}
       ]
     }
   ]

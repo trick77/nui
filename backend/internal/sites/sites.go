@@ -29,7 +29,7 @@ type File struct {
 type Config struct {
 	// Domain is the hostname the pages run on and the script reports as site.
 	Domain string `json:"domain"`
-	// Product groups domains in the dashboard's menu ("ipverse Lens").
+	// Product groups domains in the dashboard's menu ("Lens").
 	Product string `json:"product"`
 	// Kind is site (pages) or api; api only shapes the schema in v1.
 	Kind string `json:"kind"`
@@ -39,9 +39,11 @@ type Config struct {
 	PathRules []Rule `json:"path_rules"`
 }
 
-// Rule is one path rule: Pattern matched against the whole URL-decoded path, Template what a match is listed as.
-// Placeholders in a pattern: {ipv4}, {ipv6}, {cidr} (an address with /len), {int}, {seg} (one path segment) and
-// {any} (anything, slashes included). Literal text matches case-insensitively.
+// Rule is one path rule: Pattern matched against the whole path, decoded segment by segment (an encoded slash stays
+// %2F inside its segment), Template what a match is listed as. Placeholders in a pattern: {ipv4}, {ipv6}, {cidr}
+// (an address with /len or %2Flen), {int}, {seg} (one path segment), {text} (one segment that is no file name: not
+// a dot file, no extension such as .php or .js, so free text without a scanner's probes) and {any} (anything,
+// slashes included). Literal text matches case-insensitively.
 type Rule struct {
 	Pattern  string `json:"pattern"`
 	Template string `json:"template"`

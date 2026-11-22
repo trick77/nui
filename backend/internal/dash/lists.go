@@ -322,7 +322,7 @@ func (s *Server) cheapLabels(dim string, rows []listRow) {
 	case "pages", "entry":
 		for i := range rows {
 			if l, err := url.PathUnescape(rows[i].Key); err == nil {
-				rows[i].Label = l
+				rows[i].Label = strings.ToValidUTF8(l, "�")
 			}
 		}
 	}

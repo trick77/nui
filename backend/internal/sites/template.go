@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // compiled is one rule ready to match.
@@ -17,14 +19,36 @@ type compiled struct {
 
 var placeholderRE = regexp.MustCompile(`\{([a-z0-9]+)\}`)
 
-// placeholderRegexps are the shapes the regexp admits; typed ones are checked again after the match.
+// placeholderRegexps are the shapes the regexp admits; typed ones are checked again after the match. A path is
+// matched decoded segment by segment, an encoded slash kept as %2F inside its segment: {cidr} takes either form.
 var placeholderRegexps = map[string]string{
 	"ipv4": `([0-9.]+)`,
 	"ipv6": `([0-9A-Fa-f:.]+)`,
-	"cidr": `([0-9A-Fa-f:.]+/[0-9]{1,3})`,
+	"cidr": `([0-9A-Fa-f:.]+(?:/|%2F)[0-9]{1,3})`,
 	"int":  `([0-9]+)`,
 	"seg":  `([^/]+)`,
+	"text": `([^/]+)`,
 	"any":  `(.+)`,
+}
+
+// fileExts are the extensions that make a segment a file name, not free text: what scanners probe for and what a
+// site serves statically.
+var fileExts = map[string]bool{
+	"php": true, "asp": true, "aspx": true, "jsp": true, "cgi": true, "pl": true, "env": true, "sql": true,
+	"bak": true, "old": true, "zip": true, "gz": true, "tgz": true, "tar": true, "rar": true, "7z": true,
+	"xml": true, "json": true, "txt": true, "ini": true, "conf": true, "cfg": true, "yml": true, "yaml": true,
+	"log": true, "html": true, "htm": true, "js": true, "mjs": true, "css": true, "map": true, "ico": true,
+	"png": true, "jpg": true, "jpeg": true, "gif": true, "svg": true, "webp": true, "woff": true, "woff2": true,
+	"ttf": true, "webmanifest": true, "git": true, "svn": true, "ds_store": true, "action": true, "do": true,
+}
+
+// isFileName reports whether a segment names a file: a dot file (.env, .git) or a known extension.
+func isFileName(s string) bool {
+	if strings.HasPrefix(s, ".") {
+		return true
+	}
+	i := strings.LastIndexByte(s, '.')
+	return i >= 0 && fileExts[strings.ToLower(s[i+1:])]
 }
 
 // maxTemplate bounds a template, the dashboard's list key.
@@ -75,16 +99,28 @@ func templateOf(rules []compiled, path string) string {
 	if path == "" {
 		path = "/"
 	}
-	decoded, err := url.PathUnescape(path)
-	if err != nil {
-		decoded = path
-	}
+	decoded := decodePath(path)
 	for _, r := range rules {
 		if m := r.re.FindStringSubmatch(decoded); m != nil && typed(r.kinds, m[1:]) {
 			return r.template
 		}
 	}
 	return Heuristic(decoded)
+}
+
+// decodePath unescapes a raw path segment by segment. An encoded slash stays %2F inside its segment, so a search
+// term holding a slash is one segment, not two; a segment with a bad escape stays as it came. Every byte that is no
+// UTF-8 (%FF) becomes U+FFFD: a template is a list key the dashboard sends back, and only valid UTF-8 survives the
+// round trip through JSON unchanged.
+func decodePath(path string) string {
+	segs := strings.Split(path, "/")
+	for i, s := range segs {
+		if d, err := url.PathUnescape(s); err == nil {
+			segs[i] = strings.ReplaceAll(d, "/", "%2F")
+		}
+		segs[i] = strings.ToValidUTF8(segs[i], "�")
+	}
+	return strings.Join(segs, "/")
 }
 
 // typed checks what the regexp only shaped: that an {ipv4} is an IPv4 address, and so on.
@@ -101,7 +137,11 @@ func typed(kinds, values []string) bool {
 				return false
 			}
 		case "cidr":
-			if _, err := netip.ParsePrefix(v); err != nil {
+			if _, err := netip.ParsePrefix(strings.Replace(v, "%2F", "/", 1)); err != nil {
+				return false
+			}
+		case "text":
+			if isFileName(v) {
 				return false
 			}
 		}
@@ -134,11 +174,21 @@ func Heuristic(path string) string {
 	}
 	t := "/" + strings.Join(out, "/")
 	if len(t) > maxTemplate {
-		t = t[:maxTemplate]
+		// Cut on a character boundary: a split character would not survive the dashboard's round trip.
+		n := maxTemplate
+		for n > 0 && !utf8.RuneStart(t[n]) {
+			n--
+		}
+		t = t[:n]
 	}
 	return t
 }
 
+// hashedFileRE is a build tool's file name: a name, a content hash, an extension (index-a41cB3xZ.js).
+var hashedFileRE = regexp.MustCompile(`^(.+)-([A-Za-z0-9_]{4,})(\.[A-Za-z0-9]+)$`)
+
+// segment keeps a literal segment and replaces one that looks like a value: an address, a number, a UUID, a hash,
+// an opaque id, a build hash inside a file name.
 func segment(s string) string {
 	if s == "" {
 		return s
@@ -155,6 +205,10 @@ func segment(s string) string {
 		return ":hash"
 	case tokenRE.MatchString(s) && strings.ContainsAny(s, "0123456789"):
 		return ":id"
+	}
+	if m := hashedFileRE.FindStringSubmatch(s); m != nil && strings.ContainsAny(m[2], "0123456789") &&
+		strings.ContainsFunc(m[2], unicode.IsLetter) {
+		return m[1] + "-:hash" + m[3]
 	}
 	if len(s) > 64 {
 		return ":long"
