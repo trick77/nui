@@ -10,5 +10,5 @@
     "emitDeclarationOnly": true,
     "outDir": "./node_modules/.tmp/node"
   },
-  "include": ["vite.config.ts", "vite.tracker.config.ts"]
+  "include": ["vite.config.ts"]
 }
