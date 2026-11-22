@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/trick77/nui/backend/internal/app"
 )
 
 // The shutdown fits compose.yaml's stop_grace_period: past it Docker kills the process and the writer's tail and
@@ -26,6 +28,28 @@ func TestShutdownBudget(t *testing.T) {
 	}
 	if shutdownBudget >= grace || grace-shutdownBudget < 2*time.Second {
 		t.Errorf("shutdown budget %v, stop_grace_period %v: no margin", shutdownBudget, grace)
+	}
+}
+
+// The simulator's modes are development only: never together, never with a public host.
+func TestStartMode(t *testing.T) {
+	pub := app.Config{PublicFQDN: "nui.example.com"}
+	for _, c := range []struct {
+		cfg      app.Config
+		simulate bool
+		demo     int
+		want     runMode
+		ok       bool
+	}{
+		{app.Config{}, false, 0, normalRun, true}, {pub, false, 0, normalRun, true},
+		{app.Config{}, true, 0, simRun, true}, {app.Config{}, false, 30, demoRun, true},
+		{app.Config{}, true, 30, normalRun, false}, {app.Config{}, false, -1, normalRun, false},
+		{pub, true, 0, simRun, false}, {pub, false, 30, demoRun, false},
+	} {
+		m, err := startMode(c.cfg, c.simulate, c.demo)
+		if (err == nil) != c.ok || (c.ok && m != c.want) {
+			t.Errorf("sim %v demo %d public %q: %v, %v", c.simulate, c.demo, c.cfg.PublicFQDN, m, err)
+		}
 	}
 }
 

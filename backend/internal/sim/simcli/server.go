@@ -2,12 +2,12 @@ package simcli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/trick77/nui/backend/internal/app"
@@ -46,6 +46,15 @@ func NewServer(k sim.Knobs, now time.Time) (*Server, error) {
 	return s, nil
 }
 
+// RefusePublic refuses a simulator mode (what) where a public host is configured: the simulator never runs as, or
+// writes into, a deployment.
+func RefusePublic(publicFQDN, what string) error {
+	if strings.TrimSpace(publicFQDN) != "" {
+		return fmt.Errorf("%s refuses to run with PUBLIC_FQDN set: the simulator never runs as a deployment", what)
+	}
+	return nil
+}
+
 // Configure points the server's configuration at the simulated world: its data directory, sign-in off, the
 // reference data kept as written, the knobs' port on the loopback. A configuration naming a public host is refused:
 // the simulator never runs as a deployment.
@@ -55,8 +64,8 @@ func NewServer(k sim.Knobs, now time.Time) (*Server, error) {
 // Only here: the server listens on the loopback alone, its data is thrown away, and sign-in is off anyway. The
 // in-process delivery sets the connection's address and no header, which every hop count reads the same.
 func (s *Server) Configure(cfg *app.Config) error {
-	if cfg.PublicFQDN != "" {
-		return errors.New("server -sim refuses to run with PUBLIC_FQDN set")
+	if err := RefusePublic(cfg.PublicFQDN, "server -sim"); err != nil {
+		return err
 	}
 	cfg.DataDir, cfg.SitesFile = s.Dir, filepath.Join(s.Dir, "sites.json")
 	cfg.AuthDisabled, cfg.RefDataDisabled = true, true
