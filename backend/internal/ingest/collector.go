@@ -304,17 +304,18 @@ func (c *Collector) accept(site int64, source string, evs []store.Event) {
 	if len(evs) == 0 {
 		return
 	}
-	n := int64(len(evs))
-	if !c.Writer.Enqueue(evs) {
-		c.count(site, func(s *store.IngestStat) { s.Dropped += n })
+	n, ns := int64(len(evs)), int64(0)
+	if source == "server" {
+		ns = n
+	}
+	// Counted before the writer can see them, in the hour the writer is told: a failed write takes them back from
+	// that hour, never from a later one or before they were added.
+	hour := c.Counters.Hour()
+	c.Counters.AddAt(site, hour, func(s *store.IngestStat) { s.Accepted += n; s.AcceptedServer += ns })
+	if !c.Writer.EnqueueAt(evs, hour) {
+		c.Counters.AddAt(site, hour, func(s *store.IngestStat) { s.Accepted -= n; s.AcceptedServer -= ns; s.Dropped += n })
 		return
 	}
-	c.count(site, func(s *store.IngestStat) {
-		s.Accepted += n
-		if source == "server" {
-			s.AcceptedServer += n
-		}
-	})
 	c.Counters.Seen(site, source)
 }
 

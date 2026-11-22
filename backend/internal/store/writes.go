@@ -101,17 +101,20 @@ func (s *Store) AddStats(ctx context.Context, stats []IngestStat) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// The counters are deltas (a failed write takes accepted events back): applied to the hour's row, never below
+	// zero, and the server's share never above the whole.
 	for _, st := range stats {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO ingest_stat (site_id, hour, accepted, accepted_server, rate_limited, rejected, dropped,
-				unknown_domain)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (site_id, hour) DO UPDATE SET accepted = accepted + excluded.accepted,
-				accepted_server = accepted_server + excluded.accepted_server,
-				rate_limited = rate_limited + excluded.rate_limited, rejected = rejected + excluded.rejected,
-				dropped = dropped + excluded.dropped, unknown_domain = unknown_domain + excluded.unknown_domain`,
-			st.SiteID, st.Hour, st.Accepted, st.AcceptedServer, st.RateLimited, st.Rejected, st.Dropped,
-			st.UnknownDomain); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO ingest_stat (site_id, hour) VALUES (?, ?)
+			ON CONFLICT (site_id, hour) DO NOTHING`, st.SiteID, st.Hour); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE ingest_stat SET accepted = MAX(0, accepted + ?1),
+				accepted_server = MAX(0, MIN(accepted + ?1, accepted_server + ?2)),
+				rate_limited = MAX(0, rate_limited + ?3), rejected = MAX(0, rejected + ?4),
+				dropped = MAX(0, dropped + ?5), unknown_domain = MAX(0, unknown_domain + ?6)
+			WHERE site_id = ?7 AND hour = ?8`,
+			st.Accepted, st.AcceptedServer, st.RateLimited, st.Rejected, st.Dropped, st.UnknownDomain,
+			st.SiteID, st.Hour); err != nil {
 			return err
 		}
 	}

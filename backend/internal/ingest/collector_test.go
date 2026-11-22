@@ -928,19 +928,73 @@ func TestWriter_Retry(t *testing.T) {
 	ev := store.Event{SiteID: r.siteID(domain), TS: 1, Source: "browser", Kind: "page_view", IP: "192.0.2.1",
 		IPKey: "192.0.2.1"}
 	w.Enqueue([]store.Event{ev})
-	w.write(t.Context(), []store.Event{ev})
+	w.write(t.Context(), []store.Event{ev}, nil)
 	if calls != 3 {
 		t.Errorf("%d attempts", calls)
 	}
 	waitEvents(t, r.st, 1)
 	// Failing every attempt: dropped and counted after writeAttempts.
 	calls, fails = 0, 100
-	w.write(t.Context(), []store.Event{ev, ev})
+	w.write(t.Context(), []store.Event{ev, ev}, nil)
 	if calls != writeAttempts {
 		t.Errorf("%d attempts, want %d", calls, writeAttempts)
 	}
 	if s := r.stat(t, r.siteID(domain)); s.Dropped != 2 {
 		t.Errorf("stat %+v", s)
+	}
+}
+
+// A write that fails for good takes its events back from the counters they were counted in: the hour of the count,
+// the server's share too, after a flush as well. Stored, no counter goes below zero or the server's above the whole.
+func TestWriter_FailureCorrectsItsHour(t *testing.T) {
+	r := newRig(t, 0, false)
+	w := r.c.Writer
+	w.retryWait = time.Millisecond
+	w.insert = func(context.Context, []store.Event) error { return fmt.Errorf("disk I/O error") }
+	site := r.siteID(domain)
+	hour := r.clock().Unix() / 3600
+	if c := r.feed(feedBody(domain, 2, ""), feedKey); c.Code != http.StatusNoContent {
+		t.Fatalf("feed: %d", c.Code)
+	}
+	if err := r.c.Counters.Flush(t.Context(), r.st); err != nil { // the count is stored before the write fails
+		t.Fatal(err)
+	}
+	r.advance(time.Hour)
+	b := <-w.ch
+	w.write(t.Context(), b.evs, []int64{b.hour, b.hour})
+	if err := r.c.Counters.Flush(t.Context(), r.st); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := r.st.DB.Query(`SELECT hour, accepted, accepted_server, dropped FROM ingest_stat WHERE site_id = ?
+		ORDER BY hour`, site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []string
+	for rows.Next() {
+		var h, acc, srv, drop int64
+		_ = rows.Scan(&h, &acc, &srv, &drop)
+		got = append(got, fmt.Sprintf("%d %d %d %d", h-hour, acc, srv, drop))
+	}
+	if strings.Join(got, ",") != "0 0 0 2" {
+		t.Errorf("hour, accepted, server, dropped = %v, want the count's hour corrected", got)
+	}
+	// Stored deltas are clamped: never below zero, the server's share never above the whole.
+	if err := r.st.AddStats(t.Context(), []store.IngestStat{{SiteID: site, Hour: hour + 5, Accepted: -3,
+		AcceptedServer: 4, Dropped: -1}, {SiteID: site, Hour: hour, Accepted: 1, AcceptedServer: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	var acc, srv, drop int64
+	_ = r.st.DB.QueryRow(`SELECT accepted, accepted_server, dropped FROM ingest_stat WHERE site_id = ? AND hour = ?`,
+		site, hour+5).Scan(&acc, &srv, &drop)
+	if acc != 0 || srv != 0 || drop != 0 {
+		t.Errorf("negative deltas stored as %d %d %d", acc, srv, drop)
+	}
+	_ = r.st.DB.QueryRow(`SELECT accepted, accepted_server FROM ingest_stat WHERE site_id = ? AND hour = ?`,
+		site, hour).Scan(&acc, &srv)
+	if acc != 1 || srv != 1 {
+		t.Errorf("server share %d of %d", srv, acc)
 	}
 }
 

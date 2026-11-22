@@ -35,10 +35,16 @@ const (
 	writeAttempts = 3
 )
 
+// queuedBatch is one accepted batch and the hour its events were counted in: a failed write corrects that hour.
+type queuedBatch struct {
+	evs  []store.Event
+	hour int64
+}
+
 // Writer is the bounded queue and its one writer goroutine.
 type Writer struct {
 	st          *store.Store
-	ch          chan []store.Event
+	ch          chan queuedBatch
 	queued      atomic.Int64
 	queuedBytes atomic.Int64
 	max         int64
@@ -63,7 +69,7 @@ func NewWriter(st *store.Store, counters *Counters, maxEvents int, enrich func(*
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Writer{st: st, ch: make(chan []store.Event, maxEvents), max: int64(maxEvents),
+	return &Writer{st: st, ch: make(chan queuedBatch, maxEvents), max: int64(maxEvents),
 		maxBytes: DefaultQueueBytes, enrich: enrich, counters: counters, log: log, done: make(chan struct{}),
 		insert: st.InsertEvents, retryWait: 200 * time.Millisecond}
 }
@@ -77,9 +83,12 @@ func weight(evs []store.Event) int64 {
 	return n
 }
 
-// Enqueue hands a batch to the writer, or reports false when the queue holds no room for all of it, in events or
-// bytes: the caller counts the events as dropped.
-func (w *Writer) Enqueue(evs []store.Event) bool {
+// Enqueue hands a batch counted in the current hour to the writer (EnqueueAt).
+func (w *Writer) Enqueue(evs []store.Event) bool { return w.EnqueueAt(evs, w.counters.Hour()) }
+
+// EnqueueAt hands a batch whose events were counted as accepted in hour to the writer, or reports false when the
+// queue holds no room for all of it, in events or bytes: the caller counts the events as dropped.
+func (w *Writer) EnqueueAt(evs []store.Event, hour int64) bool {
 	n := int64(len(evs))
 	if n == 0 {
 		return true
@@ -93,7 +102,7 @@ func (w *Writer) Enqueue(evs []store.Event) bool {
 		return false
 	}
 	select {
-	case w.ch <- evs:
+	case w.ch <- queuedBatch{evs: evs, hour: hour}:
 		return true
 	default:
 		w.queued.Add(-n)
@@ -116,14 +125,21 @@ func (w *Writer) Run(ctx context.Context) {
 	defer tick.Stop()
 	base := context.WithoutCancel(ctx)
 	var pending []store.Event
+	var hours []int64 // pending's counting hours, one per event
+	take := func(b queuedBatch) {
+		pending = append(pending, b.evs...)
+		for range b.evs {
+			hours = append(hours, b.hour)
+		}
+	}
 	flush := func(limit time.Duration) {
 		if len(pending) == 0 {
 			return
 		}
 		fctx, cancel := context.WithTimeout(base, limit)
-		w.write(fctx, pending)
+		w.write(fctx, pending, hours)
 		cancel()
-		pending = pending[:0]
+		pending, hours = pending[:0], hours[:0]
 	}
 	for {
 		select {
@@ -131,8 +147,8 @@ func (w *Writer) Run(ctx context.Context) {
 		drain:
 			for {
 				select {
-				case evs := <-w.ch:
-					pending = append(pending, evs...)
+				case b := <-w.ch:
+					take(b)
 				default:
 					break drain
 				}
@@ -142,8 +158,8 @@ func (w *Writer) Run(ctx context.Context) {
 		default:
 		}
 		select {
-		case evs := <-w.ch:
-			pending = append(pending, evs...)
+		case b := <-w.ch:
+			take(b)
 			if len(pending) >= writeBatch {
 				flush(writeTimeout)
 			}
@@ -157,7 +173,9 @@ func (w *Writer) Run(ctx context.Context) {
 // Done is closed once Run has drained and returned.
 func (w *Writer) Done() <-chan struct{} { return w.done }
 
-func (w *Writer) write(ctx context.Context, evs []store.Event) {
+// write inserts evs, hours[i] the hour evs[i] was counted in (nil: the current one). A chunk that keeps failing is
+// dropped and moved from accepted to dropped in the counters it was counted in.
+func (w *Writer) write(ctx context.Context, evs []store.Event, hours []int64) {
 	// The weight as enqueued, before enrich adds a country: the queue gives back exactly what it took.
 	b := weight(evs)
 	defer func() {
@@ -170,15 +188,33 @@ func (w *Writer) write(ctx context.Context, evs []store.Event) {
 		}
 	}
 	for start := 0; start < len(evs); start += writeBatch {
-		chunk := evs[start:min(start+writeBatch, len(evs))]
+		end := min(start+writeBatch, len(evs))
+		chunk := evs[start:end]
 		if err := w.insertRetry(ctx, chunk); err != nil {
 			w.log.Error("Event batch write failed, events dropped", "events", len(chunk), logging.Err(err))
-			bySite := map[int64]int64{}
-			for _, e := range chunk {
-				bySite[e.SiteID]++
+			type key struct{ site, hour int64 }
+			lost := map[key]*store.IngestStat{}
+			for i, e := range chunk {
+				k := key{e.SiteID, w.counters.Hour()}
+				if hours != nil {
+					k.hour = hours[start+i]
+				}
+				s := lost[k]
+				if s == nil {
+					s = &store.IngestStat{}
+					lost[k] = s
+				}
+				s.Accepted++
+				if e.Source == "server" {
+					s.AcceptedServer++
+				}
 			}
-			for site, n := range bySite {
-				w.counters.Add(site, func(s *store.IngestStat) { s.Dropped += n; s.Accepted -= n })
+			for k, s := range lost {
+				w.counters.AddAt(k.site, k.hour, func(t *store.IngestStat) {
+					t.Dropped += s.Accepted
+					t.Accepted -= s.Accepted
+					t.AcceptedServer -= s.AcceptedServer
+				})
 			}
 		}
 	}
@@ -227,9 +263,20 @@ func NewCounters(now func() time.Time) *Counters {
 	return &Counters{m: map[[2]int64]*store.IngestStat{}, last: map[lastKey]time.Time{}, now: now}
 }
 
+// Hour is the current hour, the counters' key.
+func (c *Counters) Hour() int64 {
+	if c == nil {
+		return time.Now().Unix() / 3600
+	}
+	return c.now().Unix() / 3600
+}
+
 // Add applies f to site's counters for the current hour.
-func (c *Counters) Add(site int64, f func(*store.IngestStat)) {
-	hour := c.now().Unix() / 3600
+func (c *Counters) Add(site int64, f func(*store.IngestStat)) { c.AddAt(site, c.Hour(), f) }
+
+// AddAt applies f to site's counters for hour. The counters are deltas to the stored hour: a correction may make
+// one negative here, the stored sum never goes below zero (store.AddStats).
+func (c *Counters) AddAt(site, hour int64, f func(*store.IngestStat)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	k := [2]int64{site, hour}
