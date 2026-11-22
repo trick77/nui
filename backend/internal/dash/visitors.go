@@ -187,7 +187,8 @@ type visitorRow struct {
 	// null when there is none.
 	ClientGen *string `json:"client_gen"`
 
-	ua string
+	ua     string
+	values valueFact // the raw values behind its top action, for the model's reading
 }
 
 func (s *Server) handleVisitors(w http.ResponseWriter, r *http.Request, q *query) {
@@ -486,11 +487,14 @@ func (s *Server) readRows(ctx context.Context, q *query, span visitorCursor, row
 	ins := make([]insight.ReadingInput, 0, len(rows))
 	shown := map[string]map[string]string{}
 	for i := range rows {
-		counts, err := s.actions(ctx, q.site.ID, rows[i].Key, from, to)
+		counts, tmpls, err := s.actions(ctx, q.site.ID, rows[i].Key, from, to)
 		if err != nil {
 			continue
 		}
 		rows[i].Does.Text = doesText(rows[i], counts)
+		if rows[i].values, err = s.variety(ctx, q.site.ID, rows[i].Key, from, to, counts, tmpls); err != nil {
+			continue
+		}
 		tr, err := s.trail(ctx, q.site.ID, rows[i].Key, from, to, cursor{}, 1)
 		if err != nil {
 			continue
@@ -553,15 +557,16 @@ func resolve(rd insight.Reading, facts map[string]string) ([]string, bool) {
 // a month of a busy scraper is still a long read.
 const actorSpan = 31 * 24 * time.Hour
 
-// actions counts an actor's events per action ("GET /x → 401", "view /a") over the whole span.
-func (s *Server) actions(ctx context.Context, site int64, key string, from, to time.Time) (map[string]int64, error) {
-	out := map[string]int64{}
+// actions counts an actor's events per action ("GET /x → 401", "view /a") over the whole span, and names each
+// action's template.
+func (s *Server) actions(ctx context.Context, site int64, key string, from, to time.Time) (map[string]int64, map[string]string, error) {
+	out, tmpls := map[string]int64{}, map[string]string{}
 	for _, win := range windows(ms(from), ms(to), actorSpan) {
 		rows, err := s.query(ctx, `SELECT source, kind, name, template, status, COUNT(*) FROM event
 			WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ? GROUP BY source, kind, name, template, status`,
 			site, key, win[0], win[1])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for rows.Next() {
 			var source, kind, name, tmpl string
@@ -569,17 +574,165 @@ func (s *Server) actions(ctx context.Context, site int64, key string, from, to t
 			var n int64
 			if err := rows.Scan(&source, &kind, &name, &tmpl, &status, &n); err != nil {
 				_ = rows.Close()
-				return nil, err
+				return nil, nil, err
 			}
 			what, _ := describe(source, kind, name, tmpl, status)
 			out[what] += n
+			tmpls[what] = tmpl
 		}
 		_ = rows.Close()
 		if err := rows.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return out, nil
+	return out, tmpls, nil
+}
+
+// valuesSample is how many of the top action's newest raw paths the variety statement weighs.
+const valuesSample = 500
+
+// valueFact is a computed statement about the raw values behind an actor's top action, no figures: whether one
+// script repeats a request or walks a range is not in the template the model sees. Zero when there is none.
+type valueFact struct{ id, text string }
+
+// variety weighs the raw paths behind the actor's most frequent action within the span (its newest valuesSample):
+// all one value, mostly distinct and in sequence (a range walked), mostly distinct in no order, a few repeated, or a
+// mix. A template without a variable part, or too few requests, says nothing.
+func (s *Server) variety(ctx context.Context, site int64, key string, from, to time.Time, counts map[string]int64,
+	tmpls map[string]string) (valueFact, error) {
+	whats := topActions(counts)
+	if len(whats) == 0 || counts[whats[0]] < 3 {
+		return valueFact{}, nil
+	}
+	tmpl := tmpls[whats[0]]
+	if span := to.Add(-actorSpan); span.After(from) {
+		from = span // the newest month at most: one statement on the actor index
+	}
+	rows, err := s.query(ctx, `SELECT path FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?
+		AND template = ? ORDER BY ts DESC LIMIT `+strconv.Itoa(valuesSample), site, key, ms(from), ms(to), tmpl)
+	if err != nil {
+		return valueFact{}, err
+	}
+	defer func() { _ = rows.Close() }()
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return valueFact{}, err
+		}
+		paths = append(paths, p)
+	}
+	if err := rows.Err(); err != nil {
+		return valueFact{}, err
+	}
+	return varietyOf(paths, tmpl), nil
+}
+
+// varietyOf is the statement over paths, newest first, raw requests of the template tmpl.
+func varietyOf(paths []string, tmpl string) valueFact {
+	if len(paths) < 3 {
+		return valueFact{}
+	}
+	distinct := map[string]bool{}
+	for _, p := range paths {
+		distinct[p] = true
+	}
+	bare := tmpl // a page's template is a path; a request's has its method first ("GET /x/{id}")
+	if m, rest, ok := strings.Cut(tmpl, " "); ok && !strings.HasPrefix(m, "/") {
+		bare = rest
+	}
+	switch share := float64(len(distinct)) / float64(len(paths)); {
+	case len(distinct) == 1 && paths[0] == bare:
+		return valueFact{} // a fixed path: no value to vary
+	case len(distinct) == 1:
+		return valueFact{"values:same", "Every request asked for the same value"}
+	case share >= 0.9 && sequential(paths):
+		return valueFact{"values:walk", "Almost every request asked for a new value, in sequence: a range walked"}
+	case share >= 0.9:
+		return valueFact{"values:distinct", "Almost every request asked for a new value, in no order"}
+	case share <= 0.2:
+		return valueFact{"values:few", "A few values asked for again and again"}
+	}
+	return valueFact{"values:mixed", "Some values asked for again, others new"}
+}
+
+// sequential reports whether the varying part of paths (newest first) ran in sequence: as numbers or addresses, at
+// least nine in ten steps going the same way.
+func sequential(paths []string) bool {
+	pre, suf := shared(paths)
+	vals := make([]float64, 0, len(paths))
+	for _, p := range paths {
+		if pre+suf > len(p) {
+			return false
+		}
+		v, ok := valueOf(p[pre : len(p)-suf])
+		if !ok {
+			return false
+		}
+		vals = append(vals, v)
+	}
+	up, down := 0, 0
+	for i := 1; i < len(vals); i++ {
+		switch {
+		case vals[i] < vals[i-1]: // newest first: an older value below a newer one is a walk upwards
+			up++
+		case vals[i] > vals[i-1]:
+			down++
+		}
+	}
+	steps := len(vals) - 1
+	return float64(max(up, down)) >= 0.9*float64(steps)
+}
+
+// shared is the length of the prefix and the suffix every path has, each backed off to the edge of a number or
+// address it cut into ("/ip/1.2.3.4" and "/ip/1.2.3.5" share "/ip/", not "/ip/1.2.3.").
+func shared(paths []string) (pre, suf int) {
+	first := paths[0]
+	pre, suf = len(first), len(first)
+	for _, o := range paths[1:] {
+		pre = min(pre, commonPrefix(first, o))
+		suf = min(suf, commonSuffix(first, o))
+	}
+	const numeric = "0123456789abcdefABCDEF.:"
+	for pre > 0 && strings.IndexByte(numeric, first[pre-1]) >= 0 {
+		pre--
+	}
+	for suf > 0 && strings.IndexByte(numeric, first[len(first)-suf]) >= 0 {
+		suf--
+	}
+	return pre, suf
+}
+
+func commonPrefix(a, b string) int {
+	n := 0
+	for n < len(a) && n < len(b) && a[n] == b[n] {
+		n++
+	}
+	return n
+}
+
+func commonSuffix(a, b string) int {
+	n := 0
+	for n < len(a) && n < len(b) && a[len(a)-1-n] == b[len(b)-1-n] {
+		n++
+	}
+	return n
+}
+
+// valueOf reads a varying part as a number: an integer, or an IP address by its bits.
+func valueOf(v string) (float64, bool) {
+	if n, err := strconv.ParseInt(strings.TrimLeft(v, "ASas"), 10, 64); err == nil {
+		return float64(n), true
+	}
+	a, err := netip.ParseAddr(v)
+	if err != nil {
+		return 0, false
+	}
+	var f float64
+	for _, b := range a.AsSlice() {
+		f = f*256 + float64(b)
+	}
+	return f, true
 }
 
 // topActions orders actions by count, then name.
@@ -794,6 +947,9 @@ func (s *Server) readingInput(site int64, row visitorRow, counts map[string]int6
 		t = fmt.Sprintf("%d different actions", len(whats))
 		ev("variety:"+bucket(float64(len(whats)), 2, 6, "one", "few", "many"), t, t)
 	}
+	if row.values.id != "" {
+		ev(row.values.id, row.values.text, row.values.text)
+	}
 	pace := ""
 	if len(tr.gaps) >= 3 {
 		med := median(tr.gaps)
@@ -901,7 +1057,7 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		s.fail(w, r, err)
 		return
 	}
-	counts, err := s.actions(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()])
+	counts, tmpls, err := s.actions(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()])
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -923,6 +1079,10 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 				s.fail(w, r, err)
 				return
 			}
+		}
+		if row.values, err = s.variety(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()], counts, tmpls); err != nil {
+			s.fail(w, r, err)
+			return
 		}
 		in, shown := s.readingInput(q.site.ID, row, counts, latest)
 		in.Queue = true // the user opened this actor

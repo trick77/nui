@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -561,6 +562,59 @@ func TestVisitorsAndDetail(t *testing.T) {
 		t.Errorf("v6 %v", v6)
 	} else if code, _ := r.get(t, "visitor", p(feedSite, "key", rows[0]["key"].(string), "range", "24h")); code != 200 {
 		t.Errorf("v6 detail %d", code)
+	}
+}
+
+// The model's reading gets a statement on the raw values behind the top template: a script walking a range of
+// addresses reads apart from one repeating a single request, though both show the same template.
+func TestReadingValueVariety(t *testing.T) {
+	model := &fakeModel{readings: map[string]insight.Reading{}}
+	r := newRig(t, 0, 0, model)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	var evs []store.Event
+	for i := range 60 {
+		at := r.end.UnixMilli() - int64(60-i)*1000 // oldest first: the walk goes up
+		evs = append(evs, store.Event{SiteID: site.ID, TS: at, Source: "server", Kind: "request", IP: "192.0.2.60",
+			IPKey: "192.0.2.60", UA: "curl/8", Template: "GET /api/v1/ip/{addr}",
+			Path: fmt.Sprintf("/api/v1/ip/10.0.%d.%d", i/250, i%250+1), Status: 401},
+			store.Event{SiteID: site.ID, TS: at, Source: "server", Kind: "request", IP: "192.0.2.61",
+				IPKey: "192.0.2.61", UA: "curl/8", Template: "GET /api/v1/ip/{addr}", Path: "/api/v1/ip/10.0.0.1",
+				Status: 401})
+	}
+	if err := r.s.DB.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	evidence := func(key string) []string {
+		t.Helper()
+		model.readIns = nil
+		if code, _ := r.get(t, "visitor", p(feedSite, "key", key, "range", "24h")); code != 200 {
+			t.Fatalf("visitor %s: %d", key, code)
+		}
+		var ids []string
+		for _, e := range model.readIns[0].Evidence {
+			ids = append(ids, e.ID)
+		}
+		return ids
+	}
+	walk, same := evidence("192.0.2.60"), evidence("192.0.2.61")
+	if !slices.Contains(walk, "values:walk") || !slices.Contains(same, "values:same") {
+		t.Errorf("walker %v, repeater %v", walk, same)
+	}
+	if model.readIns[0].Signature == "" {
+		t.Error("no signature")
+	}
+	for paths, want := range map[string]string{
+		"/AS3,/AS2,/AS1,/AS0":                                         "values:walk",
+		"/AS9,/AS2,/AS7,/AS1":                                         "values:distinct",
+		"/x/a,/x/b,/x/c,/x/a,/x/b,/x/c,/x/a,/x/b":                     "values:mixed",
+		"/:text,/:text,/:text":                                        "", // the template itself: no value
+		"/x/1,/x/1,/x/1,/x/1,/x/1,/x/1,/x/2,/x/1,/x/1,/x/1,/x/1,/x/2": "values:few",
+		"/q/b,/q/a":         "", // too few
+		"/q/zz,/q/zy,/q/zx": "values:distinct",
+	} {
+		if got := varietyOf(strings.Split(paths, ","), "/:text"); got.id != want {
+			t.Errorf("%s: %q, want %q", paths, got.id, want)
+		}
 	}
 }
 
