@@ -3,9 +3,10 @@
 // one call at a time, never in a request, within a daily budget per site.
 //
 // What the model may do is narrow on purpose: pick computed facts by id, choose a verdict from a fixed list, write
-// short fields with length limits. It never produces a figure (a text holding a digit or a number word is dropped
-// and the computed text shown; the dashboard puts its own figures beside the words) and never triggers anything. Request text (paths, user agents, referrers) is attacker-controlled:
-// it reaches the model only inside the JSON data of the user message, under a system prompt that says so.
+// short fields with length limits. It never produces a figure (a text holding a digit or a number word stating a
+// quantity is dropped and the computed text shown; the dashboard puts its own figures beside the words) and never
+// triggers anything. Request text (paths, user agents, referrers) is attacker-controlled: it reaches the model only
+// inside the JSON data of the user message, under a system prompt that says so.
 package llm
 
 import (
@@ -335,16 +336,25 @@ func clip(s string, n int) string {
 	return strings.TrimRight(r, " ,;:-") + "…"
 }
 
-// figureRE matches a figure in any spelling: a digit, a number word, a multiplier or a share.
-var figureRE = regexp.MustCompile(`(?i)[0-9]|\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|` +
+// figureRE matches a figure in any spelling: a digit, a number word, a multiplier or a share. "one" is not in it:
+// as a determiner or pronoun ("One operator walks the API", "no one") it states no quantity; oneRE catches it
+// where it does.
+var figureRE = regexp.MustCompile(`(?i)[0-9%]|\b(zero|two|three|four|five|six|seven|eight|nine|ten|eleven|` +
 	`twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|` +
 	`seventy|eighty|ninety|hundreds?|thousands?|millions?|billions?|dozens?|half|twice|double|triple|` +
-	`percent|first|second|third)\b`)
+	`percent|per\s+cent|first|second|third)\b`)
+
+// oneRE matches "one" as a quantity: bounded, compared, counted or a rate ("only one", "more than one", "at least
+// one", "one out of", "one or more", "one request per minute", "one probe an hour"). With another number word ("one in ten", "twenty-one", "one
+// hundred") figureRE already matches.
+var oneRE = regexp.MustCompile(`(?i)\b(only|just|exactly|about|around|roughly|nearly|almost|than|least|most|` +
+	`over|under)\s+one\b|\bone\s+(out\s+of|or\s+more|and\s+only)\b|` +
+	`\bone(\s+\w+)?\s+(per|an?\s+(minute|hour|day|week|month))\b`)
 
 // noFigures reports whether a text the model wrote holds no figure: the dashboard shows every figure beside the
 // text, computed, so the model's words carry none (one written out would appear twice or contradict it).
 func noFigures(text string) bool {
-	return !figureRE.MatchString(text)
+	return !figureRE.MatchString(text) && !oneRE.MatchString(text)
 }
 
 func contains(list []string, v string) bool { return slices.Contains(list, v) }

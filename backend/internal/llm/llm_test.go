@@ -94,7 +94,7 @@ func TestBriefing(t *testing.T) {
 	if b := r.s.Briefing(t.Context(), in); b != nil {
 		t.Fatal("briefing before any call")
 	}
-	r.srv.SetReply(`{"headline":"Quiet week, one noisy script.","lines":[` +
+	r.srv.SetReply(`{"headline":"Quiet week, only one noisy script.","lines":[` +
 		`{"ids":["made-up"],"text":"invented finding"},` +
 		`{"ids":["auto_share"],"text":"Automated share rose"},` +
 		`{"ids":["spike:addr:203.0.113.5","probe:GET /.env","spike:addr:203.0.113.5"],"text":"An operator scans the API"},` +
@@ -115,7 +115,7 @@ func TestBriefing(t *testing.T) {
 		strings.Contains(user, `"auto_share"`) || !strings.Contains(system, "no digits, no number words") {
 		t.Errorf("prompt layout:\nsystem %q\nuser %q", system, user)
 	}
-	// "One … 3789" and the figure key are dropped; the headline holds "one": dropped too.
+	// "One … 3789" and the figure key are dropped; the headline counts "only one": dropped too.
 	b := r.s.Briefing(t.Context(), in)
 	if b == nil || b.Headline != "" || len(b.Lines) != 1 || b.Lines[0].Text != "An operator scans the API" ||
 		strings.Join(b.Lines[0].IDs, ",") != "spike:addr:203.0.113.5,probe:GET /.env" || !b.AsOf.Equal(in.AsOf) {
@@ -381,7 +381,16 @@ func TestHelpers(t *testing.T) {
 	for text, ok := range map[string]bool{
 		"An operator scans the API": true, "Someone probes for secrets": true, "Reads seconds apart": true,
 		"Google sent the most visitors: 68": false, "Busy 30 days": false, "four pages": false,
-		"One API path drew most probes": false, "twice as many": false, "Hundreds of requests": false,
+		"twice as many": false, "Hundreds of requests": false, "Dozens of probes": false, "ten percent": false,
+		"Half the traffic": false, "zero errors": false, "a share of 5%": false,
+		// "one" as a determiner or pronoun states no quantity.
+		"One operator is walking the API": true, "One API path drew most probes": true, "No one signed in": true,
+		"One of the scanners returns daily": true, "The same one comes back": true, "Everyone left early": true,
+		// "one" as a quantity, alone or beside another number word.
+		"Only one address sends requests": false, "More than one client": false, "At least one probe": false,
+		"One request per minute": false, "one probe an hour": false, "one out of the lot": false, "One or more scanners": false,
+		"One in ten requests fails": false, "Twenty-one pages": false, "One hundred probes": false,
+		"One third of the traffic": false,
 	} {
 		if noFigures(text) != ok {
 			t.Errorf("noFigures(%q) = %v", text, !ok)
