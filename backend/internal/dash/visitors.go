@@ -132,6 +132,7 @@ func (s *Server) classOne(ctx context.Context, site int64, key string, from, to 
 		return ci, err
 	}
 	_ = json.Unmarshal([]byte(reasons), &ci.signals)
+	ci.signals = respace(ci.signals)
 	return ci, nil
 }
 
@@ -151,6 +152,7 @@ func (s *Server) classes(ctx context.Context, site int64, from, to time.Time) (m
 		}
 		ci := classInfo{class: c}
 		_ = json.Unmarshal([]byte(reasons), &ci.signals)
+		ci.signals = respace(ci.signals)
 		out[k] = ci
 	}
 	return out, rows.Err()
@@ -1017,8 +1019,22 @@ func slug(s string) string {
 	}), "-")
 }
 
-// clientFamily drops the version: curl/8.4 and curl/8.5 behave alike.
+// oldSep is the separator before apix.Sep: past days' stored reasons hold it, and the cached readings' evidence ids
+// and signatures were made with it.
+const oldSep = " · "
+
+// respace spells a stored reason's separators as apix.Sep: a day classified before it keeps its row.
+func respace(reasons []string) []string {
+	for i, r := range reasons {
+		reasons[i] = strings.ReplaceAll(r, oldSep, apix.Sep)
+	}
+	return reasons
+}
+
+// clientFamily drops the version: curl/8.4 and curl/8.5 behave alike. A browser's keeps the old separator: it names
+// an evidence id and the signature, and a new spelling would orphan every cached reading of a browser.
 func clientFamily(c string) string {
+	c = strings.ReplaceAll(c, apix.Sep, oldSep)
 	if i := strings.IndexByte(c, '/'); i > 0 {
 		return c[:i]
 	}

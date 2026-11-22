@@ -364,7 +364,7 @@ func TestExact_LatestClient(t *testing.T) {
 	insert(late...)
 	_, v := r.get(t, "visitors", p(feedSite))
 	row := v["rows"].([]any)[0].(map[string]any)
-	if row["client"] != "Firefox · Windows" {
+	if row["client"] != "Firefox\xe2\x80\x82·\xe2\x80\x82Windows" {
 		t.Errorf("table client %v", row["client"])
 	}
 	_, d := r.get(t, "visitor", p(feedSite, "key", "192.0.2.9"))

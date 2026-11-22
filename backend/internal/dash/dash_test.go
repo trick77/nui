@@ -126,11 +126,51 @@ func (r *rig) get(t *testing.T, endpoint string, params map[string]string) (int,
 	}
 	w := httptest.NewRecorder()
 	r.h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/dash/"+endpoint+"?"+v.Encode(), nil))
+	plainDots(t, endpoint, w.Body.String())
 	var out map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("%s: not JSON: %q", endpoint, w.Body)
 	}
 	return w.Code, out
+}
+
+// plainDots fails on a separating dot with a plain space beside it in an answer: the UI shows these texts verbatim,
+// and apix.Sep's en spaces are the only spacing.
+func plainDots(t *testing.T, endpoint, body string) {
+	t.Helper()
+	for _, bad := range []string{" ·", "· "} {
+		if i := strings.Index(body, bad); i >= 0 {
+			t.Errorf("%s: plain space beside a dot: %q", endpoint, body[max(0, i-30):min(len(body), i+30)])
+		}
+	}
+}
+
+func TestSeparatorSpacing(t *testing.T) {
+	r := newRig(t, 3, 30, nil)
+	sep := "\xe2\x80\x82·\xe2\x80\x82"
+	// Composed texts the existing answers carry: the footer's rules, a browser's client in the log and the table.
+	_, d := r.get(t, "domain", p(feedSite))
+	rules := d["rules"].(map[string]any)
+	for _, k := range []string{"rate", "batch"} {
+		if !strings.Contains(rules[k].(string), sep) {
+			t.Errorf("rules.%s %q", k, rules[k])
+		}
+	}
+	for _, ep := range []string{"log", "visitors"} {
+		_, body := r.get(t, ep, p(feedSite))
+		b, _ := json.Marshal(body)
+		if !strings.Contains(string(b), sep) {
+			t.Errorf("%s: no browser client with the separator", ep)
+		}
+	}
+	// A day classified before the en spaces reads with them; its evidence id keeps the old spelling.
+	if got := respace([]string{"also unknown automated: Chrome · macOS, 3 of 9 events"})[0]; got !=
+		"also unknown automated: Chrome"+sep+"macOS, 3 of 9 events" {
+		t.Errorf("respace %q", got)
+	}
+	if clientFamily("Chrome"+sep+"macOS") != "Chrome · macOS" {
+		t.Error("clientFamily changed a browser's evidence id")
+	}
 }
 
 func p(site string, kv ...string) map[string]string {

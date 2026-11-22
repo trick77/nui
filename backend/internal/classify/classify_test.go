@@ -647,13 +647,16 @@ func TestInstant(t *testing.T) {
 	}
 }
 
+// ensp is U+2002, spelled out: the expected strings must not lean on apix.Sep.
+const ensp = "\xe2\x80\x82"
+
 func TestClientAndUA(t *testing.T) {
 	for ua, want := range map[string]string{
 		"":                     "no user agent",
 		"curl/8.4.0":           "curl/8.4.0",
 		"python-requests/2.32": "python-requests/2.32",
 		"Go-http-client/1.1":   "Go-http-client/1.1",
-		browserUA:              "Safari · macOS",
+		browserUA:              "Safari" + ensp + "·" + ensp + "macOS",
 		"Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/120":                       "HeadlessChrome/120",
 		"Mozilla/5.0 zgrab/0.x":                                                    "zgrab/0.x",
 		"Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)": "Googlebot/2.1",
@@ -664,7 +667,7 @@ func TestClientAndUA(t *testing.T) {
 		"Mozilla/5.0 (compatible; Foo-Preview/1.0; +https://foo.example/info)":   "Foo-Preview/1.0",
 		"Mozilla/5.0 (compatible; Barkrowler/0.9; +https://babbar.tech/crawler)": "Barkrowler/0.9",
 		// A phone named CUBOT is a browser, not a bot.
-		"Mozilla/5.0 (Linux; Android 9; CUBOT X19) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36": "Chrome · Android",
+		"Mozilla/5.0 (Linux; Android 9; CUBOT X19) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36": "Chrome" + ensp + "·" + ensp + "Android",
 	} {
 		if got := Client(ua); got != want {
 			t.Errorf("Client(%q) = %q, want %q", ua, got, want)
