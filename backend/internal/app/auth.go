@@ -28,11 +28,19 @@ const CookiePrefix = "nui_"
 // AdminName is the identity of a session signed in with the admin token: whoever held it, not a person.
 const AdminName = "admin"
 
-// Sign-in attempts with the admin token are spaced tokenGap apart per client (an IPv4 address, an IPv6 /64), queued
-// up to tokenMaxWait and refused past that with the wait.
+// Sign-in attempts with the admin token pass three throttles, narrow to wide, each spacing its key's attempts and
+// queueing up to its wait, refusing past it with the wait (429, Retry-After): per client (an IPv4 address, an IPv6
+// /64) tokenGap apart, per network (IPv4 /24, IPv6 /48: one caller holds 65,536 /64s) tokenNetGap apart, and across
+// all callers tokenAllGap apart, which bounds a caller with many networks. Worst case 4 guesses a second in all
+// (345,600 a day), 2 from one network, 1 from one client. The owner signing in during an attack keeps its own
+// client and network queues: only the shared one delays it, queued up to tokenAllWait while the flood leaves it room,
+// else refused with a wait under a second.
 const (
 	tokenGap     = time.Second
+	tokenNetGap  = 500 * time.Millisecond
+	tokenAllGap  = 250 * time.Millisecond
 	tokenMaxWait = 5 * time.Second
+	tokenAllWait = 15 * time.Second
 )
 
 // maxTokenBody caps the token form: the longest token with every byte url-encoded as %XX, plus the field name.
@@ -49,9 +57,12 @@ type Auth struct {
 	// OIDCConfigured: the OIDC flow is configured (it may still be discovering). AdminToken: token sign-in, "" off.
 	OIDCConfigured bool
 	AdminToken     string
-	oidc           atomic.Pointer[auth.OIDC]
-	loginsOnce     sync.Once
-	logins         *ratelimit.Throttle
+	// TrustedHops is Config.TrustedHops: the token throttles key the caller as apix.ClientAddr reads it.
+	TrustedHops int
+	oidc        atomic.Pointer[auth.OIDC]
+	loginsOnce  sync.Once
+	// The token throttles: per client, per network, across all callers (tokenGap and on).
+	logins, loginsNet, loginsAll *ratelimit.Throttle
 }
 
 // HandleMethods is GET /api/auth/methods: which sign-in the card offers, nothing else.
@@ -90,12 +101,7 @@ func (a *Auth) HandleToken(w http.ResponseWriter, r *http.Request) {
 		apix.Error(w, http.StatusRequestEntityTooLarge, "token too long")
 		return
 	}
-	a.loginsOnce.Do(func() {
-		if a.logins == nil {
-			a.logins = ratelimit.NewThrottle(tokenGap, tokenMaxWait)
-		}
-	})
-	if err := a.logins.Wait(r.Context(), ratelimit.Key(ClientIP(r))); err != nil {
+	if err := a.tokenTurn(r); err != nil {
 		if t, ok := errors.AsType[*ratelimit.ThrottledError](err); ok {
 			apix.TooMany(w, t.RetryAfter)
 			return
@@ -103,8 +109,9 @@ func (a *Auth) HandleToken(w http.ResponseWriter, r *http.Request) {
 		apix.Error(w, http.StatusServiceUnavailable, "sign-in not checked") // the client left while queued
 		return
 	}
+	ip := apix.ClientIP(a.TrustedHops)(r)
 	if !secret.Match(tok, a.AdminToken) {
-		slog.WarnContext(r.Context(), "Admin token sign-in refused", "ip", ClientIP(r))
+		slog.WarnContext(r.Context(), "Admin token sign-in refused", "ip", ip)
 		apix.Error(w, http.StatusUnauthorized, "wrong token")
 		return
 	}
@@ -116,8 +123,37 @@ func (a *Auth) HandleToken(w http.ResponseWriter, r *http.Request) {
 		apix.ServerError(w, r, err)
 		return
 	}
-	slog.InfoContext(r.Context(), "Admin token sign-in", "ip", ClientIP(r))
+	slog.InfoContext(r.Context(), "Admin token sign-in", "ip", ip)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// tokenTurn waits r's turn in the token throttles, narrow to wide: a caller refused by its own queue never takes a
+// place in the shared one. Keys are always an address or a prefix (apix.ClientKey), never a header's text.
+func (a *Auth) tokenTurn(r *http.Request) error {
+	a.loginsOnce.Do(func() {
+		if a.logins == nil {
+			a.logins = ratelimit.NewThrottle(tokenGap, tokenMaxWait)
+		}
+		if a.loginsNet == nil {
+			a.loginsNet = ratelimit.NewThrottle(tokenNetGap, tokenMaxWait)
+		}
+		if a.loginsAll == nil {
+			a.loginsAll = ratelimit.NewThrottle(tokenAllGap, tokenAllWait)
+		}
+	})
+	for _, q := range []struct {
+		t   *ratelimit.Throttle
+		key string
+	}{
+		{a.logins, apix.ClientKey(a.TrustedHops, 32, 64)(r)},
+		{a.loginsNet, apix.ClientKey(a.TrustedHops, 24, 48)(r)},
+		{a.loginsAll, ""},
+	} {
+		if err := q.t.Wait(r.Context(), q.key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // NewAuth builds the sign-in from cfg. The session key derives from the session secret (configured, else made once
@@ -138,7 +174,7 @@ func NewAuth(cfg Config) (*Auth, error) {
 	if cfg.AuthDisabled {
 		slog.Warn("BACKEND_AUTH_DISABLED: the dashboard is open to anyone reaching this port")
 	}
-	return &Auth{Sessions: sessions, Group: cfg.OIDCAdminGroup, Disabled: cfg.AuthDisabled,
+	return &Auth{Sessions: sessions, Group: cfg.OIDCAdminGroup, Disabled: cfg.AuthDisabled, TrustedHops: cfg.TrustedHops,
 		OIDCConfigured: cfg.OIDCConfigured() && !cfg.AuthDisabled, AdminToken: cfg.AdminToken}, nil
 }
 

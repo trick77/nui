@@ -18,6 +18,10 @@ type Config struct {
 	DataDir string
 	// PublicFQDN is the hostname the service is reached on; empty for local use.
 	PublicFQDN string
+	// TrustedHops is the number of proxies in front of the server, each appending to X-Forwarded-For: 1 behind the
+	// compose file's Traefik, 0 reached directly (the connection's peer is the caller). Every client address (the
+	// collector's, the sign-in throttle's, the access log's) is read through it (apix.ClientAddr).
+	TrustedHops int
 	// LogLevel is debug, info, warn or error.
 	LogLevel string
 
@@ -56,6 +60,7 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 		Addr:             r.String("BACKEND_ADDR", ":8080"),
 		DataDir:          r.String("BACKEND_DATA_DIR", "/data"),
 		PublicFQDN:       r.String("PUBLIC_FQDN", ""),
+		TrustedHops:      r.Int("BACKEND_TRUSTED_HOPS", 1),
 		LogLevel:         r.String("BACKEND_LOG_LEVEL", "info"),
 		SitesFile:        r.String("BACKEND_SITES_FILE", ""),
 		RetentionMonths:  r.Int("BACKEND_RETENTION_MONTHS", 25),
@@ -81,6 +86,9 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 	}
 	if _, err := logging.ParseLevel(cfg.LogLevel); err != nil {
 		r.Fail("BACKEND_LOG_LEVEL: %v", err)
+	}
+	if cfg.TrustedHops < 0 || cfg.TrustedHops > 8 {
+		r.Fail("BACKEND_TRUSTED_HOPS must be 0 (no proxy) to 8")
 	}
 	if cfg.RetentionMonths < 1 {
 		r.Fail("BACKEND_RETENTION_MONTHS must be at least 1")

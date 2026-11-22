@@ -34,8 +34,83 @@ func tokenAuth(t *testing.T, vars map[string]string) *Auth {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.logins = ratelimit.NewThrottle(time.Nanosecond, 0) // no spacing unless a test asks for it
+	// No spacing unless a test asks for it.
+	a.logins = ratelimit.NewThrottle(time.Nanosecond, 0)
+	a.loginsNet = ratelimit.NewThrottle(time.Nanosecond, 0)
+	a.loginsAll = ratelimit.NewThrottle(time.Nanosecond, 0)
 	return a
+}
+
+// The token throttles key the caller by address, narrow to wide: a header a caller writes around the proxy never
+// buys a fresh bucket or names someone else's, another /64 of the same /48 meets the network's queue, and another
+// network the shared one.
+func TestTokenThrottleTiers(t *testing.T) {
+	post := func(h http.Handler, peer, xff string) int {
+		r := tokenPost("token=wrong-guess")
+		r.RemoteAddr = peer
+		if xff != "" {
+			r.Header.Set("X-Forwarded-For", xff)
+		}
+		return do(h, r).Code
+	}
+	hour := func() *ratelimit.Throttle { return ratelimit.NewThrottle(time.Hour, 0) }
+
+	// The client tier, behind one proxy and reached around it (hops 1 and 0).
+	for _, hops := range []string{"1", "0"} {
+		a := tokenAuth(t, map[string]string{"BACKEND_ADMIN_TOKEN": testToken, "BACKEND_TRUSTED_HOPS": hops})
+		a.logins = hour()
+		h := routes(t, a)
+		if got := post(h, "198.51.100.7:1", "spoof-1"); got != http.StatusUnauthorized {
+			t.Fatalf("hops %s: first: %d", hops, got)
+		}
+		// A new header each time is no new client: the peer is.
+		if got := post(h, "198.51.100.7:2", "spoof-2-"+strings.Repeat("x", 300)); got != http.StatusTooManyRequests {
+			t.Errorf("hops %s: spoofed header: %d, want 429", hops, got)
+		}
+		// Reached directly, naming the owner's address does not charge the owner's bucket.
+		if hops == "0" {
+			_ = post(h, "198.51.100.8:1", "203.0.113.50")
+			if got := post(h, "203.0.113.50:1", ""); got != http.StatusUnauthorized {
+				t.Errorf("owner locked out by a spoofed header: %d", got)
+			}
+		}
+	}
+
+	// The network tier: two /64s of one /48, and two addresses of one /24.
+	a := tokenAuth(t, map[string]string{"BACKEND_ADMIN_TOKEN": testToken})
+	a.loginsNet = hour()
+	h := routes(t, a)
+	for _, pair := range [][2]string{{"2001:db8:1:1::7", "2001:db8:1:2::7"}, {"192.0.2.1", "192.0.2.2"}} {
+		if got := post(h, "10.0.0.2:1", pair[0]); got != http.StatusUnauthorized {
+			t.Fatalf("network %s: %d", pair[0], got)
+		}
+		if got := post(h, "10.0.0.2:1", pair[1]); got != http.StatusTooManyRequests {
+			t.Errorf("same network %s: %d, want 429", pair[1], got)
+		}
+	}
+	if got := post(h, "10.0.0.2:1", "2001:db8:2::7"); got != http.StatusUnauthorized {
+		t.Errorf("another /48: %d", got)
+	}
+
+	// The shared tier bounds every network together.
+	a = tokenAuth(t, map[string]string{"BACKEND_ADMIN_TOKEN": testToken})
+	a.loginsAll = hour()
+	h = routes(t, a)
+	_ = post(h, "10.0.0.2:1", "192.0.2.1")
+	if got := post(h, "10.0.0.2:1", "2001:db8:9::1"); got != http.StatusTooManyRequests {
+		t.Errorf("shared tier: %d, want 429", got)
+	}
+
+	// The defaults, as sized: one a second per client, two per network, four in all.
+	a = tokenAuth(t, map[string]string{"BACKEND_ADMIN_TOKEN": testToken})
+	a.logins, a.loginsNet, a.loginsAll = nil, nil, nil
+	if err := a.tokenTurn(tokenPost("")); err != nil {
+		t.Fatal(err)
+	}
+	if a.logins == nil || a.loginsNet == nil || a.loginsAll == nil ||
+		tokenGap != time.Second || tokenNetGap != 500*time.Millisecond || tokenAllGap != 250*time.Millisecond {
+		t.Error("token throttles not as documented")
+	}
 }
 
 func tokenPost(body string) *http.Request {

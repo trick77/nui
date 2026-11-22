@@ -102,7 +102,7 @@ func serve(cfg app.Config) error {
 	counters := ingest.NewCounters(nil)
 	writer := ingest.NewWriter(st, counters, 0, cls.Enrich, nil)
 	collector := &ingest.Collector{Sites: reg, Writer: writer, Counters: counters,
-		Browser: ingest.BrowserTiers(app.TrustedHops, nil), Feed: ingest.FeedLimiter(nil), TrustedHops: app.TrustedHops}
+		Browser: ingest.BrowserTiers(cfg.TrustedHops, nil), Feed: ingest.FeedLimiter(nil), TrustedHops: cfg.TrustedHops}
 
 	a, err := app.NewAuth(cfg)
 	if err != nil {
@@ -168,7 +168,7 @@ func serve(cfg app.Config) error {
 		})
 	}
 
-	srv := httpx.NewServer(cfg.Addr, app.Build(app.Routes{Dashboard: dashboard, Tracker: tracker,
+	srv := httpx.NewServer(cfg.Addr, app.Build(app.Routes{TrustedHops: cfg.TrustedHops, Dashboard: dashboard, Tracker: tracker,
 		Browser: http.HandlerFunc(collector.HandleBrowser), Feed: http.HandlerFunc(collector.HandleFeed), Dash: ds, Auth: a,
 		Ready: []httpx.Check{{Name: "db", Run: st.Ping}}}))
 	slog.Info("listening", "addr", cfg.Addr, "sites", len(reg.All()))

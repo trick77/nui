@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -255,8 +257,20 @@ func TestClientIPAndQuiet(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "10.0.0.2:1234"
 	r.Header.Set("X-Forwarded-For", "203.0.113.9")
-	if got := ClientIP(r); got != "203.0.113.9" {
-		t.Errorf("ClientIP = %q", got)
+	// The access log names the caller through the configured hops, a peer of its own without a proxy.
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	for hops, want := range map[int]string{1: "203.0.113.9", 0: "10.0.0.2"} {
+		logs.Reset()
+		r := httptest.NewRequest("GET", "/dashboard/", nil)
+		r.RemoteAddr = "10.0.0.2:1234"
+		r.Header.Set("X-Forwarded-For", "203.0.113.9")
+		_ = do(Build(Routes{TrustedHops: hops, Dashboard: echo("dashboard")}), r)
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("hops %d: log %q lacks %s", hops, logs.String(), want)
+		}
 	}
 	for _, tt := range []struct {
 		path   string

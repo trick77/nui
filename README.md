@@ -52,7 +52,12 @@ refuses to start with neither. The token is the way in when the identity provide
 `admin`. The session cookie is signed with a key derived from a session secret together with the token: changing
 either signs everyone out. The secret is `BACKEND_SESSION_SECRET`, or, left empty, one nui makes at first start and
 keeps in `data/session.secret` (owner-only; a data directory nui cannot write stops the start). Token attempts are
-spaced a second apart per address or IPv6 /64; past a short queue they get a 429 with `Retry-After`.
+spaced a second apart per address or IPv6 /64, half a second per IPv4 /24 or IPv6 /48 and a quarter of a second
+across all callers: at most 4 guesses a second in all. Past a short queue they get a 429 with `Retry-After`.
+
+nui reads the caller's address from `X-Forwarded-For` as many entries from the right as there are proxies in front
+of it (`BACKEND_TRUSTED_HOPS`, 1 for the compose file's Traefik). Reached without a proxy (a published port, a local
+run), set it to 0: the caller could otherwise write its own address into the header.
 
 ### Sites
 

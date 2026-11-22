@@ -18,6 +18,9 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if cfg.TrustedHops != 1 {
+		t.Errorf("trusted hops default %d, want 1 (the compose file's Traefik)", cfg.TrustedHops)
+	}
 	if cfg.Addr != ":8080" || cfg.DataDir != "/data" || cfg.SitesFile != "/data/sites.json" || cfg.RetentionMonths != 25 ||
 		cfg.MaxDBMB != 20480 || cfg.LLMModel != "mimo-v2.6-flash" || cfg.LLMDailyCalls != 200 || cfg.OIDCConfigured() ||
 		cfg.Secure() || cfg.AuthDisabled {
@@ -37,12 +40,13 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 		"BACKEND_OIDC_ADMIN_GROUP":   "nui-admins",
 		"BACKEND_SESSION_SECRET":     strings.Repeat("x", 32),
 		"BACKEND_RETENTION_MONTHS":   "13",
+		"BACKEND_TRUSTED_HOPS":       "0",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.OIDCRedirectURL != "https://nui.example.com/api/auth/callback" || !cfg.Secure() || !cfg.OIDCConfigured() ||
-		cfg.SitesFile != "/var/lib/nui/sites.json" || cfg.RetentionMonths != 13 {
+		cfg.SitesFile != "/var/lib/nui/sites.json" || cfg.RetentionMonths != 13 || cfg.TrustedHops != 0 {
 		t.Errorf("cfg = %+v", cfg)
 	}
 }
@@ -60,6 +64,8 @@ func TestLoadConfig_Faults(t *testing.T) {
 		"no sign-in":  {"PUBLIC_FQDN": "nui.example.com"},
 		"short token": {"BACKEND_ADMIN_TOKEN": strings.Repeat("t", MinAdminTokenBytes-1)},
 		"long token":  {"BACKEND_ADMIN_TOKEN": strings.Repeat("t", MaxAdminTokenBytes+1)},
+		"hops":        {"BACKEND_TRUSTED_HOPS": "-1"},
+		"many hops":   {"BACKEND_TRUSTED_HOPS": "9"},
 	} {
 		if _, err := LoadConfig(lookup(vars)); err == nil {
 			t.Errorf("%s: accepted", name)

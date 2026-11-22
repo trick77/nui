@@ -7,20 +7,18 @@ import (
 	"strings"
 
 	"github.com/trick77/ship/kit/httpx"
+
+	"github.com/trick77/nui/backend/internal/apix"
 )
 
 // DashboardPath is where the SPA lives. The server mounts it itself, no StripPrefix at the proxy: the collector
 // shares the host under /api.
 const DashboardPath = "/dashboard"
 
-// TrustedHops is the number of proxies in front of the server: one Traefik. Running without a proxy means 0.
-const TrustedHops = 1
-
-// ClientIP is the caller's address as the trusted proxy saw it.
-func ClientIP(r *http.Request) string { return httpx.ClientIP(r, TrustedHops) }
-
 // Routes are the handlers Build mounts; nil ones are left out (tests).
 type Routes struct {
+	// TrustedHops is Config.TrustedHops: the access log names the caller as apix.ClientAddr reads it.
+	TrustedHops int
 	// Dashboard serves the UI with DashboardPath stripped (web.Handler).
 	Dashboard http.Handler
 	// Tracker serves /nui.js (web.Tracker).
@@ -82,7 +80,7 @@ func Build(rt Routes) http.Handler {
 			mux.Handle(p, h)
 		}
 	}
-	return chain(mux)
+	return chain(mux, rt.TrustedHops)
 }
 
 // postOnly answers anything but POST (the preflight is CORS's) with 405.
@@ -99,10 +97,10 @@ func postOnly(h http.Handler) http.Handler {
 
 // chain wraps h in the middleware every request passes. SecurityHeaders sits outside Recover, so a panic's 500
 // keeps its headers.
-func chain(h http.Handler) http.Handler {
+func chain(h http.Handler, hops int) http.Handler {
 	return httpx.Chain(h,
-		httpx.AccessLog(slog.Default(), httpx.AccessLogOptions{ClientIP: ClientIP, RoutineLevel: slog.LevelInfo,
-			Skip: quietIngest}),
+		httpx.AccessLog(slog.Default(), httpx.AccessLogOptions{ClientIP: apix.ClientIP(hops),
+			RoutineLevel: slog.LevelInfo, Skip: quietIngest}),
 		httpx.SecurityHeadersWith(httpx.SecurityOptions{HTMLOnly: true,
 			NoIndex: func(p string) bool { return strings.HasPrefix(p, "/api/") }}),
 		httpx.Recover(slog.Default()),

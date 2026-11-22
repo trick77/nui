@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -595,6 +596,43 @@ func storedRows(t *testing.T, st *store.Store) ([]int, []string) {
 		props = append(props, e.Props)
 	}
 	return sizes, props
+}
+
+// The caller's address follows the configured proxy hops: with none the header is the caller's own text and
+// ignored; behind one, an entry that is no address falls back to the peer, never refusing or keying on the text.
+func TestBrowser_ClientAddressHops(t *testing.T) {
+	r := newRig(t, 0, true)
+	post := func(peer, xff string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/in", strings.NewReader(batch(domain, 1, "")))
+		req.RemoteAddr = peer
+		req.Header.Set("X-Forwarded-For", xff)
+		w := httptest.NewRecorder()
+		r.c.HandleBrowser(w, req)
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("%s via %s: %d", xff, peer, w.Code)
+		}
+	}
+	post("10.0.0.2:1234", "not-an-address")
+	r.c.TrustedHops, r.c.Browser = 0, BrowserTiers(0, r.clock)
+	post("192.0.2.77:1234", "203.0.113.9")
+	waitEvents(t, r.st, 2)
+	rows, err := r.st.DB.Query(`SELECT ip, ip_key FROM event ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []string
+	for rows.Next() {
+		var ip, key string
+		if err := rows.Scan(&ip, &key); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, ip+"|"+key)
+	}
+	if want := []string{"10.0.0.2|10.0.0.2", "192.0.2.77|192.0.2.77"}; !slices.Equal(got, want) {
+		t.Errorf("stored %v, want %v", got, want)
+	}
 }
 
 // What one token stores is bounded whatever the request: caller-named headers are not kept, the encoding does not

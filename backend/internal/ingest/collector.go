@@ -75,13 +75,14 @@ const (
 	FeedBurst = 5000
 )
 
-// BrowserTiers is the browser endpoint's limit: per address or /64, and per /24 or /48 on top.
+// BrowserTiers is the browser endpoint's limit: per address or /64, and per /24 or /48 on top, keyed by the
+// caller's address as the collector stores it (apix.ClientAddr): never a header's text.
 func BrowserTiers(trustedHops int, now func() time.Time) *ratelimit.Tiers {
 	return ratelimit.NewTiers(
 		ratelimit.Tier{Limiter: ratelimit.New(ratelimit.Options{Rate: BrowserRate, Burst: BrowserBurst, Now: now}),
-			Key: ratelimit.ClientKey(trustedHops)},
+			Key: apix.ClientKey(trustedHops, 32, 64)},
 		ratelimit.Tier{Limiter: ratelimit.New(ratelimit.Options{Rate: BrowserWideRate, Burst: BrowserWideBurst, Now: now}),
-			Key: ratelimit.ClientPrefixKey(trustedHops, 24, 48)},
+			Key: apix.ClientKey(trustedHops, 24, 48)},
 	)
 }
 
@@ -359,7 +360,7 @@ func (c *Collector) browserEvents(site *sites.Site, b *browserBatch, r *http.Req
 	if len(ctxJSON) > maxCtx {
 		return nil, 0, errTooLarge
 	}
-	addr, ok := storedAddr(httpx.ClientIP(r, c.TrustedHops))
+	addr, ok := apix.ClientAddr(r, c.TrustedHops)
 	if !ok {
 		return nil, 0, errNoAddr
 	}
