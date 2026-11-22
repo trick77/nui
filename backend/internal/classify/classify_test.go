@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -353,6 +354,16 @@ func TestPass_SharedAddressAndPace(t *testing.T) {
 		e.TS = r.now.UnixMilli() - 3000 + int64(i)*100
 		evs = append(evs, e)
 	}
+	// A browser with its headers, the tracker blocked and the assets cached: documents only, no engagement. A person.
+	for _, p := range []string{"/", "/a", "/b"} {
+		evs = append(evs, req("192.0.2.86", browserUA, "document", p, 200, ""))
+	}
+	// A single-page app's start on an API: 40 calls 20 ms apart with a browser's headers, nothing else. A person.
+	for i := range 40 {
+		e := req("192.0.2.87", browserUA, "empty", "/api/v1/ip/1", 200, "")
+		e.TS = r.now.UnixMilli() - int64(i)*20
+		evs = append(evs, e)
+	}
 	r.insert(t, evs...)
 	if err := r.c.Pass(t.Context()); err != nil {
 		t.Fatal(err)
@@ -362,10 +373,12 @@ func TestPass_SharedAddressAndPace(t *testing.T) {
 		nat: "human|script beacon,engaged,assets loaded," +
 			"also unknown automated: curl/8.4.0, 3 of 15 events (client curl/8.4.0)",
 		"192.0.2.81": "unknown|client Go-http-client/1.1,no script beacon,no assets",
-		"192.0.2.82": "unknown|API only, no page loaded,rapid requests",
+		"192.0.2.82": "unknown|machine pace,API only, no page loaded",
 		"192.0.2.83": "unknown|missing browser headers,no script beacon,no assets",
 		"192.0.2.84": "human|assets loaded,no script beacon",
 		"192.0.2.85": "human|assets loaded,no script beacon",
+		"192.0.2.86": "human|no script beacon,no assets",
+		"192.0.2.87": "human|API only, no page loaded,rapid requests",
 	} {
 		a := classes[key]
 		if got := a.Class + "|" + strings.Join(a.Reasons, ","); got != want {
@@ -386,6 +399,38 @@ func TestPass_SharedAddressAndPace(t *testing.T) {
 		if e.Cls != want {
 			t.Errorf("new %q from the NAT: %d, want %d", ua, e.Cls, want)
 		}
+	}
+}
+
+// "No assets" is a signal only on a site whose feed reports asset requests that day: behind a CDN or the browser's
+// cache no visitor has any.
+func TestPass_NoAssetsNeedsAssets(t *testing.T) {
+	r := newRig(t, true)
+	r.insert(t, req("192.0.2.90", browserUA, "document", "/", 200, ""),
+		req("192.0.2.91", browserUA, "document", "/", 200, ""))
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	if a := classes["192.0.2.90"]; a.Class != "human" || slices.Contains(a.Reasons, "no assets") {
+		t.Errorf("no asset reported on the site: %+v", a)
+	}
+	// Another visitor's asset that day makes it one; a day without any (yesterday) does not.
+	r.insert(t, req("192.0.2.92", browserUA, "script", "/assets/a.js", 200, ""),
+		req("192.0.2.91", browserUA, "document", "/b", 200, ""))
+	old := req("192.0.2.93", browserUA, "document", "/", 200, "")
+	old.TS = r.now.Add(-24 * time.Hour).UnixMilli()
+	r.insert(t, old)
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ = r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	if a := classes["192.0.2.91"]; a.Class != "human" || !slices.Contains(a.Reasons, "no assets") {
+		t.Errorf("with assets reported: %+v", a)
+	}
+	yesterday, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS-1)
+	if a := yesterday["192.0.2.93"]; a.Class != "human" || slices.Contains(a.Reasons, "no assets") {
+		t.Errorf("yesterday, no asset reported: %+v", a)
 	}
 }
 

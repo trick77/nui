@@ -36,12 +36,18 @@ const dayMS = int64(24 * time.Hour / time.Millisecond)
 // client rotating its user agent) is stamped with the actor's class.
 const maxUAs = 64
 
-// Thresholds of the pace signals: an actor with at least apiOnlyRequests requests and no page, asset or beacon only
-// calls the API; one whose requests average under rapidGap apart is no person reading.
+// Thresholds of the pace signals: a client with at least apiOnlyRequests requests and no page, asset or beacon only
+// calls the API, and its requests averaging under rapidGap apart are rapid; both are weak, a single-page app's start
+// or a service worker does that. At least machineRequests averaging under machineGap apart is no person's browser.
 const (
 	apiOnlyRequests = 20
 	rapidGap        = 500 * time.Millisecond
+	machineRequests = 100
+	machineGap      = 100 * time.Millisecond
 )
+
+// reasonMachinePace is the conclusive pace verdict's reason; it implies the weak "rapid requests".
+const reasonMachinePace = "machine pace"
 
 // maxRecheck bounds the actor-days waiting for an rDNS answer.
 const maxRecheck = 10_000
@@ -203,8 +209,9 @@ func (c *Classifier) Pass(ctx context.Context) error {
 type siteFacts struct {
 	// feed: the site has a server feed. script: its script delivered in the last week, so a missing beacon is a
 	// signal. fetchMeta: its feed carries the fetch metadata a browser always sends, so a request without it is
-	// none of a browser's.
-	feed, script, fetchMeta bool
+	// none of a browser's. assets: its feed reported asset requests on the actor's day, so a visitor without any is
+	// a signal (a site whose assets come from a CDN or the browser's cache never reports them).
+	feed, script, fetchMeta, assets bool
 }
 
 func (c *Classifier) passSite(ctx context.Context, s *sites.Site, after, upto, since, today int64) (map[string]knownActor, error) {
@@ -252,6 +259,7 @@ func (c *Classifier) passSite(ctx context.Context, s *sites.Site, after, upto, s
 		}
 	}
 	out := map[string]knownActor{}
+	assetDays := map[int64]bool{}
 	for _, m := range moved {
 		a, err := c.actorDay(ctx, s.ID, m.key, m.day)
 		if err != nil {
@@ -261,7 +269,18 @@ func (c *Classifier) passSite(ctx context.Context, s *sites.Site, after, upto, s
 			c.setRecheck(m, false)
 			continue
 		}
-		d := c.Decide(a, f)
+		fd := f
+		if s.HasFeed {
+			seen, ok := assetDays[m.day]
+			if !ok {
+				if seen, err = c.hasAssets(ctx, s.ID, m.day); err != nil {
+					return nil, err
+				}
+				assetDays[m.day] = seen
+			}
+			fd.assets = seen
+		}
+		d := c.Decide(a, fd)
 		c.setRecheck(m, d.pending)
 		if err := c.DB.SetActorClass(ctx, store.ActorClass{SiteID: s.ID, IPKey: m.key, Day: m.day, Class: d.class,
 			Reasons: d.reasons}, d.byUA); err != nil {
@@ -308,13 +327,25 @@ func (c *Classifier) hasFetchMeta(ctx context.Context, site int64) (bool, error)
 	return ok, err
 }
 
+// hasAssets reports whether the site's feed reported an asset request on day: only then is a visitor without any a
+// signal.
+func (c *Classifier) hasAssets(ctx context.Context, site, day int64) (bool, error) {
+	var ok bool
+	err := c.DB.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM event WHERE site_id = ? AND ts >= ? AND ts < ?
+		AND source = 'server' AND `+assetRequest+`)`, site, day*dayMS, (day+1)*dayMS).Scan(&ok)
+	return ok, err
+}
+
+// assetRequest is a feed record that fetched an asset.
+const assetRequest = `(name IN ('script', 'style', 'image', 'font') OR path LIKE '/assets/%')`
+
 // actorDay reads an actor's day per user agent, the most frequent first.
 func (c *Classifier) actorDay(ctx context.Context, site int64, key string, day int64) (actorDay, error) {
 	a := actorDay{key: key}
 	rows, err := c.DB.DB.QueryContext(ctx, `SELECT ua, COUNT(*),
 		SUM(source = 'browser'), SUM(source = 'server'),
 		SUM(source = 'server' AND name = 'document'),
-		SUM(source = 'server' AND (name IN ('script', 'style', 'image', 'font') OR path LIKE '/assets/%')),
+		SUM(source = 'server' AND `+assetRequest+`),
 		SUM(source = 'server' AND status >= 400 AND status < 500),
 		MAX(source = 'browser' AND props LIKE '%"webdriver":true%'),
 		SUM(source = 'server' AND props NOT LIKE '%"sf_mode"%'),
@@ -366,8 +397,9 @@ type clientVerdict struct {
 
 // Decide weighs an actor-day: the bot list by address first (authoritative, or confirmed by rDNS), then every
 // client on its own (a bot list's client string, an automation client, a scripted browser, a browser without the
-// headers every browser sends), then the majority. People in the majority are weighed further by weak signals
-// (two make them automated too); clients that differ from the majority keep their own class.
+// headers every browser sends, a machine's pace), then the majority. Weak signals are only reasons: each, and any
+// two, fit an ordinary visitor (a blocked tracker, cached assets, a single-page app's API calls, a VPN), so they
+// never make people automated. Clients that differ from the majority keep their own class.
 func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 	addr, _ := netip.ParseAddr(a.ip)
 	var bots *refdata.Bots
@@ -404,16 +436,9 @@ func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 	weak := c.weakSignals(people, f, nets, addr)
 	d := decision{byUA: map[string]string{}, pending: pending}
 	if automated*2 < total || (automated*2 == total && people.engaged > 0) {
-		// Mostly people: human unless their own traffic looks automated too.
+		// Mostly people: human, the weak signals listed with the good ones.
 		d.class = "human"
-		if len(weak) >= 2 && people.engaged == 0 {
-			d.class = "unknown"
-		}
-		if d.class == "human" {
-			d.reasons = append(goodSignals(people), weak...)
-		} else {
-			d.reasons = weak
-		}
+		d.reasons = append(goodSignals(people), weak...)
 		for i, v := range verdicts {
 			if v.class != "" && v.class != d.class {
 				d.byUA[a.uas[i].ua] = v.class
@@ -451,7 +476,12 @@ func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 		}
 	}
 	if d.class == "unknown" {
-		d.reasons = append(d.reasons, c.weakSignals(sumDays(a.uas), f, nets, addr)...)
+		for _, w := range c.weakSignals(sumDays(a.uas), f, nets, addr) {
+			if w == "rapid requests" && slices.Contains(d.reasons, reasonMachinePace) {
+				continue
+			}
+			d.reasons = append(d.reasons, w)
+		}
 	}
 	return d
 }
@@ -512,18 +542,31 @@ func (c *Classifier) clientVerdict(ip string, addr netip.Addr, g uaDay, f siteFa
 		looksLikeBrowser(g.ua):
 		// Every browser sends Accept-Language, and every current one Sec-Fetch-Mode; this feed carries both.
 		return clientVerdict{class: "unknown", reason: "missing browser headers"}
+	case g.server >= machineRequests && apiOnly(g) && avgGap(g) < machineGap:
+		return clientVerdict{class: "unknown", reason: reasonMachinePace}
 	}
 	return clientVerdict{}
 }
 
-// weakSignals are the hints that a person's browser is none: each alone is common, two together are not.
+// apiOnly: the client's requests loaded no page or asset and its script sent no beacon.
+func apiOnly(g uaDay) bool { return g.docs == 0 && g.assets == 0 && g.browser == 0 }
+
+// avgGap is the average time between the client's server requests, 0 for fewer than two or no span.
+func avgGap(g uaDay) time.Duration {
+	if g.server < 2 || g.last <= g.first {
+		return 0
+	}
+	return time.Duration(g.last-g.first) * time.Millisecond / time.Duration(g.server-1)
+}
+
+// weakSignals are the hints that a person's browser is none, shown as reasons; none of them decides.
 func (c *Classifier) weakSignals(g uaDay, f siteFacts, nets *refdata.Networks, addr netip.Addr) []string {
 	var weak []string
 	if f.feed {
 		if f.script && g.docs > 0 && g.browser == 0 {
 			weak = append(weak, "no script beacon")
 		}
-		if g.docs > 0 && g.assets == 0 {
+		if f.assets && g.docs > 0 && g.assets == 0 {
 			weak = append(weak, "no assets")
 		}
 		if !f.fetchMeta && g.server >= 3 && g.noFetch == g.server && g.noLang == g.server && looksLikeBrowser(g.ua) {
@@ -533,9 +576,9 @@ func (c *Classifier) weakSignals(g uaDay, f siteFacts, nets *refdata.Networks, a
 			weak = append(weak, "mostly refused")
 		}
 		// A page load fires its assets and API calls in a burst: pace says something only without any page.
-		if apiOnly := g.server >= apiOnlyRequests && g.docs == 0 && g.assets == 0 && g.browser == 0; apiOnly {
+		if g.server >= apiOnlyRequests && apiOnly(g) {
 			weak = append(weak, "API only, no page loaded")
-			if g.last > g.first && time.Duration(g.last-g.first)*time.Millisecond/time.Duration(g.server-1) < rapidGap {
+			if g.last > g.first && avgGap(g) < rapidGap {
 				weak = append(weak, "rapid requests")
 			}
 		}
