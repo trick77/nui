@@ -33,6 +33,9 @@ func NewServer(k sim.Knobs, now time.Time) (*Server, error) {
 	}
 	s := &Server{Knobs: k, Dir: dir}
 	fail := func(err error) (*Server, error) { s.Close(); return nil, err }
+	if err := sim.Mark(dir); err != nil {
+		return fail(err)
+	}
 	ref, err := sim.OpenReference(filepath.Join(dir, "ref"))
 	if err != nil {
 		return fail(err)

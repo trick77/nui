@@ -54,7 +54,8 @@ func Main(ctx context.Context, args []string, getenv func(string) string, stdout
 	days := fl.Int("days", k.Days, "days of history (NUI_SIM_DAYS)")
 	scenarios := fl.String("scenarios", k.Scenarios, "comma-separated scenarios, all for every one (NUI_SIM_SCENARIOS)")
 	classify := fl.Bool("classify", k.Classify, "run the classifier over the history (NUI_SIM_CLASSIFY)")
-	data := fl.String("data", "", "backfill: the data directory (nui.db, sites.json, ref/)")
+	data := fl.String("data", "", "backfill: the data directory (nui.db, sites.json, ref/): empty, absent or one the simulator wrote")
+	wipe := fl.Bool("wipe", false, "backfill: empty a data directory the simulator wrote first, its history written anew")
 	out := fl.String("out", "", "export: the directory to write the answers to")
 	target := fl.String("target", "", "live: the collector's base URL, the server itself with one trusted hop (server -sim)")
 	speed := fl.Float64("speed", k.Speed, "live: world time per wall time (NUI_SIM_SPEED)")
@@ -84,7 +85,7 @@ func Main(ctx context.Context, args []string, getenv func(string) string, stdout
 	case "scenarios":
 		err = listScenarios(stdout)
 	case "backfill":
-		err = backfillCmd(ctx, k, *data, log, stdout)
+		err = backfillCmd(ctx, k, *data, *wipe, getenv, log, stdout)
 	case "live":
 		err = liveCmd(ctx, k, *target, *rate, *dur, keys, log, stdout)
 	case "export":
@@ -150,12 +151,17 @@ func listScenarios(out io.Writer) error {
 }
 
 // backfillCmd writes the history into a data directory: its sites file and reference data written first when it
-// has none, so the server started on it sees what the backfill saw.
-func backfillCmd(ctx context.Context, k sim.Knobs, dir string, log *slog.Logger, out io.Writer) error {
+// has none, so the server started on it sees what the backfill saw. Only into a directory the simulator may claim
+// (empty, absent, or its own), never where a deployment is configured.
+func backfillCmd(ctx context.Context, k sim.Knobs, dir string, wipe bool, getenv func(string) string,
+	log *slog.Logger, out io.Writer) error {
 	if dir == "" {
 		return errors.New("backfill needs -data")
 	}
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := RefusePublic(getenv("PUBLIC_FQDN"), "sim backfill"); err != nil {
+		return err
+	}
+	if err := sim.Claim(dir, wipe); err != nil {
 		return err
 	}
 	st, err := store.Open(ctx, filepath.Join(dir, "nui.db"))

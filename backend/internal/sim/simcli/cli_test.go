@@ -133,19 +133,49 @@ func TestCommands(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "cred-prober: ") {
 		t.Errorf("check: %d %s %s", code, out, errs)
 	}
-	// Backfill into a data directory: its sites file and reference data written, a second run on its sites.
-	dir := t.TempDir()
+	// Backfill into an absent data directory: its sites file and reference data written, both marked as the
+	// simulator's; a second run refused (it would double the history), one with -wipe written anew.
+	dir := filepath.Join(t.TempDir(), "data")
 	vars := map[string]string{"NUI_SIM_DAYS": "1", "NUI_SIM_SCALE": "0.2", "NUI_SIM_SEED": "x"}
-	for range 2 {
-		code, out, errs = run(t, vars, "backfill", "-data", dir, "-seed", "3")
-		if code != 0 || !strings.Contains(out, "backfilled 1 days") || !strings.Contains(errs, "NUI_SIM_SEED=x") {
-			t.Fatalf("backfill: %d %s %s", code, out, errs)
-		}
+	backfill := func(args ...string) (int, string, string) {
+		return run(t, vars, append([]string{"backfill", "-data", dir, "-seed", "3"}, args...)...)
 	}
-	for _, f := range []string{"nui.db", "sites.json", "ref/crawlers.json", "ref/as-ip-blocks.tar.gz"} {
+	if code, out, errs := backfill(); code != 0 || !strings.Contains(out, "backfilled 1 days") ||
+		!strings.Contains(errs, "NUI_SIM_SEED=x") {
+		t.Fatalf("backfill: %d %s %s", code, out, errs)
+	}
+	for _, f := range []string{"nui.db", "sites.json", "ref/crawlers.json", "ref/as-ip-blocks.tar.gz", sim.OwnerFile} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Error(err)
 		}
+	}
+	if code, _, errs := backfill(); code != 1 || !strings.Contains(errs, "-wipe") {
+		t.Errorf("a second backfill: %d %s", code, errs)
+	}
+	if code, out, errs := backfill("-wipe"); code != 0 || !strings.Contains(out, "backfilled") {
+		t.Errorf("-wipe: %d %s %s", code, out, errs)
+	}
+	// A directory the simulator did not write is refused and left as it was, -wipe or not; so is any directory
+	// where a deployment is configured.
+	foreign := t.TempDir()
+	if err := os.WriteFile(filepath.Join(foreign, "sites.json"), []byte(`{"sites":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"backfill", "-data", foreign}, {"backfill", "-data", foreign, "-wipe"}} {
+		if code, _, errs := run(t, vars, args...); code != 1 || !strings.Contains(errs, "not written by the simulator") {
+			t.Errorf("%v: %d %s", args, code, errs)
+		}
+	}
+	if entries, _ := os.ReadDir(foreign); len(entries) != 1 {
+		t.Errorf("the refused directory changed: %v", entries)
+	}
+	empty := filepath.Join(t.TempDir(), "empty")
+	if code, _, errs := run(t, map[string]string{"PUBLIC_FQDN": "nui.example.com"}, "backfill", "-data", empty); code != 1 ||
+		!strings.Contains(errs, "PUBLIC_FQDN") {
+		t.Errorf("a public host: %d %s", code, errs)
+	}
+	if _, err := os.Stat(empty); err == nil {
+		t.Error("a refused backfill made its directory")
 	}
 }
 
@@ -241,7 +271,7 @@ func TestServer(t *testing.T) {
 	}
 	cfg = app.Config{}
 	if err := s.Configure(&cfg); err != nil || !cfg.AuthDisabled || !cfg.RefDataDisabled || cfg.Addr != "127.0.0.1:9099" ||
-		cfg.DataDir != s.Dir || cfg.TrustedHops != 1 {
+		cfg.DataDir != s.Dir || cfg.TrustedHops != 1 || !sim.Owned(s.Dir) {
 		t.Fatalf("config %+v, %v", cfg, err)
 	}
 	st, err := store.Open(t.Context(), filepath.Join(cfg.DataDir, "nui.db"))
