@@ -130,7 +130,8 @@ export type ListRow = {
 
 export type List = {
   rows: ListRow[];
-  other: { count: number; value: number } | null;
+  // The matching rows past the limit asked for: { 0, 0 } when none.
+  other: { count: number; value: number };
   total: number;
   server: boolean;
 };

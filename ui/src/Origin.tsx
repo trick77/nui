@@ -23,6 +23,7 @@ const MAP_TITLE: Record<Audience, string> = {
 
 // Every country with data, for the map; the backend still ranks them.
 const MAP_LIMIT = 300;
+const LEGEND_LIMIT = 5;
 
 const RAMP = [
   "var(--color-seq-4)",
@@ -44,6 +45,8 @@ function shareParts(rows: ShareRow[]) {
 export function Origin({ aud }: { aud: Audience }) {
   const { scope } = useDash();
   const countries = useList("countries", "volume", { limit: MAP_LIMIT });
+  // The legend's top countries and how many more: the backend's, as asked.
+  const top = useList("countries", "volume", { limit: LEGEND_LIMIT });
   const cl = useApi<Clients>(
     scopeKey("clients", scope),
     (s) => api.clients(scope, s),
@@ -91,21 +94,23 @@ export function Origin({ aud }: { aud: Audience }) {
               {rows.length === 0 ? (
                 <Empty>No visitors with a known country in this range.</Empty>
               ) : (
-                <div className="legend mt-2.5">
-                  {rows.slice(0, 5).map((r) => (
-                    <span key={r.key}>
-                      {r.label && r.label !== r.key
-                        ? r.label
-                        : countryName(r.key)}{" "}
-                      <b>{num(r.value)}</b>
-                    </span>
-                  ))}
-                  {countries.data.total > 5 && (
-                    <span className="text-muted">
-                      + {num(countries.data.total - 5)} more
-                    </span>
-                  )}
-                </div>
+                top.data && (
+                  <div className="legend mt-2.5">
+                    {top.data.rows.map((r) => (
+                      <span key={r.key}>
+                        {r.label && r.label !== r.key
+                          ? r.label
+                          : countryName(r.key)}{" "}
+                        <b>{num(r.value)}</b>
+                      </span>
+                    ))}
+                    {top.data.other.count > 0 && (
+                      <span className="text-muted">
+                        + {num(top.data.other.count)} more
+                      </span>
+                    )}
+                  </div>
+                )
               )}
             </>
           )}

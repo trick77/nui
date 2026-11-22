@@ -691,6 +691,41 @@ describe("dashboard on a domain with a server feed", () => {
     ).toBeInTheDocument();
   });
 
+  it("takes the map's legend and its remainder from the backend", async () => {
+    window.history.replaceState(null, "", "/dashboard/");
+    const fx = fixtureFetch();
+    const legend = {
+      rows: ["CH", "DE", "US"].map((cc, i) => ({
+        key: cc,
+        label: cc,
+        sub: "",
+        gen: null,
+        value: 30 - i,
+        second: 0,
+        share: 10,
+        change: null,
+        verdict: "flat",
+        expandable: false,
+      })),
+      other: { count: 42, value: 100 },
+      total: 99,
+      server: false,
+    };
+    setFetcher((u, i) => {
+      const q = new URL(u, "http://x").searchParams;
+      return q.get("dim") === "countries" && q.get("limit") === "5"
+        ? Promise.resolve(new Response(JSON.stringify(legend)))
+        : fx(u, i);
+    });
+    render(<App />);
+    const map = await screen.findByRole("region", {
+      name: "Where visitors come from",
+    });
+    expect(await within(map).findByText("+ 42 more")).toBeInTheDocument();
+    const shown = map.querySelectorAll(".legend.mt-2\\.5 > span b");
+    expect([...shown].map((b) => b.textContent)).toEqual(["30", "29", "28"]);
+  });
+
   it("shows the domain footer", async () => {
     start();
     const d = await screen.findByRole("region", { name: "This domain" });
@@ -919,7 +954,12 @@ describe("dashboard on a domain without a server feed", () => {
   it("shows empty states for a domain without data", async () => {
     window.history.replaceState(null, "", "/dashboard/?site=blog.example.org");
     const fx = fixtureFetch();
-    const empty = { rows: [], other: null, total: 0, server: false };
+    const empty = {
+      rows: [],
+      other: { count: 0, value: 0 },
+      total: 0,
+      server: false,
+    };
     setFetcher((u, i) =>
       u.startsWith("/api/dash/list")
         ? Promise.resolve(new Response(JSON.stringify(empty)))

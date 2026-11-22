@@ -584,9 +584,7 @@ function list(q: URLSearchParams, feed: boolean): List | null {
   const rest = rows.slice(limit);
   return {
     rows: shown,
-    other: rest.length
-      ? { count: rest.length, value: sum(rest.map((r) => r.value)) }
-      : null,
+    other: { count: rest.length, value: sum(rest.map((r) => r.value)) },
     total: rows.length,
     server: dim === "probed" || dim === "refused",
   };

@@ -235,13 +235,13 @@ function RowsTable({
             sort={sort}
           />
         ))}
-        {list.other && list.other.count > 0 && (
+        {list.other.count > 0 && (
           <tr>
             <td className="text-muted">Other · {num(list.other.count)}</td>
             {cols.slice(1).map((c, j) => (
               <td key={c.head} className="n text-muted">
                 {j + 1 === cols.findIndex((x) => x.num)
-                  ? num(list.other!.value)
+                  ? num(list.other.value)
                   : ""}
               </td>
             ))}
@@ -364,7 +364,7 @@ function Within({
           ))}
         </tr>
       ))}
-      {l.data.other && l.data.other.count > 0 && (
+      {l.data.other.count > 0 && (
         <tr className="bg-white/[.02]">
           <td className="pl-8 text-muted" colSpan={cols.length}>
             and {num(l.data.other.count)} more
