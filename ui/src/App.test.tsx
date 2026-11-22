@@ -577,6 +577,10 @@ describe("dashboard on a domain with a server feed", () => {
     start();
     const d = await screen.findByRole("region", { name: "This domain" });
     expect(await within(d).findByText("Rate-limited")).toBeInTheDocument();
+    // The collector-wide figure: unknown domains and wrong feed keys.
+    expect(
+      within(d).getByText("Unknown site or wrong key · all sites"),
+    ).toBeInTheDocument();
     expect(within(d).getByText("412 MB")).toBeInTheDocument();
     expect(
       within(d).getByText("25 months, raw, including addresses"),

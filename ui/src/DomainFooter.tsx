@@ -62,9 +62,10 @@ export function DomainFooter() {
         ["Rejected · invalid", x.counters.rejected, false],
         ["Dropped · queue full", x.counters.dropped, x.counters.dropped > 0],
         // Counted for the collector, not per site: a body naming no
-        // configured domain belongs to none.
+        // configured domain, or a feed request with a key no site has,
+        // belongs to none.
         [
-          "Unknown domain · all sites",
+          "Unknown site or wrong key · all sites",
           x.counters.unknown_domain,
           x.counters.unknown_domain > 0,
         ],
