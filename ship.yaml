@@ -1,0 +1,11 @@
+# The gate (make check, and ship pre-push in the hook) and the release, see github.com/trick77/ship.
+visibility: public
+go:
+  dir: backend
+  # Narrower than ship's ./... default: cmd/ is wiring, the logic lives in internal/ and web/.
+  coverpkg: ./internal/...,./web/...
+ui:
+  # ship empties it but for .gitkeep before ui.build; vite writes there with emptyOutDir off.
+  embed: backend/web/dist
+images:
+  - {}

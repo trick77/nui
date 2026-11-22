@@ -1,0 +1,54 @@
+# Production: the released image behind an existing Traefik (entrypoint websecure, external network `traefik`). Dev
+# runs with `go run` + `npm run dev` instead (README).
+#
+#   docker compose pull && docker compose up -d
+#
+# No port is published: Traefik reaches the container on the shared `traefik` network. The host comes from .env only
+# (cp .env.example .env): without PUBLIC_FQDN every compose command refuses to run.
+services:
+  nui:
+    # Every release moves latest: `docker compose pull && docker compose up -d` updates.
+    image: ghcr.io/trick77/nui:latest
+    restart: unless-stopped
+    # distroless nonroot's own uid, never 1000 (the host's first user). Host ./data must belong to it:
+    # sudo chown -R 65532:65532 data
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # BACKEND_* and PUBLIC_FQDN reach the container as they are.
+    env_file: .env
+    healthcheck:
+      # Exec form: distroless has no shell.
+      test: ["CMD", "/app/server", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    volumes:
+      - ./data:/data
+    expose:
+      - "8080"
+    networks:
+      - traefik
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: traefik
+      # BACKEND_ADDR's port: change both together.
+      traefik.http.services.nui.loadbalancer.server.port: "8080"
+      # The whole host: the collector under /api, the dashboard under /dashboard. The app mounts both itself, no
+      # strip middleware.
+      traefik.http.routers.nui.rule: Host(`${PUBLIC_FQDN:?set PUBLIC_FQDN in .env, the hostname Traefik routes nui on}`)
+      traefik.http.routers.nui.entrypoints: websecure
+      # No certresolver: the server's Traefik picks the certificate (a wildcard for its own subdomains) and
+      # redirects its `web` entrypoint to `websecure` for every host, so no http router here.
+      traefik.http.routers.nui.tls: "true"
+      traefik.http.routers.nui.middlewares: nui-compress
+      traefik.http.middlewares.nui-compress.compress: "true"
+      com.centurylinklabs.watchtower.enable: "false"
+      diun.enable: "false"
+
+networks:
+  traefik:
+    external: true
