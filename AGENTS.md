@@ -36,8 +36,10 @@ dashboard SPA under `/dashboard` (OIDC). `backend/`: Go on ship's kit, embeds th
   `LLMWIRE_MIMO_API_KEY`.
 - MiMo flash answers wrong with thinking off (llmwire profile notes): calls use `ReasoningBalanced`, not minimal.
 - API errors are `{"detail": …}` (contract), not kit's `{"error": …}`: use `internal/apix`.
-- Rate limit: `kit/ratelimit.Tiers`, per address or /64 plus per /48 (IPv4 /24), charged per event; the /64
-  burst (60) must stay ≥ the 50-event batch, or every full batch is a 413.
+- Rate limit: `kit/ratelimit.Tiers`, per address or /64 plus per /48 (IPv4 /24): one token on arrival, before the
+  body is read, then one per event or per 2 KiB stored, whichever is more (page URL, UA and ids repeat on every
+  event: 490 caller-named headers once stored 1.4 MB for one token). The /64 burst (60) must stay ≥ the 50-event
+  batch and ≥ the batch byte bound / 2 KiB, or such a batch is a 413.
 
 ## Dev / prod
 - Dev: `npm run dev` in `ui/` (proxies `/api` to `127.0.0.1:8080`); full server: `npm run build` in `ui/`, then
