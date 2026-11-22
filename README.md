@@ -209,7 +209,8 @@ rejected once; a batch refused for the rate is not counted until it is taken.
 ### Dashboard API
 
 `/api/dash/*` is the dashboard's own API (a session required). For links into it: the log's `addr` filter takes an
-address or an IPv6 /64 (any other prefix is a 400), its `asn` filter an AS number.
+address or an IPv6 /64 (any other prefix is a 400), its `asn` filter an AS number. Noteworthy shows five findings
+and counts the rest; `findings=all` lists every one.
 
 ## License
 

@@ -72,6 +72,16 @@ func mergedItem(group []insight.Fact, gen string) noteItem {
 
 func (s *Server) handleNoteworthy(w http.ResponseWriter, r *http.Request, q *query) {
 	ctx := r.Context()
+	// findings=all lists every finding, the ones past maxItems included (the simulator's checks; the UI shows five).
+	limit := maxItems
+	switch r.URL.Query().Get("findings") {
+	case "":
+	case "all":
+		limit = -1
+	default:
+		apix.Error(w, http.StatusBadRequest, "findings must be all or left out")
+		return
+	}
 	// Always all classes against the prior period, on closed buckets (contract: ignores aud).
 	fq := *q
 	fq.aud = "all"
@@ -87,7 +97,7 @@ func (s *Server) handleNoteworthy(w http.ResponseWriter, r *http.Request, q *que
 	if s.Model != nil && s.Model.Configured() && len(in.Facts) > 0 {
 		b = s.Model.Briefing(ctx, in)
 	}
-	items, more := noteItems(in.Facts, b)
+	items, more := noteItems(in.Facts, b, limit)
 	headline := map[string]any{"gen": nil, "text": fmt.Sprintf("%d findings against the %s", len(in.Facts), fq.p.prevL)}
 	if len(in.Facts) == 1 {
 		headline["text"] = "1 finding against the " + fq.p.prevL
@@ -104,8 +114,8 @@ func (s *Server) handleNoteworthy(w http.ResponseWriter, r *http.Request, q *que
 }
 
 // noteItems orders the findings: the briefing's lines first (its order, its words, related facts merged), then
-// the computed order. At most maxItems; more is what is left.
-func noteItems(facts []insight.Fact, b *insight.Briefing) ([]noteItem, int) {
+// the computed order. At most limit (below 0: all); more is what is left.
+func noteItems(facts []insight.Fact, b *insight.Briefing, limit int) ([]noteItem, int) {
 	byID := map[string]insight.Fact{}
 	for _, f := range facts {
 		byID[f.ID] = f
@@ -144,9 +154,9 @@ func noteItems(facts []insight.Fact, b *insight.Briefing) ([]noteItem, int) {
 			Detail: nonNil(f.Detail), Target: f.Target, IDs: []string{f.ID}})
 	}
 	more := 0
-	if len(items) > maxItems {
-		more = len(items) - maxItems
-		items = items[:maxItems]
+	if limit >= 0 && len(items) > limit {
+		more = len(items) - limit
+		items = items[:limit]
 	}
 	return items, more
 }
