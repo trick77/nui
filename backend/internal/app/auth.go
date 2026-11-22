@@ -84,7 +84,7 @@ func (a *Auth) HandleToken(w http.ResponseWriter, r *http.Request) {
 	tok := r.PostFormValue("token")
 	switch {
 	case tok == "":
-		apix.Error(w, http.StatusBadRequest, "token is missing")
+		apix.Error(w, http.StatusUnauthorized, "wrong token") // nothing to compare, nothing to space out
 		return
 	case len(tok) > MaxAdminTokenBytes:
 		apix.Error(w, http.StatusRequestEntityTooLarge, "token too long")

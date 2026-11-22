@@ -76,8 +76,9 @@ func TestTokenSignIn(t *testing.T) {
 		want       int
 	}{
 		{"wrong", "token=" + url.QueryEscape(strings.Repeat("x", 40)), http.StatusUnauthorized},
-		{"missing", "other=1", http.StatusBadRequest},
-		{"empty", "token=", http.StatusBadRequest},
+		{"missing", "other=1", http.StatusUnauthorized},
+		{"empty", "token=", http.StatusUnauthorized},
+		{"unreadable", "token=%zz", http.StatusBadRequest},
 		{"too long", "token=" + strings.Repeat("%41", MaxAdminTokenBytes+10), http.StatusRequestEntityTooLarge},
 		{"body too large", "token=" + strings.Repeat("A", maxTokenBody), http.StatusRequestEntityTooLarge},
 	} {
