@@ -38,15 +38,16 @@ to `/nui.js`, `/api/in`, `/api/feed` or `sites.json` updates it in the same comm
   against the actor shown. A briefing shows only for the fact-id set it was written for (ids carry direction).
   Request text (paths, UAs, referrers) is hostile: data in the user message only. Everything works without
   `LLMWIRE_MIMO_API_KEY`.
+- Simulator (`internal/sim`): drives the real collector, classifier and dashboard, never a copy of their logic
+  (hand-written fixtures drifted and hid defects). Documentation addresses only, its own ipverse-format ref data.
 - Rate limit: one token on arrival, before the body is read, then one per event or per 2 KiB stored, whichever is
   more (page URL, UA and ids repeat on every event: 490 caller-named headers once stored 1.4 MB for one token). The
   /64 burst (60) must stay ≥ the 50-event batch and ≥ the batch byte bound / 2 KiB, or such a batch is a 413.
 
 ## Dev / prod
-- Dev: `npm run dev` in `ui/` (proxies `/api` to `127.0.0.1:8080`); full server: `npm run build` in `ui/`, then
-  `go run ./cmd/server` in `backend/`, open `/dashboard/`. UI without a server: `npm run dev:fixtures` in `ui/`.
-  Local data: `BACKEND_DATA_DIR=./data BACKEND_AUTH_DISABLED=true BACKEND_REFDATA_DISABLED=true go run ./cmd/server
-  -demo 30` (needs `./data/sites.json`; auth-off is refused with `PUBLIC_FQDN` set).
+- Dev: `make sim` (UI on a simulated world, `NUI_SIM_*`, README). `npm run dev` in `ui/` proxies `/api` to
+  `127.0.0.1:8080` (`NUI_API_TARGET`); full server: `npm run build` in `ui/`, then `go run ./cmd/server` in
+  `backend/`. UI without a server: `npm run dev:fixtures` in `ui/`. `-demo 30`: README.
 - Gate: `make check` (= ship check; `make hooks` once per clone).
 - Commit subjects + PR titles: Go style `area: what` (`backend: …`, `ui: …`, `deploy: …`, `repo: …`, `sim: …`), gated by ship; release notes list them by area.
 - Fresh clone: `ship hooks` before the first push (check, conform and init install it too); without the pre-push hook a push skips the gate.

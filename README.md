@@ -43,7 +43,51 @@ mkdir -p data && cp ../docs/sites.example.json data/sites.json
 BACKEND_DATA_DIR=./data BACKEND_AUTH_DISABLED=true go run ./cmd/server -demo 30
 ```
 
-and open <http://localhost:8080/dashboard/>. `-demo 30` fills an empty database with 30 days of synthetic traffic.
+and open <http://localhost:8080/dashboard/>. `-demo 30` fills an empty database with 30 days of simulated traffic
+on the configured sites.
+
+### Simulated traffic
+
+`make sim` runs the UI against a simulated world: the real server on a temporary data directory, sign-in off, a
+seeded history backfilled through the real collector and classifier, then advancing live each time the dashboard
+asks; Vite's dev server proxies to it and Ctrl-C stops both. `make sim-server` is the server alone, for curl or a
+second UI. The knobs, each falling back to its default with a warning when it does not parse:
+
+| Knob | Default | |
+|---|---|---|
+| `NUI_SIM_SEED` | 1 | the world: the same seed and start give the same world |
+| `NUI_SIM_SCALE` | 1 | volume; 1 is about 25 visitors a day per site |
+| `NUI_SIM_SPEED` | 1 | simulated time per wall time, live |
+| `NUI_SIM_DAYS` | 30 | history before the start |
+| `NUI_SIM_START` | now | the start, RFC 3339 |
+| `NUI_SIM_PORT` | 8080 | the server's loopback port (the UI proxies there) |
+| `NUI_SIM_SCENARIOS` | the default set | comma-separated, `all` for every one (`sim scenarios` below) |
+| `NUI_SIM_CLASSIFY` | true | run the classifier over the history |
+| `NUI_SIM_FEED_OUTAGE` | off | minutes the lookup site's feed is down, from a minute after the start |
+| `NUI_SIM_FLOOD` | off | `addr`, `64` or `48`: a ten-minute flood from one address, a /64 or a /48 |
+| `NUI_SIM_LATE_FEED` | off | minutes until the blog's feed first delivers, or `never` |
+| `NUI_SIM_SLOW_MS` | 0 | every dashboard answer waits this long |
+| `NUI_SIM_EMPTY_SITE` | false | one more site, configured, that never delivers |
+
+The simulator (`backend/internal/sim`) has a command line of its own, `go run ./cmd/server sim <command>` in
+`backend/`, the knobs as above and flags over them (`-h`):
+
+- `scenarios` lists the scenarios, their windows and what the dashboard shows for each; `check` plays each on its
+  own and checks exactly that.
+- `backfill -data ./data` writes a history into a data directory (and `sites.json` and the world's reference data
+  into `ref/` when missing: run the server on it with `BACKEND_REFDATA_DISABLED=true`). About 25,000 events a second.
+- `live -target http://127.0.0.1:8080 [-rate 50] [-speed 60] [-for 10m] [-key domain=key]` sends tracker and feed
+  batches to a running server, backing off on 429 as the tracker does. Each browser's address goes in
+  `X-Forwarded-For`, which nui trusts from one proxy: target the server itself. Without `-key` the feeds use the
+  simulator's own keys, which a `make sim-server` of the same seed has configured.
+- `export -out DIR` writes the dashboard API's answers over a seeded history ending at the UI fixtures' "now", one
+  JSON file per request the UI's fixture mode makes, named in `DIR/index.json`.
+
+Every address is a documentation address (RFC 5737, 2544, 3849). Real reference data knows none of them, so the
+simulator brings its own (made-up networks, their countries, three made-up bots) wherever it backfills; with a real
+bot list loaded, its crawlers and probe take a real service's ranges from it. In a Go test,
+`sim.History(ctx, st, sim.HistoryOptions{...})` backfills a seeded history; its world's `Expectations()` are the
+scenarios' checks, which `simcli.Check` runs against the dashboard.
 
 ## Running it
 
