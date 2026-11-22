@@ -232,17 +232,39 @@ func (w *World) visit(p *dayPlan, s *Site, per *person, start time.Time, ref, en
 			path = s.paths.page(r)
 		}
 		dwell := time.Duration(math.Exp(2.5+r.NormFloat64()*0.9)*1000) * time.Millisecond
-		dwell = min(max(dwell, 3*time.Second), 20*time.Minute)
+		dwell = min(max(dwell, minDwell), 20*time.Minute)
 		pages[i] = page{path: path, url: "https://" + s.Domain + path, title: s.paths.title(path, s.Product), at: t,
 			leave: t.Add(dwell)}
 		t = pages[i].leave.Add(time.Duration(200+r.IntN(800)) * time.Millisecond)
 	}
+	pages = endBy(pages, start.Add(maxVisit))
 	if s.Feed {
 		w.loads(p, s, per, pages, ref, r)
 	}
 	if s.Script && !per.blocked {
 		w.tracker(p, s, per, pages, ref, r, "person", false)
 	}
+}
+
+// maxVisit bounds a visit, its first page to its last event, and so how far a day's plan reaches past midnight. A
+// person's visit is eight pages at most, each left within twenty minutes (well inside the product's thirty-minute
+// session timeout), at most 2 h 40 min however it is drawn; the automation's runs take minutes, the renderer's
+// seconds.
+// minDwell is the shortest a page is shown.
+const (
+	maxVisit = 3 * time.Hour
+	minDwell = 3 * time.Second
+)
+
+// endBy cuts a visit's pages to end by end: the pages it would show too late are left out, the last is left at end.
+func endBy(pages []page, end time.Time) []page {
+	n := len(pages)
+	for n > 1 && pages[n-1].at.Add(minDwell).After(end) {
+		n--
+	}
+	pages = pages[:n]
+	pages[n-1].leave = earlier(pages[n-1].leave, end)
+	return pages
 }
 
 // browserHeaders are the request headers a browser sends with the tracker's POST and the product's requests alike.
@@ -320,8 +342,11 @@ func (w *World) loads(p *dayPlan, s *Site, per *person, pages []page, ref string
 	}
 }
 
-// tracker plans the script's batches for a visit: events queued as they happen, a batch sent five seconds after
-// the first queued event, at twenty events, or at once when the page is hidden (nui.ts).
+// batchWait is how long the script holds its first queued event before it sends the batch (nui.ts).
+const batchWait = 5 * time.Second
+
+// tracker plans the script's batches for a visit: events queued as they happen, a batch sent batchWait after the
+// first queued event, at twenty events, or at once when the page is hidden (nui.ts).
 func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref string, r rng, actor string, webdriver bool) {
 	type queued struct {
 		e     event
@@ -421,8 +446,8 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 	var q []queued
 	var first time.Time
 	for _, x := range evs {
-		if len(q) > 0 && x.e.t.After(first.Add(5*time.Second)) {
-			send(first.Add(5*time.Second), q)
+		if len(q) > 0 && x.e.t.After(first.Add(batchWait)) {
+			send(first.Add(batchWait), q)
 			q = nil
 		}
 		if len(q) == 0 {
@@ -435,7 +460,7 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 		}
 	}
 	if len(q) > 0 {
-		send(first.Add(5*time.Second), q)
+		send(first.Add(batchWait), q)
 	}
 }
 
