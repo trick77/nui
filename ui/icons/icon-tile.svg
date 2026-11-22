@@ -13,10 +13,11 @@
      rx 4: those corners are the mark's own and are meant to be seen.
 
   The chip is smaller than in icon.svg (60 % vs 100 %) because it sits inside
-  a tile with its own edges to breathe against. Same four redrawn strokes,
-  same 3.0-unit weight, same inner scale and true-bbox centring as
-  ../public/icon.svg; see that file for the derived transform formulas. This
-  file's coverage C is 0.60: outer scale 64*0.6/18 = 2.13333, translate
+  a tile with its own edges to breathe against. Same four redrawn strokes
+  (columns at x 7, 13 and 19), same 3.0-unit weight, same inner scale 0.5625
+  and translate 5.25 as ../public/icon.svg; see that file for why and for the
+  derived transform formulas. Only the outer transform differs: this file's
+  coverage C is 0.60, so scale 64*0.6/18 = 2.13333 and translate
   32 - 12*2.13333 = 6.4.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
@@ -27,11 +28,11 @@
   <rect width="64" height="64" fill="#1f1f1e"/>
   <g transform="translate(6.4000 6.4000) scale(2.13333)">
     <rect x="3" y="3" width="18" height="18" rx="4" fill="url(#og)"/>
-    <g transform="translate(5.2114 5.2114) scale(0.565714)" fill="none" stroke="#1f1f1e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(5.25 5.25) scale(0.5625)" fill="none" stroke="#1f1f1e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
       <path d="M3 3v16a2 2 0 0 0 2 2h16"/>
-      <path d="M18 17V9"/>
+      <path d="M19 17V9"/>
       <path d="M13 17V5"/>
-      <path d="M8 17v-3"/>
+      <path d="M7 17v-3"/>
     </g>
   </g>
 </svg>

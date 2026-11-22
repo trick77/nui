@@ -5,13 +5,22 @@
   the full argument. What follows is only what differs here.
 
   THE GLYPH IS lucide's "chart-column" (ISC), copied rather than imported:
-  nothing loads an icon library to draw a static asset. lucide draws it with
-  2-unit strokes, and a 2-unit stroke is the first thing to vanish at 16px, so
-  the four strokes are redrawn here at 3.0 units, the weight transmission-ui
-  measured for the same reason. The geometry is lucide's own: axes from (3,3)
-  down and along to (21,21) with a 2-unit corner, columns at x 8, 13 and 18.
-  The columns stand 5 units apart, so at 3.0 the gap between them is 2 units
-  and stays open; heavier than about 3.4 the gaps close at 16px.
+  nothing loads an icon library to draw a static asset. Two departures from
+  how lucide draws it:
+
+  1. THE WEIGHT IS 3.0 UNITS, not lucide's 2. A 2-unit stroke is the first
+     thing to vanish at 16px; 3.0 is the weight transmission-ui measured for
+     the same reason.
+  2. THE OUTER COLUMNS STAND AT x 7 AND 19, not lucide's 8 and 18. This is for
+     the 16px raster and nothing else. With the scale below, one glyph unit is
+     exactly half a pixel at 16px and x maps to pixel 2 + x/2, so a stroke
+     centred on an ODD x covers one whole pixel and one on an even x straddles
+     two and renders as a grey smear. lucide's 8 and 18 are even: rendered at a
+     true 16x16 the tall middle column (x 13) was crisp and the two beside it
+     were mid-tone mush. At 7, 13 and 19 all three land on whole pixels with
+     two clear pixels between them; the axes (x 3, y 21) were already on odd
+     coordinates. Move a column to an even x and it blurs again; nothing at
+     64px or in a CSS-scaled preview shows it.
 
   THE MARK IS PAINTED #1f1f1e (the app's bg token), not knocked through the
   chip, so it stays dark on orange on every ground the icon lands on.
@@ -23,12 +32,13 @@
 
     outer: scale = 64*C/18,  translate = 32 - 12*scale
     inner: scale = k,        translate = 12 - c*k
-    k = 18*fill / max(bbox width, bbox height)
 
   With round caps at 3.0 the glyph's bbox is x[1.5,22.5] y[1.5,22.5], 21
-  square, centre (12,12). Fill is 0.66, so k = 0.565714 and the inner translate
-  is (5.2114, 5.2114). Change the weight, the fill or the coverage and the
-  transforms have to be recomputed.
+  square, centre (12,12). k is 0.5625: the value that makes one glyph unit half
+  a pixel at 16px (64*C/18 * k / 4 = 0.5), which fills 65.6 % of the chip, as
+  near the family's 66 % as the pixel grid allows. The inner translate is
+  12 - 12*0.5625 = 5.25. Change the weight, the scale or the coverage and both
+  the transforms and the odd-x rule have to be worked out again.
 
   TRANSPARENT CANVAS: only the four corners outside the chip's radius are clear.
 -->
@@ -39,11 +49,11 @@
   </linearGradient>
   <g transform="translate(-10.6667 -10.6667) scale(3.55556)">
     <rect x="3" y="3" width="18" height="18" rx="4" fill="url(#og)"/>
-    <g transform="translate(5.2114 5.2114) scale(0.565714)" fill="none" stroke="#1f1f1e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(5.25 5.25) scale(0.5625)" fill="none" stroke="#1f1f1e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
       <path d="M3 3v16a2 2 0 0 0 2 2h16"/>
-      <path d="M18 17V9"/>
+      <path d="M19 17V9"/>
       <path d="M13 17V5"/>
-      <path d="M8 17v-3"/>
+      <path d="M7 17v-3"/>
     </g>
   </g>
 </svg>
