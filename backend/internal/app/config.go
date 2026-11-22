@@ -30,6 +30,8 @@ type Config struct {
 
 	// SessionSecret signs the session cookie, 32+ characters; empty signs with a random key per start.
 	SessionSecret string
+
+	// OIDC: all four of issuer, client id, secret and redirect URL, or none; the group is optional.
 	OIDCIssuer, OIDCClientID, OIDCClientSecret, OIDCRedirectURL, OIDCAdminGroup string
 	// AuthDisabled serves the dashboard without sign-in, for local development only: refused with PUBLIC_FQDN set.
 	AuthDisabled bool
