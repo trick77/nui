@@ -57,7 +57,7 @@ second UI. The knobs, each falling back to its default with a warning when it do
 |---|---|---|
 | `NUI_SIM_SEED` | 1 | the world: the same seed and start give the same world |
 | `NUI_SIM_SCALE` | 1 | volume; 1 is about 25 visitors a day per site, at most 50 |
-| `NUI_SIM_SPEED` | 1 | simulated time per wall time, live |
+| `NUI_SIM_SPEED` | 1 | simulated time per wall time, live, at most 3600; a tick hands out at most an hour of it |
 | `NUI_SIM_DAYS` | 30 | history before the start |
 | `NUI_SIM_START` | now | the start, RFC 3339 |
 | `NUI_SIM_PORT` | 8080 | the server's loopback port (the UI proxies there) |
