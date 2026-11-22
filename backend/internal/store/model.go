@@ -41,7 +41,7 @@ type Site struct {
 // Table: event
 type Event struct {
 	SiteID   int64
-	TS       int64 // unix ms
+	TS       int64 // unix ms: when it happened, bounded by the receive time (0001_init.sql says how)
 	Source   string
 	Kind     string
 	Name     string

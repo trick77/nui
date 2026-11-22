@@ -13,8 +13,10 @@ CREATE TABLE site (
     created_at    INTEGER NOT NULL
 );
 
--- One row per browser event or server request. ts is the collector's receive time (unix ms). Everything without a
--- column of its own sits in props (JSON).
+-- One row per browser event or server request. ts (unix ms) is when it happened, as far as the collector trusts it:
+-- a browser event's receive time moved back by how much earlier than the batch the script says it happened (at
+-- most 30 minutes), a server request's time as the product's backend gives it when that lies within an hour before
+-- and a minute after receipt, else its receive time. Everything without a column of its own sits in props (JSON).
 CREATE TABLE event (
     id       INTEGER PRIMARY KEY,
     site_id  INTEGER NOT NULL REFERENCES site (id),
