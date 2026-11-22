@@ -95,7 +95,7 @@ describe("strings", () => {
       buf: "[1,2,3]",
     });
     const huge = cleanProps({ buf: new Float64Array(5_000_000) });
-    expect(JSON.parse(huge.buf as string)).toHaveLength(LIMITS.items);
+    expect(JSON.parse(huge.buf as string)).toHaveLength(LIMITS.arrayItems);
     expect(cleanProps({ v: new DataView(new ArrayBuffer(8)) })).toEqual({
       v: "[]",
     });
@@ -434,7 +434,7 @@ describe("sending", () => {
       for (let i = 0; i < 80; i++) t.event("e");
       vi.advanceTimersByTime(61_000);
     }
-    expect(t.state().queued).toBeLessThanOrEqual(LIMITS.queue);
+    expect(t.state().queued).toBeLessThanOrEqual(LIMITS.queueMax);
     expect(t.state().dropped).toBeGreaterThan(800 - LIMITS.perPage);
   });
 
@@ -1550,13 +1550,22 @@ describe("collector limits", () => {
     // Every part at its bound: the largest name, user agent, URL with its
     // path, props, a title escaped six-fold, and a referrer with its host.
     const common =
-      LIMITS.rowFixed + LIMITS.str + 2 * LIMITS.url + 9 + 6 * LIMITS.str + 2;
+      LIMITS.rowFixed +
+      LIMITS.strBytes +
+      2 * LIMITS.urlBytes +
+      9 +
+      6 * LIMITS.strBytes +
+      2;
     // An error or a custom event: a name, the largest props.
     const named =
-      common + "resource_error".length + LIMITS.name + 6 + LIMITS.props;
+      common +
+      "resource_error".length +
+      LIMITS.nameBytes +
+      6 +
+      LIMITS.propsBytes;
     // A page view: empty props, the referrer and its host.
-    const view = common + "page_view".length + 16 + 6 + 2 + 2 * LIMITS.url;
-    expect(Math.max(named, view)).toBeLessThanOrEqual(LIMITS.row);
+    const view = common + "page_view".length + 16 + 6 + 2 + 2 * LIMITS.urlBytes;
+    expect(Math.max(named, view)).toBeLessThanOrEqual(LIMITS.rowBytes);
   });
 
   it("keeps the context within the collector's limit", async () => {

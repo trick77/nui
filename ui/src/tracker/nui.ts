@@ -32,32 +32,33 @@ export const LIMITS = {
   // The keepalive bodies a browser lets a page have in flight together.
   quota: 64 * 1024,
   batchEvents: 50,
-  // Strings under the keys url, ref, src and href; every other string str.
-  url: 2048,
-  str: 512,
+  // Strings under the keys url, ref, src and href; every other string.
+  urlBytes: 2048,
+  strBytes: 512,
   // Map keys, entries per map, entries per array, nesting.
-  key: 64,
-  keys: 64,
-  items: 50,
-  depth: 8,
+  keyBytes: 64,
+  mapKeys: 64,
+  arrayItems: 50,
+  maxDepth: 8,
   // Values visited per walk of a host page's props.
   nodes: 200,
-  props: 4096,
+  propsBytes: 4096,
   // The context without URL and referrer, as the collector encodes it.
-  ctx: 4096,
+  ctxBytes: 4096,
   // What the collector stores (store.Event.Size), held as an upper bound:
-  // a batch's rows at most `stored`, an event's own row at most `row`.
-  // Every row repeats the page's URL with its path; the first one also
-  // holds the context and the request's headers (at most `headers`).
+  // a batch's rows at most `stored`, an event's own row at most
+  // `rowBytes`. Every row repeats the page's URL with its path; the first
+  // one also holds the context and the request's headers (at most
+  // `hdrBytes`).
   stored: 64 * 1024,
-  row: 16 * 1024,
-  headers: 2048,
+  rowBytes: 16 * 1024,
+  hdrBytes: 2048,
   // A row's fixed part: overhead, source, visitor and session ids, an IPv6
   // address and its /64 key twice, a template, a country.
   rowFixed: 96 + 7 + 32 + 32 + 39 + 2 * 24 + 200 + 2,
   // An event name the collector derives (a host, a message, a URL).
-  name: 200,
-  queue: 100,
+  nameBytes: 200,
+  queueMax: 100,
   perPage: 300,
   perDocument: 1000,
   perMinute: 60,
@@ -82,7 +83,7 @@ const STORE_SEEN = "nui.seen";
 const DOWNLOAD =
   /\.(zip|gz|tgz|tar|xz|bz2|7z|rar|pdf|csv|tsv|json|txt|xlsx?|docx?|pptx?|dmg|exe|msi|pkg|deb|rpm|apk|iso|mmdb|mrt)$/i;
 const SEARCH_NAMES = /^(q|query|search|s|term)$/i;
-// Kinds the collector names by a host, a message or a URL (LIMITS.name);
+// Kinds the collector names by a host, a message or a URL (LIMITS.nameBytes);
 // every other kind but custom by at most 16 bytes, or not at all.
 const NAMED = /^(outbound_click|download|js_error|resource_error)$/;
 const ID = /^[\da-f]{32}$/;
@@ -143,11 +144,11 @@ const URL_KEY = /^(url|ref|src|href)$/;
 // again, up to three times as long as sent: they go escaped.
 export function clipURL(v: unknown): string {
   return clip(
-    clip(v, LIMITS.url)
+    clip(v, LIMITS.urlBytes)
       .replace(/#(?![/!])[^]*$/, "")
       .replace(/%(?![\da-f]{2})/gi, "%25")
       .replace(/[|^]/g, (c) => (c === "|" ? "%7C" : "%5E")),
-    LIMITS.url,
+    LIMITS.urlBytes,
   ).replace(/%[\da-f]?$/i, "");
 }
 
@@ -162,24 +163,24 @@ let budget = 0;
 export function bound(v: unknown, key: string, depth: number): unknown {
   if (--budget < 0) return null;
   if (typeof v === "string")
-    return URL_KEY.test(key) ? clipURL(v) : clip(v, LIMITS.str);
+    return URL_KEY.test(key) ? clipURL(v) : clip(v, LIMITS.strBytes);
   if (typeof v === "number") return isFinite(v) ? v : null;
   if (typeof v === "boolean") return v;
-  if (!v || typeof v !== "object" || depth >= LIMITS.depth) return null;
+  if (!v || typeof v !== "object" || depth >= LIMITS.maxDepth) return null;
   // Typed arrays by index too: for-in would first list every element.
   if (Array.isArray(v) || ArrayBuffer.isView(v)) {
     const l = v as ArrayLike<unknown>;
     const a: unknown[] = [];
-    for (let i = 0; i < l.length && i < LIMITS.items && budget > 0; i++)
+    for (let i = 0; i < l.length && i < LIMITS.arrayItems && budget > 0; i++)
       a.push(bound(l[i], key, depth + 1));
     return a;
   }
   const out: Props = {};
   let n = 0;
   for (const k in v as Props) {
-    if (++n > LIMITS.keys || budget <= 0) break;
+    if (++n > LIMITS.mapKeys || budget <= 0) break;
     if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
-    const c = clip(k, LIMITS.key);
+    const c = clip(k, LIMITS.keyBytes);
     out[c] = bound((v as Props)[k], c, depth + 1);
   }
   return out;
@@ -191,7 +192,7 @@ function fit(p: unknown): Props {
   budget = LIMITS.nodes;
   const out = bound(p, "p", 0) as Props;
   // As sent and as stored: the collector takes 4 KiB of both.
-  return goLen(safeJSON(out)) > LIMITS.props ? { dropped: true } : out;
+  return goLen(safeJSON(out)) > LIMITS.propsBytes ? { dropped: true } : out;
 }
 
 // Shallow, flat, bounded copy of free-form props: strings clipped, numbers
@@ -205,7 +206,7 @@ export function cleanProps(p: unknown): Props {
     if (!Object.prototype.hasOwnProperty.call(p, k)) continue;
     if (++keys > 32) break;
     const v = (p as Props)[k];
-    const key = clip(k, LIMITS.key);
+    const key = clip(k, LIMITS.keyBytes);
     out[key] =
       v && typeof v === "object" ? safeJSON(bound(v, key, 1)) : (v as unknown);
   }
@@ -255,7 +256,6 @@ export type Tracker = {
 type NuiGlobal = {
   q?: unknown;
   event?: unknown;
-  _t?: Tracker;
 };
 
 // start wires the script into win. scriptSrc is the script's own URL: the
@@ -300,7 +300,7 @@ export function start(
   // The latest page view, its title still to be taken (see pageView).
   let view: Rec | undefined;
   const settle = () => {
-    if (view) view.ti = clip(doc.title, LIMITS.str);
+    if (view) view.ti = clip(doc.title, LIMITS.strBytes);
     view = undefined;
   };
 
@@ -443,7 +443,7 @@ export function start(
     // the longest values go, in this order, until it fits; what is left is
     // the browser's short figures.
     for (const k of ["uach", "langs", "title", "lang", "tz", "conn"])
-      if (ctxLen(out) > LIMITS.ctx) delete out[k];
+      if (ctxLen(out) > LIMITS.ctxBytes) delete out[k];
     return out;
   };
   // The context as the collector stores it: without URL and referrer, a
@@ -543,7 +543,7 @@ export function start(
       pageCount >= LIMITS.perPage ||
       docCount >= LIMITS.perDocument ||
       minute.length >= LIMITS.perMinute ||
-      queue.length >= LIMITS.queue
+      queue.length >= LIMITS.queueMax
     ) {
       dropped++;
       return true;
@@ -580,9 +580,9 @@ export function start(
       s: sid,
       p: fit(p),
       u: at ? at[0] : clipURL(loc.href),
-      ti: clip(at ? at[1] : doc.title, LIMITS.str),
+      ti: clip(at ? at[1] : doc.title, LIMITS.strBytes),
     };
-    if (n != null) r.n = clip(n, LIMITS.str);
+    if (n != null) r.n = clip(n, LIMITS.strBytes);
     queue.push(r);
     if (queue.length >= LIMITS.flushAt) flush(false);
     else schedule(LIMITS.flushAfterMs);
@@ -612,7 +612,7 @@ export function start(
   };
 
   const requeue = (batch: Rec[]) => {
-    const room = LIMITS.queue - queue.length;
+    const room = LIMITS.queueMax - queue.length;
     if (room <= 0) {
       dropped += batch.length;
       return;
@@ -646,8 +646,9 @@ export function start(
     // navigator.userAgent), URL and its path (never longer: see clipURL),
     // props ({"p":…,"title":…}) and, on page views and session starts, the
     // referrer and its host.
-    let stored = 14 + ctxLen(c) + LIMITS.headers;
-    const fixed = LIMITS.rowFixed + utf8Len(clip(nav.userAgent, LIMITS.str));
+    let stored = 14 + ctxLen(c) + LIMITS.hdrBytes;
+    const fixed =
+      LIMITS.rowFixed + utf8Len(clip(nav.userAgent, LIMITS.strBytes));
     const refLen = 2 * utf8Len(String(c.ref || ""));
     const parts: string[] = [];
     const batch: Rec[] = [];
@@ -672,7 +673,7 @@ export function start(
         (r.k === "custom"
           ? utf8Len(r.n || "")
           : NAMED.test(r.k)
-            ? LIMITS.name
+            ? LIMITS.nameBytes
             : 16) +
         2 * utf8Len(r.u) +
         6 +
@@ -684,9 +685,9 @@ export function start(
       if (
         size + w > LIMITS.batchBytes ||
         stored + cost > LIMITS.stored ||
-        cost > LIMITS.row
+        cost > LIMITS.rowBytes
       ) {
-        if (!parts.length || cost > LIMITS.row) {
+        if (!parts.length || cost > LIMITS.rowBytes) {
           // Cannot fit even alone: drop it rather than block the queue.
           queue.shift();
           dropped++;
@@ -1212,7 +1213,7 @@ export function start(
   const g = win as unknown as { nui?: NuiGlobal };
   const stub = g.nui;
   const pending = stub && Array.isArray(stub.q) ? (stub.q as unknown[]) : [];
-  const api: Tracker = {
+  const api = {
     event,
     flush: (final = false) => guard(() => flush(final)),
     stop: () => {
@@ -1226,7 +1227,10 @@ export function start(
       timer = 0;
       disabled = true;
     },
-    state: () => ({
+  } as Tracker;
+  // Not in the shipped script: nothing on a page reads it.
+  if (import.meta.env.MODE !== "production")
+    api.state = () => ({
       queued: queue.length,
       disabled,
       failures,
@@ -1235,13 +1239,11 @@ export function start(
       errorKeys: errorsSeen.size,
       sid,
       vid,
-    }),
-  };
+    });
   try {
     g.nui = {
       event,
       q: { push: (a: unknown) => replay(a) },
-      _t: api,
     };
   } catch {
     // a non-writable window.nui: custom events stay unavailable
