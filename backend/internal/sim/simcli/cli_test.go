@@ -1,0 +1,223 @@
+package simcli
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/trick77/nui/backend/internal/app"
+	"github.com/trick77/nui/backend/internal/ingest"
+	"github.com/trick77/nui/backend/internal/sim"
+	"github.com/trick77/nui/backend/internal/sites"
+	"github.com/trick77/nui/backend/internal/store"
+)
+
+func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+
+func run(t *testing.T, vars map[string]string, args ...string) (int, string, string) {
+	t.Helper()
+	var out, errs bytes.Buffer
+	code := Main(t.Context(), args, env(vars), &out, &errs)
+	return code, out.String(), errs.String()
+}
+
+// The export answers every request with valid JSON, the same bytes for the same seed, and names them in its index.
+func TestExport(t *testing.T) {
+	// Two ranges keep the test short (the long ones read a year a day at a time); the command exports all five.
+	exportRanges = []string{"24h", "7d"}
+	t.Cleanup(func() { exportRanges = nil })
+	vars := map[string]string{"NUI_SIM_DAYS": "3", "NUI_SIM_SCALE": "0.3", "NUI_SIM_SCENARIOS": "api-walker"}
+	dirs := []string{filepath.Join(t.TempDir(), "a"), filepath.Join(t.TempDir(), "b")}
+	for _, d := range dirs {
+		if code, out, errs := run(t, vars, "export", "-out", d); code != 0 || !strings.Contains(out, "exported") {
+			t.Fatalf("export: %d %s %s", code, out, errs)
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(dirs[0], "index.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idx ExportIndex
+	if err := json.Unmarshal(b, &idx); err != nil {
+		t.Fatal(err)
+	}
+	if len(idx.Responses) < 300 || idx.World["anchor"] != FixtureAnchor.Format(time.RFC3339) {
+		t.Fatalf("index: %d answers, world %v", len(idx.Responses), idx.World)
+	}
+	for _, k := range []string{"sites", "overview?aud=bots&cmp=yoy&range=24h&site=lens.example.com",
+		"visitor?aud=all&cmp=prev&key=203.0.113.5&range=24h&site=lens.example.com"} {
+		if e, ok := idx.Responses[k]; !ok || e.Status != http.StatusOK {
+			t.Errorf("%s: %+v", k, e)
+		}
+	}
+	// A site without a feed answers the server-only panels 404, as the server does.
+	if e := idx.Responses["classes?aud=all&cmp=prev&range=7d&site=console.example.com"]; e.Status != http.StatusNotFound {
+		t.Errorf("classes without a feed: %+v", e)
+	}
+	for k, e := range idx.Responses {
+		a, err := os.ReadFile(filepath.Join(dirs[0], e.File))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !json.Valid(a) {
+			t.Fatalf("%s: not JSON", k)
+		}
+		if b, _ := os.ReadFile(filepath.Join(dirs[1], e.File)); !bytes.Equal(a, b) {
+			t.Fatalf("%s differs between two exports of one seed:\n%s\n%s", k, a, b)
+		}
+	}
+	if Key("log", map[string]string{"tz": "Europe/Zurich", "site": "x", "q": ""}) != "log?site=x" {
+		t.Error("key keeps the zone or an empty value")
+	}
+}
+
+func TestCommands(t *testing.T) {
+	if code, _, errs := run(t, nil); code != 2 || !strings.Contains(errs, "usage") {
+		t.Errorf("no command: %d", code)
+	}
+	if code, _, _ := run(t, nil, "nope"); code != 2 {
+		t.Errorf("unknown command: %d", code)
+	}
+	if code, _, _ := run(t, nil, "backfill", "-nope"); code != 2 {
+		t.Errorf("unknown flag: %d", code)
+	}
+	for _, args := range [][]string{{"backfill"}, {"export"}, {"live"}, {"live", "-target", "x", "-key", "a"}} {
+		if code, _, _ := run(t, nil, args...); code == 0 {
+			t.Errorf("%v accepted", args)
+		}
+	}
+	code, out, _ := run(t, nil, "scenarios")
+	if code != 0 || !strings.Contains(out, "api-walker (always)") || !strings.Contains(out, "Noteworthy lists the new referrer") {
+		t.Errorf("scenarios: %d %s", code, out)
+	}
+	code, out, errs := run(t, map[string]string{"NUI_SIM_DAYS": "2", "NUI_SIM_SCENARIOS": "cred-prober"}, "check")
+	if code != 0 || !strings.Contains(out, "cred-prober: ") {
+		t.Errorf("check: %d %s %s", code, out, errs)
+	}
+	// Backfill into a data directory: its sites file and reference data written, a second run on its sites.
+	dir := t.TempDir()
+	vars := map[string]string{"NUI_SIM_DAYS": "1", "NUI_SIM_SCALE": "0.2", "NUI_SIM_SEED": "x"}
+	for range 2 {
+		code, out, errs = run(t, vars, "backfill", "-data", dir, "-seed", "3")
+		if code != 0 || !strings.Contains(out, "backfilled 1 days") || !strings.Contains(errs, "NUI_SIM_SEED=x") {
+			t.Fatalf("backfill: %d %s %s", code, out, errs)
+		}
+	}
+	for _, f := range []string{"nui.db", "sites.json", "ref/crawlers.json", "ref/as-ip-blocks.tar.gz"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+// Live over HTTP, the rate setting the scale, the feed key from -key.
+func TestLiveCommand(t *testing.T) {
+	ref, err := sim.OpenReference(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := sim.DefaultKnobs()
+	w, err := k.World(ref, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lens, _ := w.Site("lens.example.com")
+	lens.FeedKey = "custom-key"
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "nui.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	reg, err := w.SyncSites(t.Context(), st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counters := ingest.NewCounters(nil)
+	c := &ingest.Collector{Sites: reg, Counters: counters, Writer: ingest.NewWriter(st, counters, 0, nil, nil),
+		Browser: ingest.BrowserTiers(1, nil), Feed: ingest.FeedLimiter(nil), TrustedHops: 1}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/in", c.HandleBrowser)
+	var feeds, unauthorized int
+	mux.HandleFunc("POST /api/feed", func(w http.ResponseWriter, r *http.Request) {
+		rec := httptest.NewRecorder()
+		c.HandleFeed(rec, r)
+		if r.Header.Get("Authorization") == "Bearer custom-key" {
+			feeds++
+		}
+		if rec.Code == http.StatusUnauthorized {
+			unauthorized++
+		}
+		w.WriteHeader(rec.Code)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	code, out, errs := run(t, map[string]string{"NUI_SIM_SPEED": "3600"}, "live", "-target", srv.URL, "-for", "1s",
+		"-rate", "200", "-key", "lens.example.com=custom-key")
+	if code != 0 || !strings.Contains(out, "live:") || feeds == 0 || unauthorized != 0 {
+		t.Errorf("live: %d %s %s, lens feeds %d, unauthorized %d", code, out, errs, feeds, unauthorized)
+	}
+	if code, _, _ := run(t, nil, "live", "-target", srv.URL, "-key", "nope.example.com=k"); code != 1 {
+		t.Errorf("a key for no site: %d", code)
+	}
+}
+
+func TestServer(t *testing.T) {
+	k := sim.DefaultKnobs()
+	k.Days, k.Scale, k.Port, k.Speed, k.SlowMS = 1, 0.3, 9099, 3600, 1
+	s, err := NewServer(k, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	cfg := app.Config{PublicFQDN: "nui.example.com"}
+	if s.Configure(&cfg) == nil {
+		t.Error("a public host accepted")
+	}
+	cfg = app.Config{}
+	if err := s.Configure(&cfg); err != nil || !cfg.AuthDisabled || !cfg.RefDataDisabled || cfg.Addr != "127.0.0.1:9099" ||
+		cfg.DataDir != s.Dir {
+		t.Fatalf("config %+v, %v", cfg, err)
+	}
+	st, err := store.Open(t.Context(), filepath.Join(cfg.DataDir, "nui.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	cs, err := sites.Load(cfg.SitesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.SyncSites(t.Context(), sites.Rows(cs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Backfill(t.Context(), st); err != nil {
+		t.Fatal(err)
+	}
+	reg, _ := sites.New(rows)
+	counters := ingest.NewCounters(nil)
+	c := &ingest.Collector{Sites: reg, Counters: counters, Writer: ingest.NewWriter(st, counters, 0, nil, nil),
+		Browser: ingest.BrowserTiers(1, nil), Feed: ingest.FeedLimiter(nil), TrustedHops: 1}
+	h := s.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) }),
+		sim.Handlers{Browser: http.HandlerFunc(c.HandleBrowser), Feed: http.HandlerFunc(c.HandleFeed)})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/dash/sites", nil))
+	if rec.Code != http.StatusTeapot || c.Writer.Queued() == 0 {
+		t.Errorf("wrapped: %d, queued %d", rec.Code, c.Writer.Queued())
+	}
+	// server -demo: the configured sites, the world's reference data written where there was none.
+	refDir := filepath.Join(t.TempDir(), "ref")
+	stats, err := Demo(t.Context(), st, 1, refDir, nil)
+	if err != nil || stats.Events == 0 {
+		t.Errorf("demo: %v, %v", stats, err)
+	}
+	if _, err := os.Stat(filepath.Join(refDir, "crawlers.json")); err != nil {
+		t.Error(err)
+	}
+}
