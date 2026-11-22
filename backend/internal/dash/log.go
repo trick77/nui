@@ -1,0 +1,248 @@
+package dash
+
+import (
+	"net/http"
+	"net/netip"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/trick77/ship/kit/ratelimit"
+	"github.com/trick77/ship/kit/version"
+
+	"github.com/trick77/nui/backend/internal/apix"
+	"github.com/trick77/nui/backend/internal/classify"
+	"github.com/trick77/nui/backend/internal/ingest"
+	"github.com/trick77/nui/backend/internal/store"
+)
+
+// logPage is the rows one log page holds.
+const logPage = 100
+
+var statusRE = regexp.MustCompile(`^([1-5])(?:xx|[0-9]{2})$`)
+
+type logRow struct {
+	T      any    `json:"t"`
+	Addr   string `json:"addr"`
+	Class  string `json:"class"`
+	Kind   string `json:"kind"`
+	What   string `json:"what"`
+	Client string `json:"client"`
+	Source string `json:"source"`
+}
+
+// handleLog is the raw event log, newest first, keyset-paginated on (ts, id): the time index walks it without a
+// sort. Domain and range apply; aud and cmp do not.
+func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
+	v := r.URL.Query()
+	where := []string{"site_id = ?", "ts >= ?", "ts < ?"}
+	args := []any{q.site.ID, ms(q.p.From()), ms(q.p.Bounds[q.p.n()])}
+	if a := strings.TrimSpace(v.Get("addr")); a != "" {
+		if _, err := netip.ParseAddr(a); err == nil {
+			where, args = append(where, "ip_key = ?", "ip = ?"), append(args, ratelimit.Key(a), netip.MustParseAddr(a).Unmap().String())
+		} else if p, err := netip.ParsePrefix(a); err == nil {
+			where, args = append(where, "ip_key = ?"), append(args, p.Masked().String())
+		} else {
+			apix.Error(w, http.StatusBadRequest, "addr is an address or a /64")
+			return
+		}
+	}
+	// A substring of the template, the raw path or the event name (an error's message is its name): the UI opens
+	// the log from an error row with the error's label.
+	if p := v.Get("path"); p != "" {
+		where = append(where, "(instr(template, ?) > 0 OR instr(path, ?) > 0 OR instr(name, ?) > 0)")
+		args = append(args, p, p, p)
+	}
+	if c := v.Get("class"); c != "" {
+		if !slices.Contains(classOrder, c) {
+			apix.Error(w, http.StatusBadRequest, "class must be human, bot, monitor or unknown")
+			return
+		}
+		if c == "human" {
+			where = append(where, "cls IN (0, 1)")
+		} else {
+			where, args = append(where, "cls = ?"), append(args, store.ClassCode(c))
+		}
+	}
+	if k := v.Get("kind"); k != "" {
+		switch k {
+		case "browser", "server":
+			where, args = append(where, "source = ?"), append(args, k)
+		default:
+			where, args = append(where, "kind = ?"), append(args, k)
+		}
+	}
+	// A class (2xx … 5xx) or one code; server events only, browser events carry no status.
+	if st := v.Get("status"); st != "" {
+		m := statusRE.FindStringSubmatch(st)
+		switch {
+		case m == nil:
+			apix.Error(w, http.StatusBadRequest, "status is a class (4xx) or a code (404)")
+			return
+		case strings.HasSuffix(st, "xx"):
+			c, _ := strconv.Atoi(m[1])
+			where, args = append(where, "source = 'server' AND status >= ? AND status < ?"), append(args, c*100, c*100+100)
+		default:
+			c, _ := strconv.Atoi(st)
+			where, args = append(where, "source = 'server' AND status = ?"), append(args, c)
+		}
+	}
+	cur, ok := parseCursor(v.Get("cursor"))
+	if !ok {
+		apix.Error(w, http.StatusBadRequest, "bad cursor")
+		return
+	}
+	cond := strings.Join(where, " AND ")
+	ctx := r.Context()
+	var total int64
+	if err := s.row(ctx, `SELECT COUNT(*) FROM event WHERE `+cond, args...).Scan(&total); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	pageArgs := slices.Clone(args)
+	pageCond := cond
+	if cur.ts > 0 {
+		pageCond += " AND (ts < ? OR (ts = ? AND id < ?))"
+		pageArgs = append(pageArgs, cur.ts, cur.ts, cur.id)
+	}
+	rows, err := s.query(ctx, `SELECT id, ts, ip, cls, source, kind, name, template, status, ua
+		FROM event WHERE `+pageCond+` ORDER BY ts DESC, id DESC LIMIT `+strconv.Itoa(logPage+1), pageArgs...)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	defer func() { _ = rows.Close() }()
+	out := []logRow{}
+	next := ""
+	var last cursor
+	for rows.Next() {
+		var id, ts int64
+		var ip, source, kind, name, tmpl, ua string
+		var cls, status int
+		if err := rows.Scan(&id, &ts, &ip, &cls, &source, &kind, &name, &tmpl, &status, &ua); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		if len(out) == logPage {
+			next = last.String()
+			break
+		}
+		what, k := describe(source, kind, name, tmpl, status)
+		out = append(out, logRow{T: iso(time.UnixMilli(ts)), Addr: ip, Class: classOf(cls), Kind: k, What: what,
+			Client: classify.Client(ua), Source: source})
+		last = cursor{ts, id}
+	}
+	if err := rows.Err(); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	apix.JSON(w, http.StatusOK, map[string]any{"rows": out, "total": total, "next": next})
+}
+
+// handleDomain is the footer: collector counters over the range, sources, storage, rules and reference data.
+func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) {
+	ctx := r.Context()
+	from := q.p.From().Unix() / 3600
+	var c struct {
+		Accepted      int64 `json:"accepted"`
+		RateLimited   int64 `json:"rate_limited"`
+		Rejected      int64 `json:"rejected"`
+		Dropped       int64 `json:"dropped"`
+		UnknownDomain int64 `json:"unknown_domain"`
+	}
+	// The site's own rows, plus unknown domains from the siteless row: a request naming no configured site cannot be
+	// attributed, so every site's footer shows the collector-wide count.
+	if err := s.row(ctx, `SELECT
+		COALESCE(SUM(CASE WHEN site_id = ? THEN accepted END), 0),
+		COALESCE(SUM(CASE WHEN site_id = ? THEN rate_limited END), 0),
+		COALESCE(SUM(CASE WHEN site_id = ? THEN rejected END), 0),
+		COALESCE(SUM(CASE WHEN site_id = ? THEN dropped END), 0),
+		COALESCE(SUM(unknown_domain), 0)
+		FROM ingest_stat WHERE site_id IN (?, 0) AND hour >= ?`,
+		q.site.ID, q.site.ID, q.site.ID, q.site.ID, q.site.ID, from).
+		Scan(&c.Accepted, &c.RateLimited, &c.Rejected, &c.Dropped, &c.UnknownDomain); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if s.Counters != nil { // the current hour, not flushed yet
+		for _, p := range s.Counters.Pending() {
+			if p.Hour < from {
+				continue
+			}
+			if p.SiteID == q.site.ID {
+				c.Accepted += p.Accepted
+				c.RateLimited += p.RateLimited
+				c.Rejected += p.Rejected
+				c.Dropped += p.Dropped
+			}
+			if p.SiteID == q.site.ID || p.SiteID == 0 {
+				c.UnknownDomain += p.UnknownDomain
+			}
+		}
+	}
+	browser, server, err := s.lastSeen(ctx, q.site.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var first, events int64
+	if err := s.row(ctx, `SELECT COALESCE(MIN(ts), 0), COUNT(*) FROM event WHERE site_id = ?`,
+		q.site.ID).Scan(&first, &events); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	used, err := s.DB.UsedBytes(ctx)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	sources := map[string]any{"browser": source(browser, s.now()), "server": nil, "script": "/nui.js",
+		"build": version.String(), "first": nil}
+	if q.site.HasFeed {
+		sources["server"] = source(server, s.now())
+	}
+	if first > 0 {
+		sources["first"] = iso(time.UnixMilli(first))
+	}
+	var oldest any
+	if first > 0 {
+		oldest = iso(time.UnixMilli(first))
+	}
+	rules := map[string]any{"rate": ingest.RateRule(), "batch": ingest.BatchRule(), "tz": q.tz,
+		"botlist": map[string]any{"services": 0, "updated": nil}, "networks": map[string]any{"updated": nil},
+		"llm": map[string]any{"calls_today": 0, "budget": 0, "configured": false}}
+	if s.Ref != nil {
+		if b := s.Ref.Bots(); b != nil {
+			rules["botlist"] = map[string]any{"services": len(b.Providers), "updated": iso(b.Updated)}
+		}
+		if n := s.Ref.Networks(); n != nil {
+			rules["networks"] = map[string]any{"updated": iso(n.Updated)}
+		}
+	}
+	if s.Model != nil {
+		calls, budget := s.Model.Usage(ctx, q.site.ID)
+		rules["llm"] = map[string]any{"calls_today": calls, "budget": budget, "configured": s.Model.Configured()}
+	}
+	apix.JSON(w, http.StatusOK, map[string]any{
+		"counters": c,
+		"sources":  sources,
+		"storage": map[string]any{"events": events, "bytes": used, "retention_months": s.RetentionMonths,
+			"oldest": oldest, "identity": "address + user agent, plus browser id"},
+		"rules": rules,
+	})
+}
+
+// source is a source's state: receiving within the last hour, idle before, never without any delivery.
+func source(last, now time.Time) map[string]any {
+	state := "never"
+	switch {
+	case last.IsZero():
+	case now.Sub(last) <= time.Hour:
+		state = "receiving"
+	default:
+		state = "idle"
+	}
+	return map[string]any{"state": state, "last": iso(last)}
+}
