@@ -1,6 +1,13 @@
 package app
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+)
 
 func lookup(vars map[string]string) func(string) string {
 	return func(k string) string { return vars[k] }
@@ -11,24 +18,80 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{Addr: ":8080", DataDir: "/data", LogLevel: "info"}
-	if cfg != want {
-		t.Errorf("cfg = %+v, want %+v", cfg, want)
+	if cfg.Addr != ":8080" || cfg.DataDir != "/data" || cfg.SitesFile != "/data/sites.json" || cfg.RetentionMonths != 25 ||
+		cfg.MaxDBMB != 20480 || cfg.LLMModel != "mimo-v2.6-flash" || cfg.LLMDailyCalls != 200 || cfg.OIDCConfigured() ||
+		cfg.Secure() || cfg.AuthDisabled {
+		t.Errorf("cfg = %+v", cfg)
 	}
 }
 
 func TestLoadConfig_FromEnv(t *testing.T) {
 	cfg, err := LoadConfig(lookup(map[string]string{
-		"BACKEND_ADDR":      "127.0.0.1:9090",
-		"BACKEND_DATA_DIR":  "/var/lib/nui",
-		"BACKEND_LOG_LEVEL": "debug",
-		"PUBLIC_FQDN":       "nui.example.com",
+		"BACKEND_ADDR":               "127.0.0.1:9090",
+		"BACKEND_DATA_DIR":           "/var/lib/nui",
+		"BACKEND_LOG_LEVEL":          "debug",
+		"PUBLIC_FQDN":                "nui.example.com",
+		"BACKEND_OIDC_ISSUER":        "https://auth.example.com",
+		"BACKEND_OIDC_CLIENT_ID":     "nui",
+		"BACKEND_OIDC_CLIENT_SECRET": "s",
+		"BACKEND_OIDC_ADMIN_GROUP":   "nui-admins",
+		"BACKEND_SESSION_SECRET":     strings.Repeat("x", 32),
+		"BACKEND_RETENTION_MONTHS":   "13",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{Addr: "127.0.0.1:9090", DataDir: "/var/lib/nui", PublicFQDN: "nui.example.com", LogLevel: "debug"}
-	if cfg != want {
-		t.Errorf("cfg = %+v, want %+v", cfg, want)
+	if cfg.OIDCRedirectURL != "https://nui.example.com/api/auth/callback" || !cfg.Secure() || !cfg.OIDCConfigured() ||
+		cfg.SitesFile != "/var/lib/nui/sites.json" || cfg.RetentionMonths != 13 {
+		t.Errorf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadConfig_Faults(t *testing.T) {
+	for name, vars := range map[string]map[string]string{
+		"level":       {"BACKEND_LOG_LEVEL": "loud"},
+		"retention":   {"BACKEND_RETENTION_MONTHS": "0"},
+		"negative":    {"BACKEND_MAX_DB_MB": "-1"},
+		"secret":      {"BACKEND_SESSION_SECRET": "short"},
+		"half oidc":   {"BACKEND_OIDC_ISSUER": "https://auth.example.com"},
+		"auth off":    {"BACKEND_AUTH_DISABLED": "true", "PUBLIC_FQDN": "nui.example.com"},
+		"not a bool":  {"BACKEND_AUTH_DISABLED": "maybe"},
+		"not numeric": {"BACKEND_LLM_DAILY_CALLS": "many"},
+	} {
+		if _, err := LoadConfig(lookup(vars)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if cfg, err := LoadConfig(lookup(map[string]string{"BACKEND_AUTH_DISABLED": "true"})); err != nil || !cfg.AuthDisabled {
+		t.Errorf("local auth off: %v", err)
+	}
+}
+
+// TestEnvExample keeps .env.example complete: every variable the config reads, and llmwire's key, has a line.
+func TestEnvExample(t *testing.T) {
+	read := map[string]bool{}
+	_, _ = LoadConfig(func(k string) string { read[k] = true; return "" })
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", ".env.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^#?\s*([A-Z][A-Z0-9_]+)=`).FindAllStringSubmatch(string(b), -1) {
+		listed[m[1]] = true
+	}
+	var missing []string
+	for k := range read {
+		if !listed[k] {
+			missing = append(missing, k)
+		}
+	}
+	for _, k := range []string{"LLMWIRE_MIMO_API_KEY"} {
+		if !listed[k] {
+			missing = append(missing, k)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Errorf(".env.example lacks %v", missing)
 	}
 }

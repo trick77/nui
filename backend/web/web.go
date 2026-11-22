@@ -25,6 +25,16 @@ func Handler(base string) (http.Handler, error) {
 	return serve(dist, base), nil
 }
 
+// Tracker serves the browser script the UI build writes to the embed's root as nui.js, cached a day (kit's
+// spa.Files); 404 while the build has not produced it.
+func Tracker() (http.Handler, error) {
+	dist, err := fs.Sub(embedded, "dist")
+	if err != nil {
+		return nil, err
+	}
+	return spa.Files(dist, "nui.js"), nil
+}
+
 // serve rewrites the shell for base. Vite builds with base "./", but the shell is served on deep routes
 // (/dashboard/sites/3), where "./assets/…" would resolve to /dashboard/sites/assets/… and come back as the shell.
 // So every "./" ref becomes base + "/". A <base href> would do it in one tag, but kit's CSP sets base-uri 'none'.

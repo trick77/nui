@@ -50,6 +50,20 @@ func TestServe_Unbuilt(t *testing.T) {
 	}
 }
 
+func TestTracker(t *testing.T) {
+	h, err := Tracker()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Built: the script; unbuilt: 404. Never the shell.
+	if w := get(h, "/nui.js"); w.Code != http.StatusOK && w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d", w.Code)
+	}
+	if w := get(h, "/index.html"); w.Code != http.StatusNotFound {
+		t.Errorf("tracker serves other files: %d", w.Code)
+	}
+}
+
 func TestHandler_ServesTheEmbed(t *testing.T) {
 	h, err := Handler("/dashboard")
 	if err != nil {
