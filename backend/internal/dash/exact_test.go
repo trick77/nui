@@ -396,3 +396,24 @@ func TestExact_SearchFoldsSpaces(t *testing.T) {
 		t.Errorf("label match %v %v", got, err)
 	}
 }
+
+// A day classified before the en spaces shows its stored reasons with them, in the table and the detail.
+func TestExact_StoredReasonsRespaced(t *testing.T) {
+	r, insert := exactRig(t)
+	insert(pageLoad(at("2026-11-20T10:00:00Z"), "a", "192.0.2.9", "CH", "Mozilla/5.0 (Windows) Firefox/140", 0)...)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	old := "also unknown automated: Chrome · macOS, 3 of 9 events (client curl/8.4.0)"
+	if err := r.s.DB.SetActorClass(t.Context(), store.ActorClass{SiteID: site.ID, IPKey: "192.0.2.9",
+		Day: at("2026-11-20T00:00:00Z") / dayMS, Class: "human", Reasons: []string{old}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := "also unknown automated: Chrome\xe2\x80\x82·\xe2\x80\x82macOS, 3 of 9 events (client curl/8.4.0)"
+	_, v := r.get(t, "visitors", p(feedSite))
+	_, d := r.get(t, "visitor", p(feedSite, "key", "192.0.2.9"))
+	for name, sig := range map[string]any{"table": v["rows"].([]any)[0].(map[string]any)["signals"],
+		"detail": d["signals"]} {
+		if s, _ := sig.([]any); len(s) != 1 || s[0] != want {
+			t.Errorf("%s signals %q", name, sig)
+		}
+	}
+}
