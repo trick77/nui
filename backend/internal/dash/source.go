@@ -55,10 +55,6 @@ type plan struct {
 	loaded  bool
 }
 
-// traceRead, when set (tests), sees the source of every piece a plan read: from the aggregates or not, and whether
-// the piece was on the table's grain (one off it is raw under every source).
-var traceRead func(fromAgg, aligned bool)
-
 // planOf is the request's plan, made on first use for the whole of its period.
 func (s *Server) planOf(ctx context.Context, q *query) (*plan, error) {
 	if q.plan != nil {
@@ -203,9 +199,7 @@ func (pl *plan) read(ctx context.Context, lo, hi time.Time, unit time.Duration, 
 	if h == readAgg {
 		ok, err := fromAgg()
 		if err != nil || ok {
-			if traceRead != nil {
-				traceRead(true, true)
-			}
+			pl.s.traced(true, true)
 			return err
 		}
 		day := ms(lo) / dayMS
@@ -221,9 +215,7 @@ func (pl *plan) read(ctx context.Context, lo, hi time.Time, unit time.Duration, 
 	if h != readRaw {
 		return nil
 	}
-	if traceRead != nil {
-		traceRead(false, lo.Equal(lo.Truncate(unit)) && hi.Equal(hi.Truncate(unit)))
-	}
+	pl.s.traced(false, lo.Equal(lo.Truncate(unit)) && hi.Equal(hi.Truncate(unit)))
 	return fromRaw()
 }
 

@@ -42,18 +42,20 @@ func (s *Server) actors(ctx context.Context, q *query, from, to time.Time) (map[
 	prevAgg := false // the piece before was an aggregate day
 	for i, pc := range pieces(from, to) {
 		wasAgg := false
-		if err := pl.read(ctx, pc[0], pc[1], readSpan, !q.p.agg, func() (bool, error) {
-			ok, err := s.actorDay(ctx, q, ms(pc[0])/dayMS, i > 0, out)
-			wasAgg = ok
-			return ok, err
-		}, func() error {
+		raw := func() error {
 			if prevAgg {
 				if err := s.actorSessions(ctx, q, pc[0].Add(-readSpan), pc[0], sessions, nil); err != nil {
 					return err
 				}
 			}
 			return s.actorPiece(ctx, q, pc[0], pc[1], sessions, out)
-		}); err != nil {
+		}
+		err = pl.read(ctx, pc[0], pc[1], readSpan, !q.p.agg, func() (bool, error) {
+			ok, err := s.actorDay(ctx, q, ms(pc[0])/dayMS, i > 0, out)
+			wasAgg = ok
+			return ok, err
+		}, raw)
+		if err != nil {
 			return nil, err
 		}
 		prevAgg = wasAgg
@@ -1430,8 +1432,8 @@ func (s *Server) actorIn(ctx context.Context, q *query, key string, from, to tim
 			if h, err = pl.pick(ctx, pc[0], pc[1], readSpan, !q.p.agg); err != nil {
 				return nil, err
 			}
-			if h == readRaw && traceRead != nil && pl.src != SourceRaw {
-				traceRead(false, pc[0].Equal(pc[0].Truncate(readSpan)) && pc[1].Equal(pc[1].Truncate(readSpan)))
+			if h == readRaw && pl.src != SourceRaw {
+				s.traced(false, pc[0].Equal(pc[0].Truncate(readSpan)) && pc[1].Equal(pc[1].Truncate(readSpan)))
 			}
 		}
 		switch {
@@ -1576,9 +1578,7 @@ func (s *Server) actorDays(ctx context.Context, q *query, key string, parts []ac
 		}
 		switch {
 		case clean[pt.day]:
-			if traceRead != nil {
-				traceRead(true, true)
-			}
+			s.traced(true, true)
 		case pl.src == SourceAgg:
 			return nil, fmt.Errorf("%w: site %d, %s rebuilt while read", ErrNoAggregates, q.site.ID,
 				time.UnixMilli(pt.day*dayMS).UTC().Format(time.DateOnly))
