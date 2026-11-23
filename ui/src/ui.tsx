@@ -407,7 +407,9 @@ const VITALS: Record<string, [string, string, string]> = {
 export function VitalHint({ kind, what }: { kind: string; what: string }) {
   const id = useId();
   if (kind !== "vital") return null;
-  const name = what.replace(/^vital /, "");
+  // The backend's shapes only ("vital LCP", "vital LCP 2.1 s", "vital CLS
+  // 0.042"): the name is the sender's, "LCP fake" is no vital.
+  const name = /^vital (\S+)(?: [\d.]+(?: m?s)?)?$/.exec(what)?.[1] ?? "";
   // The name is the sender's: an inherited key (constructor) is no vital.
   if (!Object.hasOwn(VITALS, name)) return null;
   const v = VITALS[name];
