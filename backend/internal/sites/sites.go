@@ -17,7 +17,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // File is the sites file's shape.

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/ingest"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/ingest"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 var anchor = time.Date(2026, 11, 22, 13, 30, 0, 0, time.UTC)
@@ -43,7 +43,7 @@ func seededWorld(t testing.TB, seed uint64, scale float64, scenarios string) *Wo
 
 func testStore(t testing.TB, w *World) *store.Store {
 	t.Helper()
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "nui.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

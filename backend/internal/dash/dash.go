@@ -15,12 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/apix"
-	"github.com/trick77/nui/backend/internal/ingest"
-	"github.com/trick77/nui/backend/internal/insight"
-	"github.com/trick77/nui/backend/internal/refdata"
-	"github.com/trick77/nui/backend/internal/sites"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/apix"
+	"github.com/trick77/stakeout/backend/internal/ingest"
+	"github.com/trick77/stakeout/backend/internal/insight"
+	"github.com/trick77/stakeout/backend/internal/refdata"
+	"github.com/trick77/stakeout/backend/internal/sites"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // Server answers the dashboard endpoints.

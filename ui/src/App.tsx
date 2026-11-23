@@ -67,7 +67,7 @@ export default function App() {
             width={30}
             height={30}
           />
-          nui
+          Stakeout
         </h1>
         {auth.state === "checking" && (
           <p className="m-0 text-[13.5px] text-muted" aria-busy="true">

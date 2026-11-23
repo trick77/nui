@@ -1,4 +1,4 @@
-// Command server runs nui: the collector, the background work (classification, reference data, retention, the
+// Command server runs Stakeout: the collector, the background work (classification, reference data, retention, the
 // model) and the dashboard.
 package main
 
@@ -25,17 +25,17 @@ import (
 	"github.com/trick77/ship/kit/version"
 	"github.com/trick77/toolkit/llmwire"
 
-	"github.com/trick77/nui/backend/internal/app"
-	"github.com/trick77/nui/backend/internal/classify"
-	"github.com/trick77/nui/backend/internal/dash"
-	"github.com/trick77/nui/backend/internal/ingest"
-	"github.com/trick77/nui/backend/internal/llm"
-	"github.com/trick77/nui/backend/internal/refdata"
-	"github.com/trick77/nui/backend/internal/sim"
-	"github.com/trick77/nui/backend/internal/sim/simcli"
-	"github.com/trick77/nui/backend/internal/sites"
-	"github.com/trick77/nui/backend/internal/store"
-	"github.com/trick77/nui/backend/web"
+	"github.com/trick77/stakeout/backend/internal/app"
+	"github.com/trick77/stakeout/backend/internal/classify"
+	"github.com/trick77/stakeout/backend/internal/dash"
+	"github.com/trick77/stakeout/backend/internal/ingest"
+	"github.com/trick77/stakeout/backend/internal/llm"
+	"github.com/trick77/stakeout/backend/internal/refdata"
+	"github.com/trick77/stakeout/backend/internal/sim"
+	"github.com/trick77/stakeout/backend/internal/sim/simcli"
+	"github.com/trick77/stakeout/backend/internal/sites"
+	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/stakeout/backend/web"
 )
 
 var (
@@ -43,7 +43,7 @@ var (
 	healthcheckFlag = flag.Bool("healthcheck", false, "probe the local /readyz and exit 0 (ready) or 1 (not)")
 	newKeyFlag      = flag.Bool("new-feed-key", false, "print a new feed key and the hash the sites file takes, then exit")
 	demoFlag        = flag.Int("demo", 0, "fill an empty database with this many days of simulated traffic on the configured sites (development)")
-	simFlag         = flag.Bool("sim", false, "serve a simulated world from a temporary data directory, sign-in off (development; NUI_SIM_* knobs, README)")
+	simFlag         = flag.Bool("sim", false, "serve a simulated world from a temporary data directory, sign-in off (development; STAKEOUT_SIM_* knobs, README)")
 )
 
 func main() {
@@ -172,7 +172,7 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	if _, err := logging.Setup(logging.Options{Level: cfg.LogLevel, LevelVar: "BACKEND_LOG_LEVEL"}); err != nil {
 		return err
 	}
-	slog.Info("starting nui", "version", version.String(), "public_fqdn", cfg.PublicFQDN, "data_dir", cfg.DataDir)
+	slog.Info("starting Stakeout", "version", version.String(), "public_fqdn", cfg.PublicFQDN, "data_dir", cfg.DataDir)
 	if err := checkDataDir(cfg, mode); err != nil {
 		return err
 	}
@@ -180,7 +180,7 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	ctx, stop := run.Context(context.Background())
 	defer stop()
 
-	st, err := store.Open(ctx, filepath.Join(cfg.DataDir, "nui.db"))
+	st, err := store.Open(ctx, filepath.Join(cfg.DataDir, "stakeout.db"))
 	if err != nil {
 		return err
 	}
@@ -386,7 +386,7 @@ func seedDemo(ctx context.Context, st *store.Store, cfg app.Config, days int) er
 	}
 	refDir := filepath.Join(cfg.DataDir, "ref")
 	if _, err := os.Stat(filepath.Join(refDir, "crawlers.json")); err != nil && !cfg.RefDataDisabled {
-		tmp, err := os.MkdirTemp("", "nui-demo-ref-")
+		tmp, err := os.MkdirTemp("", "stakeout-demo-ref-")
 		if err != nil {
 			return err
 		}

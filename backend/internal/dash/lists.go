@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/apix"
-	"github.com/trick77/nui/backend/internal/classify"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/apix"
+	"github.com/trick77/stakeout/backend/internal/classify"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // dimSpec is one list: which events, grouped by what, counting what. a and b are SQL sums per group; distinct, when

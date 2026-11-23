@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/ingest"
-	"github.com/trick77/nui/backend/internal/sites"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/ingest"
+	"github.com/trick77/stakeout/backend/internal/sites"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 func TestKnobs(t *testing.T) {
@@ -24,19 +24,19 @@ func TestKnobs(t *testing.T) {
 	if k := ReadKnobs(env(nil), warn); k != DefaultKnobs() || len(warned) != 0 {
 		t.Errorf("defaults %+v, warned %v", k, warned)
 	}
-	k := ReadKnobs(env(map[string]string{"NUI_SIM_SEED": "42", "NUI_SIM_SCALE": "2.5", "NUI_SIM_SPEED": "60",
-		"NUI_SIM_PORT": "9091", "NUI_SIM_DAYS": "7", "NUI_SIM_SCENARIOS": "hammer, nope", "NUI_SIM_START": "2026-11-22T13:30:00Z",
-		"NUI_SIM_CLASSIFY": "false", "NUI_SIM_FEED_OUTAGE": "15", "NUI_SIM_FLOOD": "48", "NUI_SIM_LATE_FEED": "never",
-		"NUI_SIM_SLOW_MS": "800", "NUI_SIM_EMPTY_SITE": "1"}), warn)
+	k := ReadKnobs(env(map[string]string{"STAKEOUT_SIM_SEED": "42", "STAKEOUT_SIM_SCALE": "2.5", "STAKEOUT_SIM_SPEED": "60",
+		"STAKEOUT_SIM_PORT": "9091", "STAKEOUT_SIM_DAYS": "7", "STAKEOUT_SIM_SCENARIOS": "hammer, nope", "STAKEOUT_SIM_START": "2026-11-22T13:30:00Z",
+		"STAKEOUT_SIM_CLASSIFY": "false", "STAKEOUT_SIM_FEED_OUTAGE": "15", "STAKEOUT_SIM_FLOOD": "48", "STAKEOUT_SIM_LATE_FEED": "never",
+		"STAKEOUT_SIM_SLOW_MS": "800", "STAKEOUT_SIM_EMPTY_SITE": "1"}), warn)
 	if k.Seed != 42 || k.Scale != 2.5 || k.Speed != 60 || k.Port != 9091 || k.Days != 7 || k.Scenarios != "hammer" ||
 		!k.Start.Equal(anchor) || k.Classify || k.FeedOutage != 15*time.Minute || k.Flood != "48" || k.LateFeed != LateFeedNever ||
 		k.SlowMS != 800 || !k.EmptySite || len(warned) != 1 || !strings.Contains(warned[0], "nope") {
 		t.Errorf("set %+v, warned %v", k, warned)
 	}
 	warned = nil
-	k = ReadKnobs(env(map[string]string{"NUI_SIM_SEED": "x", "NUI_SIM_SCALE": "-1", "NUI_SIM_SPEED": "NaN",
-		"NUI_SIM_PORT": "70000", "NUI_SIM_DAYS": "1.5", "NUI_SIM_START": "yesterday", "NUI_SIM_CLASSIFY": "maybe",
-		"NUI_SIM_FLOOD": "huge", "NUI_SIM_LATE_FEED": "soon"}), warn)
+	k = ReadKnobs(env(map[string]string{"STAKEOUT_SIM_SEED": "x", "STAKEOUT_SIM_SCALE": "-1", "STAKEOUT_SIM_SPEED": "NaN",
+		"STAKEOUT_SIM_PORT": "70000", "STAKEOUT_SIM_DAYS": "1.5", "STAKEOUT_SIM_START": "yesterday", "STAKEOUT_SIM_CLASSIFY": "maybe",
+		"STAKEOUT_SIM_FLOOD": "huge", "STAKEOUT_SIM_LATE_FEED": "soon"}), warn)
 	if d := DefaultKnobs(); k.Seed != d.Seed || k.Scale != d.Scale || k.Speed != d.Speed || k.Port != d.Port ||
 		k.Days != d.Days || !k.Start.IsZero() || !k.Classify || k.Flood != "" || k.LateFeed != LateFeedOff || len(warned) != 9 {
 		t.Errorf("bad values %+v, warned %d: %v", k, len(warned), warned)
@@ -67,8 +67,8 @@ func TestKnobs(t *testing.T) {
 		t.Error("poisson of no number")
 	}
 	// The awkward behaviours become live windows; an empty site joins the default ones.
-	k = ReadKnobs(env(map[string]string{"NUI_SIM_FEED_OUTAGE": "15", "NUI_SIM_FLOOD": "addr", "NUI_SIM_LATE_FEED": "5",
-		"NUI_SIM_EMPTY_SITE": "true"}), warn)
+	k = ReadKnobs(env(map[string]string{"STAKEOUT_SIM_FEED_OUTAGE": "15", "STAKEOUT_SIM_FLOOD": "addr", "STAKEOUT_SIM_LATE_FEED": "5",
+		"STAKEOUT_SIM_EMPTY_SITE": "true"}), warn)
 	ref, err := OpenReference(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -86,14 +86,14 @@ func TestKnobs(t *testing.T) {
 	}
 	// A late feed of 0 minutes starts at the start, not never; "never" never.
 	for raw, delivers := range map[string]bool{"0": true, "never": false} {
-		k = ReadKnobs(env(map[string]string{"NUI_SIM_LATE_FEED": raw}), warn)
+		k = ReadKnobs(env(map[string]string{"STAKEOUT_SIM_LATE_FEED": raw}), warn)
 		if w, err = k.World(ref, anchor); err != nil {
 			t.Fatal(err)
 		}
 		blog, _ = w.Site("blog.example.org")
 		if w.FeedDelivers(blog, anchor.Add(-time.Minute)) || w.FeedDelivers(blog, anchor.Add(time.Minute)) != delivers ||
 			k.Validate() != nil {
-			t.Errorf("NUI_SIM_LATE_FEED=%s: %v, delivering after the start %v", raw, k.LateFeed, !delivers)
+			t.Errorf("STAKEOUT_SIM_LATE_FEED=%s: %v, delivering after the start %v", raw, k.LateFeed, !delivers)
 		}
 	}
 }

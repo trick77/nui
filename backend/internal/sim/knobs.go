@@ -8,25 +8,25 @@ import (
 	"time"
 )
 
-// Knobs are the simulator's settings, read from NUI_SIM_* environment variables. A value that does not parse or is
+// Knobs are the simulator's settings, read from STAKEOUT_SIM_* environment variables. A value that does not parse or is
 // out of range falls back to its default with a warning: a typo must not poison the world.
 type Knobs struct {
-	Seed  uint64  // NUI_SIM_SEED: the world's seed
-	Scale float64 // NUI_SIM_SCALE: volume, 1 a small product
-	Speed float64 // NUI_SIM_SPEED: world time per wall time, live
-	Port  int     // NUI_SIM_PORT: the simulated server's port
-	Days  int     // NUI_SIM_DAYS: history backfilled before live time starts
-	// Scenarios (NUI_SIM_SCENARIOS) is a comma-separated list, "all" for every one.
+	Seed  uint64  // STAKEOUT_SIM_SEED: the world's seed
+	Scale float64 // STAKEOUT_SIM_SCALE: volume, 1 a small product
+	Speed float64 // STAKEOUT_SIM_SPEED: world time per wall time, live
+	Port  int     // STAKEOUT_SIM_PORT: the simulated server's port
+	Days  int     // STAKEOUT_SIM_DAYS: history backfilled before live time starts
+	// Scenarios (STAKEOUT_SIM_SCENARIOS) is a comma-separated list, "all" for every one.
 	Scenarios string
-	// Start (NUI_SIM_START, RFC 3339) is the anchor: the end of the history. Zero: now.
+	// Start (STAKEOUT_SIM_START, RFC 3339) is the anchor: the end of the history. Zero: now.
 	Start time.Time
-	// Classify (NUI_SIM_CLASSIFY) runs the classifier's pass over the backfill.
+	// Classify (STAKEOUT_SIM_CLASSIFY) runs the classifier's pass over the backfill.
 	Classify bool
-	// The awkward behaviours, live from a minute after the start. FeedOutage (NUI_SIM_FEED_OUTAGE, minutes): the
-	// first feed site's emitter is down that long. Flood (NUI_SIM_FLOOD: addr, 64 or 48): a flood for ten minutes.
-	// LateFeed (NUI_SIM_LATE_FEED, minutes or "never"): the last feed site's feed has not delivered yet and starts
+	// The awkward behaviours, live from a minute after the start. FeedOutage (STAKEOUT_SIM_FEED_OUTAGE, minutes): the
+	// first feed site's emitter is down that long. Flood (STAKEOUT_SIM_FLOOD: addr, 64 or 48): a flood for ten minutes.
+	// LateFeed (STAKEOUT_SIM_LATE_FEED, minutes or "never"): the last feed site's feed has not delivered yet and starts
 	// that long after the start (0: at the start); LateFeedOff and LateFeedNever are no delay. SlowMS
-	// (NUI_SIM_SLOW_MS): every dashboard answer waits that long. EmptySite (NUI_SIM_EMPTY_SITE): one more site,
+	// (STAKEOUT_SIM_SLOW_MS): every dashboard answer waits that long. EmptySite (STAKEOUT_SIM_EMPTY_SITE): one more site,
 	// configured, that never delivers.
 	FeedOutage time.Duration
 	Flood      string
@@ -47,7 +47,7 @@ func DefaultKnobs() Knobs {
 		LateFeed: LateFeedOff}
 }
 
-// Limit is a numeric knob's range, the same for its NUI_SIM_* variable and its flag.
+// Limit is a numeric knob's range, the same for its STAKEOUT_SIM_* variable and its flag.
 type Limit struct {
 	lo, hi float64
 	whole  bool
@@ -154,54 +154,54 @@ func ReadKnobs(getenv func(string) string, warn func(string)) Knobs {
 	whole := func(name string, fallback int, l Limit) int {
 		return int(num(name, float64(fallback), l))
 	}
-	if raw := strings.TrimSpace(getenv("NUI_SIM_SEED")); raw != "" {
+	if raw := strings.TrimSpace(getenv("STAKEOUT_SIM_SEED")); raw != "" {
 		if s, err := strconv.ParseUint(raw, 10, 64); err == nil {
 			k.Seed = s
 		} else {
-			bad("NUI_SIM_SEED", raw, "a whole number from 0", k.Seed)
+			bad("STAKEOUT_SIM_SEED", raw, "a whole number from 0", k.Seed)
 		}
 	}
-	k.Scale = num("NUI_SIM_SCALE", k.Scale, ScaleLimit)
-	k.Speed = num("NUI_SIM_SPEED", k.Speed, SpeedLimit)
-	k.Port = whole("NUI_SIM_PORT", k.Port, portLimit)
-	k.Days = whole("NUI_SIM_DAYS", k.Days, daysLimit)
-	if raw := strings.TrimSpace(getenv("NUI_SIM_SCENARIOS")); raw != "" {
+	k.Scale = num("STAKEOUT_SIM_SCALE", k.Scale, ScaleLimit)
+	k.Speed = num("STAKEOUT_SIM_SPEED", k.Speed, SpeedLimit)
+	k.Port = whole("STAKEOUT_SIM_PORT", k.Port, portLimit)
+	k.Days = whole("STAKEOUT_SIM_DAYS", k.Days, daysLimit)
+	if raw := strings.TrimSpace(getenv("STAKEOUT_SIM_SCENARIOS")); raw != "" {
 		var keep []string
 		for _, n := range strings.Split(raw, ",") {
 			if _, err := Scenarios(n); err != nil {
-				warn(fmt.Sprintf("NUI_SIM_SCENARIOS: %v; left out", err))
+				warn(fmt.Sprintf("STAKEOUT_SIM_SCENARIOS: %v; left out", err))
 				continue
 			}
 			keep = append(keep, strings.TrimSpace(n))
 		}
 		k.Scenarios = strings.Join(keep, ",")
 	}
-	if raw := strings.TrimSpace(getenv("NUI_SIM_START")); raw != "" {
+	if raw := strings.TrimSpace(getenv("STAKEOUT_SIM_START")); raw != "" {
 		if t, err := time.Parse(time.RFC3339, raw); err == nil {
 			k.Start = t
 		} else {
-			bad("NUI_SIM_START", raw, "an RFC 3339 time", "now")
+			bad("STAKEOUT_SIM_START", raw, "an RFC 3339 time", "now")
 		}
 	}
-	k.Classify = flag("NUI_SIM_CLASSIFY", k.Classify)
-	k.FeedOutage = time.Duration(num("NUI_SIM_FEED_OUTAGE", 0, minutesLimit) * float64(time.Minute))
-	switch raw := strings.TrimSpace(getenv("NUI_SIM_FLOOD")); raw {
+	k.Classify = flag("STAKEOUT_SIM_CLASSIFY", k.Classify)
+	k.FeedOutage = time.Duration(num("STAKEOUT_SIM_FEED_OUTAGE", 0, minutesLimit) * float64(time.Minute))
+	switch raw := strings.TrimSpace(getenv("STAKEOUT_SIM_FLOOD")); raw {
 	case "", "addr", "64", "48":
 		k.Flood = raw
 	default:
-		bad("NUI_SIM_FLOOD", raw, "addr, 64 or 48", "no flood")
+		bad("STAKEOUT_SIM_FLOOD", raw, "addr, 64 or 48", "no flood")
 	}
-	switch raw := strings.TrimSpace(getenv("NUI_SIM_LATE_FEED")); raw {
+	switch raw := strings.TrimSpace(getenv("STAKEOUT_SIM_LATE_FEED")); raw {
 	case "":
 	case "never":
 		k.LateFeed = LateFeedNever
 	default:
-		if m := num("NUI_SIM_LATE_FEED", -1, minutesLimit); m >= 0 {
+		if m := num("STAKEOUT_SIM_LATE_FEED", -1, minutesLimit); m >= 0 {
 			k.LateFeed = time.Duration(m * float64(time.Minute))
 		}
 	}
-	k.SlowMS = whole("NUI_SIM_SLOW_MS", 0, slowLimit)
-	k.EmptySite = flag("NUI_SIM_EMPTY_SITE", false)
+	k.SlowMS = whole("STAKEOUT_SIM_SLOW_MS", 0, slowLimit)
+	k.EmptySite = flag("STAKEOUT_SIM_EMPTY_SITE", false)
 	return k
 }
 

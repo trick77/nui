@@ -1,8 +1,8 @@
 {
-  "name": "nui",
+  "name": "stakeout",
   "version": "0.1.0",
   "private": true,
-  "description": "Dashboard of nui, self-hosted usage analytics",
+  "description": "Dashboard of Stakeout, self-hosted usage analytics",
   "license": "MIT",
   "type": "module",
   "scripts": {

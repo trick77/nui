@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/sim"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/sim"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // TestLargeTable fills 13 months of traffic (about 100k events, the feed's asset requests included), runs every

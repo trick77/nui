@@ -14,10 +14,10 @@ import (
 	"github.com/trick77/ship/kit/ratelimit"
 	"github.com/trick77/ship/kit/version"
 
-	"github.com/trick77/nui/backend/internal/apix"
-	"github.com/trick77/nui/backend/internal/classify"
-	"github.com/trick77/nui/backend/internal/ingest"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/apix"
+	"github.com/trick77/stakeout/backend/internal/classify"
+	"github.com/trick77/stakeout/backend/internal/ingest"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // logPage is the rows one log page holds.
@@ -268,7 +268,7 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 	}
 	// feed: the site has a server feed configured, so a null server source is one that has not delivered yet.
 	sources := map[string]any{"browser": source(browser, s.now()), "server": nil, "feed": q.site.HasFeed,
-		"script": "/nui.js", "build": version.String(), "first": nil}
+		"script": "/stakeout.js", "build": version.String(), "first": nil}
 	if q.site.HasFeed {
 		sources["server"] = source(server, s.now())
 	}

@@ -77,10 +77,10 @@ export const LIMITS = {
   errorKindsPerDocument: 100,
 };
 
-const STORE_VID = "nui.vid";
-const STORE_SID = "nui.sid";
-const STORE_SEEN = "nui.seen";
-const STORE_GL = "nui.gl";
+const STORE_VID = "stakeout.vid";
+const STORE_SID = "stakeout.sid";
+const STORE_SEEN = "stakeout.seen";
+const STORE_GL = "stakeout.gl";
 // Globals an automation tool leaves in the page, by their exact names (a
 // page's own __pwa… or cdc_config is no tool's), one group per token sent.
 // ChromeDriver's is cdc_ or $cdc_ and 22 letters, then a kind.
@@ -278,7 +278,7 @@ export type Tracker = {
   };
 };
 
-type NuiGlobal = {
+type StakeoutGlobal = {
   q?: unknown;
   event?: unknown;
 };
@@ -294,7 +294,9 @@ export function start(
   const loc = win.location;
   let src = scriptSrc;
   if (!src) {
-    const el = doc.querySelector<HTMLScriptElement>('script[src*="/nui.js"]');
+    const el = doc.querySelector<HTMLScriptElement>(
+      'script[src*="/stakeout.js"]',
+    );
     src = el ? el.src : "";
   }
   if (!src) return null;
@@ -1394,16 +1396,16 @@ export function start(
       const n = clip(name, 128);
       if (n) record("custom", cleanProps(props), n);
     });
-  const g = win as unknown as { nui?: NuiGlobal };
-  const stub = g.nui;
+  const g = win as unknown as { stakeout?: StakeoutGlobal };
+  const stub = g.stakeout;
   const pending = stub && Array.isArray(stub.q) ? (stub.q as unknown[]) : [];
   try {
-    g.nui = {
+    g.stakeout = {
       event,
       q: { push: (a: unknown) => replay(a) },
     };
   } catch {
-    // a non-writable window.nui: custom events stay unavailable
+    // a non-writable window.stakeout: custom events stay unavailable
   }
   function replay(a: unknown) {
     if (a && typeof a === "object" && "length" in a) {

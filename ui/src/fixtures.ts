@@ -1167,7 +1167,7 @@ function domain(site: string, feed: boolean, script: boolean): Domain {
         ? { state: "receiving", last: "2026-11-22T13:20:00Z" }
         : null,
       feed: FEEDS.includes(site),
-      script: "/nui.js",
+      script: "/stakeout.js",
       build: "3f2a91c",
       first: "2026-09-03T08:00:00Z",
     },

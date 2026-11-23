@@ -24,10 +24,10 @@ lint:
 
 # The UI against a simulated world: the real server (server -sim) on a temporary data directory, sign-in off, a
 # seeded history backfilled and advancing as the dashboard asks, and Vite's dev server proxying to it. Ctrl-C stops
-# both. Knobs: NUI_SIM_* (README). The server is built first: go run would not pass the stop on to it. The UI starts
-# only once this server answers (its pid in X-Nui-Sim-Pid, not whatever else listens on the port), on the port the
-# server itself reads from NUI_SIM_PORT.
-SIM_SERVER = $${TMPDIR:-/tmp}/nui-sim-server
+# both. Knobs: STAKEOUT_SIM_* (README). The server is built first: go run would not pass the stop on to it. The UI
+# starts only once this server answers (its pid in X-Stakeout-Sim-Pid, not whatever else listens on the port), on the
+# port the server itself reads from STAKEOUT_SIM_PORT.
+SIM_SERVER = $${TMPDIR:-/tmp}/stakeout-sim-server
 
 .PHONY: sim sim-server
 
@@ -38,9 +38,9 @@ sim:
 	echo "make sim: waiting for the simulated server (pid $$pid) on 127.0.0.1:$$port"; \
 	waited=0; \
 	until curl -s -o /dev/null -D - "http://127.0.0.1:$$port/api/dash/sites" 2>/dev/null | tr -d '\r' | \
-		grep -qix "x-nui-sim-pid: $$pid"; do \
+		grep -qix "x-stakeout-sim-pid: $$pid"; do \
 		if ! kill -0 $$pid 2>/dev/null; then \
-			echo "make sim: the simulated server stopped before it answered on port $$port (in use? its log is above; NUI_SIM_PORT picks another)" >&2; \
+			echo "make sim: the simulated server stopped before it answered on port $$port (in use? its log is above; STAKEOUT_SIM_PORT picks another)" >&2; \
 			exit 1; \
 		fi; \
 		waited=$$((waited + 1)); \
@@ -50,7 +50,7 @@ sim:
 		fi; \
 		sleep 0.5; \
 	done; \
-	cd ui && NUI_API_TARGET=http://127.0.0.1:$$port npm run dev
+	cd ui && STAKEOUT_API_TARGET=http://127.0.0.1:$$port npm run dev
 
 # Just the simulated server, for curl or a second UI process.
 sim-server:

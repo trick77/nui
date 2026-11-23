@@ -3,8 +3,8 @@
 Self-hosted, passive usage analytics for the user's own web products. One host: the collector under `/api`, the
 dashboard SPA under `/dashboard` (OIDC, an admin token, or both). `backend/`: Go on ship's kit, embeds the UI. `ui/`: React 19, Vite, Tailwind v4.
 
-Adding nui to another product ("integrate nui"): `INTEGRATION.md`. It is what other repos' agents read: a change
-to `/nui.js`, `/api/in`, `/api/feed` or `sites.json` updates it in the same commit.
+Adding Stakeout to another product ("integrate Stakeout"): `INTEGRATION.md`. It is what other repos' agents read: a
+change to `/stakeout.js`, `/api/in`, `/api/feed` or `sites.json` updates it in the same commit.
 
 ## Decisions
 - The app mounts `/dashboard` itself, no Traefik StripPrefix: collector and dashboard share the host. Vite base `./`,
@@ -47,11 +47,11 @@ to `/nui.js`, `/api/in`, `/api/feed` or `sites.json` updates it in the same comm
   /64 burst (60) must stay ≥ the 50-event batch and ≥ the batch byte bound / 2 KiB, or such a batch is a 413.
 
 ## Dev / prod
-- Dev: `make sim` (UI on a simulated world, `NUI_SIM_*`, README). `npm run dev` in `ui/` proxies `/api` to
-  `127.0.0.1:8080` (`NUI_API_TARGET`); full server: `npm run build` in `ui/`, then `go run ./cmd/server` in
+- Dev: `make sim` (UI on a simulated world, `STAKEOUT_SIM_*`, README). `npm run dev` in `ui/` proxies `/api` to
+  `127.0.0.1:8080` (`STAKEOUT_API_TARGET`); full server: `npm run build` in `ui/`, then `go run ./cmd/server` in
   `backend/`. UI without a server: `npm run dev:fixtures` in `ui/`. `-demo 30`: README.
 - Gate: `make check` (= ship check; `make hooks` once per clone).
 - Commit subjects + PR titles: Go style `area: what` (`backend: …`, `ui: …`, `deploy: …`, `repo: …`, `sim: …`), gated by ship; release notes list them by area.
 - Fresh clone: `ship hooks` before the first push (check, conform and init install it too); without the pre-push hook a push skips the gate.
-- Prod: `compose.yaml` pulls `ghcr.io/trick77/nui` behind Traefik; `./data` owned by `65532:65532`.
+- Prod: `compose.yaml` pulls `ghcr.io/trick77/stakeout` behind Traefik; `./data` owned by `65532:65532`.
 - Release: Actions "Release" by hand (bump input); the first one `bump=minor`. Never dispatch Release yourself.

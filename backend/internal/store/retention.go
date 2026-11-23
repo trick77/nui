@@ -218,13 +218,13 @@ func (s *Store) RunRetention(ctx context.Context, o RetentionOptions) {
 	if o.Log == nil {
 		o.Log = slog.Default()
 	}
-	// A database that held events before nui switched incremental auto-vacuum on keeps its mode: switching needs a
+	// A database that held events before Stakeout switched incremental auto-vacuum on keeps its mode: switching needs a
 	// full VACUUM, which locks the collector out for minutes and needs the file's size again in free disk. Retention
 	// runs without it: deleted pages are reused by new rows (the cap counts the rows, not the file), the file does
 	// not shrink.
 	if inc, err := s.Incremental(ctx); err == nil && !inc {
 		o.Log.Warn("Database not in incremental auto-vacuum mode: retention frees pages for reuse, the file does not " +
-			"shrink (switch with PRAGMA auto_vacuum = INCREMENTAL; VACUUM; while nui is stopped)")
+			"shrink (switch with PRAGMA auto_vacuum = INCREMENTAL; VACUUM; while Stakeout is stopped)")
 	}
 	var lastAge time.Time
 	// The first check a minute after start (sooner with a shorter cadence), then every CapEvery.

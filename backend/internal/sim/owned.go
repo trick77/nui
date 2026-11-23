@@ -13,13 +13,13 @@ import (
 // directory: the simulator wrote its history (sim backfill, server -demo, server -sim). RefMarkerFile in a reference
 // directory: the reference data there is the world's made-up one, which a normal server discards.
 const (
-	OwnerFile     = "nui-sim.json"
-	RefMarkerFile = "nui-sim-ref.json"
+	OwnerFile     = "stakeout-sim.json"
+	RefMarkerFile = "stakeout-sim-ref.json"
 )
 
 // mark writes a marker file saying who wrote the directory and why it matters.
 func mark(path, what string) error {
-	b, err := json.MarshalIndent(map[string]string{"written_by": "nui sim", "what": what}, "", "  ")
+	b, err := json.MarshalIndent(map[string]string{"written_by": "stakeout sim", "what": what}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -61,8 +61,8 @@ func Claim(dir string, wipe bool) error {
 			}
 		}
 	default:
-		if _, err := os.Stat(filepath.Join(dir, "nui.db")); err == nil {
-			return fmt.Errorf("%s holds a simulated history already (nui.db): another one would double it; -wipe "+
+		if _, err := os.Stat(filepath.Join(dir, "stakeout.db")); err == nil {
+			return fmt.Errorf("%s holds a simulated history already (stakeout.db): another one would double it; -wipe "+
 				"empties the directory and writes it anew", dir)
 		}
 	}
