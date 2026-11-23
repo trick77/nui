@@ -46,6 +46,7 @@ const CLASS_FILTER = [
   { key: "human", label: "Humans" },
   { key: "bot", label: "Known bots" },
   { key: "unknown", label: "Unknown automated" },
+  { key: "api", label: "API clients" },
 ];
 
 const TOP = 7;

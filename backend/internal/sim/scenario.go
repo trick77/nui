@@ -271,6 +271,26 @@ func expectBaseline(w *World, _ *Scenario) []Expectation {
 				a.String(), "bot", "address range"))
 		}
 	}
+	for _, s := range w.Sites {
+		if s.Kind != "api" || !s.Feed || s.Silent {
+			continue
+		}
+		out = append(out, Expectation{Says: s.Domain + ": the programs calling with an account are API clients, not people",
+			Endpoint: "classes", Params: params(s.Domain, "7d"), Check: func(b map[string]any) error {
+				got := map[string]any{}
+				for _, r := range items(b, "rows") {
+					class, _ := r["class"].(string)
+					got[class] = r["requests"]
+				}
+				if n, _ := got["api"].(float64); n == 0 {
+					return fmt.Errorf("no API client requests: %v", got)
+				}
+				if n, _ := got["human"].(float64); n != 0 {
+					return fmt.Errorf("%v requests of people", n)
+				}
+				return nil
+			}})
+	}
 	return out
 }
 

@@ -234,24 +234,25 @@ func TestExact_24hLastYear(t *testing.T) {
 	}
 }
 
-// Known bots and uptime probes rising is neutral; unknown automation rising is bad, people rising good.
+// API clients, known bots and uptime probes rising is neutral; unknown automation rising is bad, people rising good.
 func TestExact_ClassVerdicts(t *testing.T) {
 	r, insert := exactRig(t)
 	req := func(ts int64, ip string, cls int) store.Event {
 		return store.Event{TS: ts, Source: "server", Kind: "request", IP: ip, IPKey: ip, Status: 200, Cls: cls}
 	}
-	for cls, n := range map[int]int{store.ClsHuman: 4, store.ClsBot: 4, store.ClsMonitor: 4, store.ClsUnknown: 4} {
+	for cls, n := range map[int]int{store.ClsHuman: 4, store.ClsAPI: 4, store.ClsBot: 4, store.ClsMonitor: 4,
+		store.ClsUnknown: 4} {
 		insert(req(at("2026-11-12T10:00:00Z"), "198.51.100.1", cls))
 		for i := range n {
 			insert(req(at("2026-11-20T10:00:00Z")+int64(i), "198.51.100.2", cls))
 		}
 	}
 	_, body := r.get(t, "classes", p(feedSite))
-	want := map[string]string{"human": "good", "bot": "flat", "monitor": "flat", "unknown": "bad"}
+	want := map[string]string{"human": "good", "api": "flat", "bot": "flat", "monitor": "flat", "unknown": "bad"}
 	for _, row := range body["rows"].([]any) {
 		m := row.(map[string]any)
 		if changeOf(m["change"]) != `{"pct":300}` || m["verdict"] != want[m["class"].(string)] ||
-			num64(m["share"]) != 25 {
+			num64(m["share"]) != 20 {
 			t.Errorf("class row %v", m)
 		}
 	}

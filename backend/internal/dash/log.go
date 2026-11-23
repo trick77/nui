@@ -72,7 +72,7 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 	}
 	if c := v.Get("class"); c != "" {
 		if !slices.Contains(classOrder, c) {
-			apix.Error(w, http.StatusBadRequest, "class must be human, bot, monitor or unknown")
+			apix.Error(w, http.StatusBadRequest, classError)
 			return
 		}
 		if c == "unknown" { // pending counted as unknown, as classOf does

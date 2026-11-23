@@ -498,7 +498,7 @@ describe("dashboard on a domain with a server feed", () => {
       name: "Visitors by address",
     });
     await within(v).findByText("198.51.100.7");
-    expect(within(v).getByText(/Top 7 of 16 addresses/)).toBeInTheDocument();
+    expect(within(v).getByText(/Top 7 of 17 addresses/)).toBeInTheDocument();
     // A refused share of 20 % or more is red.
     expect(within(v).getByText(/^2['’]338$/)).toHaveClass("bad");
     fireEvent.click(within(v).getByRole("button", { name: "Most refused" }));
@@ -607,8 +607,26 @@ describe("dashboard on a domain with a server feed", () => {
     });
     await within(v).findByText("198.51.100.7");
     fireEvent.click(within(v).getByRole("button", { name: "Show all →" }));
-    await within(v).findByText(/16 of 16 addresses/);
+    await within(v).findByText(/17 of 17 addresses/);
     expect(within(v).queryByRole("button", { name: "Load more →" })).toBeNull();
+  });
+
+  it("filters the API clients, a class of their own", async () => {
+    start();
+    const v = await screen.findByRole("region", {
+      name: "Visitors by address",
+    });
+    await within(v).findByText("198.51.100.7");
+    fireEvent.click(within(v).getByRole("button", { name: "API clients" }));
+    await waitFor(() =>
+      expect(lastCall("/api/dash/visitors").get("class")).toBe("api"),
+    );
+    const row = (await within(v).findByText("198.51.100.30")).closest("tr")!;
+    expect(within(row).getByText("API client")).toBeInTheDocument();
+    expect(within(row).getByText("signed-in API client")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(within(v).queryByText("198.51.100.7")).toBeNull(),
+    );
   });
 
   it("marks the model's client label and keeps the raw client", async () => {
@@ -1032,7 +1050,7 @@ describe("where raw events end", () => {
     );
     await within(pages).findByText("/AS15169");
     const v = panel("Visitors by address");
-    await within(v).findByText(/Top 7 of 16 addresses/);
+    await within(v).findByText(/Top 7 of 17 addresses/);
     // The range's start is in (the overview's live count shows).
     await screen.findByText(/humans/);
     for (const p of [d, pages, v]) expect(p.textContent).not.toMatch(noted);
@@ -1097,7 +1115,7 @@ describe("where raw events end", () => {
     expect(await within(v).findByText(said)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "30d" }));
     await waitFor(() => expect(v.textContent).not.toMatch(noted));
-    await within(v).findByText(/Top 7 of 16 addresses/);
+    await within(v).findByText(/Top 7 of 17 addresses/);
     fireEvent.click(screen.getByRole("button", { name: "12mo" }));
     expect(await within(v).findByText(said)).toBeInTheDocument();
   });
@@ -1751,7 +1769,13 @@ describe("main chart", () => {
     const { container } = render(
       <StackChart
         labels={["a", "b"]}
-        series={{ human: zero, bot: zero, monitor: zero, unknown: zero }}
+        series={{
+          human: zero,
+          api: zero,
+          bot: zero,
+          monitor: zero,
+          unknown: zero,
+        }}
         open={false}
       />,
     );

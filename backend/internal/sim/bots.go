@@ -153,6 +153,7 @@ func (w *World) automation(p *dayPlan, s *Site, d int64) {
 				break
 			}
 			if dayOf(at) == d {
+				// The names tried as account, against INTEGRATION.md: a careless emitter's 401 must sign nobody in.
 				add(record{t: at, ip: ProberAddr, ua: ProberUA, method: "POST", path: "/api/v1/login",
 					route: "POST /api/v1/login", status: 401, dur: 40, bytes: 44,
 					account: probedAccounts[i%len(probedAccounts)]})

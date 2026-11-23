@@ -417,7 +417,7 @@ func (s *Server) handleVisitors(w http.ResponseWriter, r *http.Request, q *query
 	}
 	class := v.Get("class")
 	if class != "" && !slices.Contains(classOrder, class) {
-		apix.Error(w, http.StatusBadRequest, "class must be human, bot, monitor or unknown")
+		apix.Error(w, http.StatusBadRequest, classError)
 		return
 	}
 	limit, err := intParam(v.Get("limit"), 7, 1, maxLimit)
@@ -1109,7 +1109,7 @@ func doesText(row visitorRow, counts map[string]int64) string {
 	if w := topActions(counts); len(w) > 0 {
 		what, top = w[0], counts[w[0]]
 	}
-	phrase := map[string]string{"human": "Person", "bot": "Known bot", "monitor": "Uptime probe",
+	phrase := map[string]string{"human": "Person", "api": "API client", "bot": "Known bot", "monitor": "Uptime probe",
 		"unknown": "Unknown automated"}[row.Class]
 	if what == "" {
 		return phrase

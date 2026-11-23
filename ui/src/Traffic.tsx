@@ -75,7 +75,9 @@ export function WhoIsAsking({ classes }: { classes: Loaded<Classes> }) {
             </tbody>
           </table>
           <p className="mx-0.5 mt-2.5 mb-0 text-[12px] text-muted">
-            Classified by: ipverse bot list (CIDR, user agent, reverse DNS)
+            Classified by: the account in the feed
+            {SEP}
+            ipverse bot list (CIDR, user agent, reverse DNS)
             {SEP}
             <span className="font-mono">navigator.webdriver</span>
             {SEP}
@@ -173,7 +175,7 @@ function TrafficPanels({ classes }: { classes: Loaded<Classes> }) {
       <SectionHead
         id="traffic"
         title="Traffic"
-        lead="Who is asking: people, known bots from the ipverse list, uptime probes, and automation nobody announced."
+        lead="Who is asking: people, signed-in API clients, known bots from the ipverse list, uptime probes, and automation nobody announced."
         sources={["server"]}
       />
       <div className="grid grid-cols-1 gap-3 min-[1000px]:grid-cols-2">

@@ -4,7 +4,7 @@
 export type Range = "24h" | "7d" | "30d" | "90d" | "12mo";
 export type Audience = "all" | "humans" | "bots";
 export type Compare = "prev" | "yoy" | "off";
-export type ClassKey = "human" | "bot" | "monitor" | "unknown";
+export type ClassKey = "human" | "api" | "bot" | "monitor" | "unknown";
 export type Verdict = "good" | "bad" | "flat";
 
 // pct for sums, pp for rates, new when the previous period had none; null

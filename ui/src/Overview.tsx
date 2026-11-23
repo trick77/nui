@@ -7,7 +7,7 @@ import { Delta, ErrorBox, Panel, SectionHead, Skeleton } from "./ui";
 export const AUD_NOTE: Record<Audience, string> = {
   all: "Humans and bots together.",
   humans: "Humans only.",
-  bots: "Bots only: known bots, uptime probes and unknown automation.",
+  bots: "Bots only: API clients, known bots, uptime probes and unknown automation.",
 };
 const AUD_WORD: Record<Audience, string> = {
   all: "all",

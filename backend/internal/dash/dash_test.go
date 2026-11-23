@@ -627,7 +627,7 @@ func TestLists(t *testing.T) {
 	}
 	_, body = r.get(t, "classes", p(feedSite, "aud", "humans"))
 	rows = listRows(body)
-	if len(rows) != 4 || rows[0]["class"] != "human" || rows[0]["requests"].(float64) == 0 ||
+	if len(rows) != 5 || rows[0]["class"] != "human" || rows[4]["class"] != "api" || rows[0]["requests"].(float64) == 0 ||
 		len(body["series"].(map[string]any)["unknown"].([]any)) != 7 {
 		t.Errorf("classes %v", body)
 	}
@@ -1104,6 +1104,44 @@ func TestPendingCountsAutomated(t *testing.T) {
 		if _, log := r.get(t, "log", p(feedSite, "range", "24h", "class", cls)); log["total"] != want {
 			t.Errorf("log class %s: %v events, want %v", cls, log["total"], want)
 		}
+	}
+}
+
+// An API client is automated in every figure and its own class in every list: never a person, never unknown.
+func TestAPIClientClass(t *testing.T) {
+	r := newRig(t, 0, 0, nil)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	if err := r.s.DB.InsertEvents(t.Context(), []store.Event{{SiteID: site.ID, TS: r.end.UnixMilli(), Source: "server",
+		Kind: "request", IP: "192.0.2.1", IPKey: "192.0.2.1", UA: "loom/0.14.8", Method: "POST", Template: "POST /mcp",
+		Status: 200, Account: "acct_1", Cls: store.ClsAPI}}); err != nil {
+		t.Fatal(err)
+	}
+	_, ov := r.get(t, "overview", p(feedSite, "range", "24h"))
+	if l := ov["live"].(map[string]any); l["humans"] != 0.0 || l["automated"] != 1.0 {
+		t.Errorf("live = %v, want 1 automated", l)
+	}
+	for _, aud := range []string{"bots", "humans"} {
+		_, body := r.get(t, "clients", p(feedSite, "range", "24h", "aud", aud))
+		if got, want := len(body["browsers"].([]any)) > 0, aud == "bots"; got != want {
+			t.Errorf("aud %s lists the client: %v, want %v", aud, got, want)
+		}
+	}
+	for class, want := range map[string]float64{"api": 1, "unknown": 0, "human": 0, "bot": 0} {
+		if _, log := r.get(t, "log", p(feedSite, "range", "24h", "class", class)); log["total"] != want {
+			t.Errorf("log class %s: %v events, want %v", class, log["total"], want)
+		}
+		_, vs := r.get(t, "visitors", p(feedSite, "range", "24h", "class", class))
+		if rows := listRows(vs); float64(len(rows)) != want {
+			t.Errorf("visitors class %s: %v", class, rows)
+		}
+	}
+	_, vs := r.get(t, "visitors", p(feedSite, "range", "24h"))
+	if row := listRows(vs)[0]; row["class"] != "api" ||
+		row["does"].(map[string]any)["text"] != "API client, mostly POST /mcp → 200 (1×)" {
+		t.Errorf("row %v", row)
+	}
+	if code, body := r.get(t, "log", p(feedSite, "class", "robot")); code != http.StatusBadRequest {
+		t.Errorf("a class nobody knows: %d %v", code, body)
 	}
 }
 

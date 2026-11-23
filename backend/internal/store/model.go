@@ -10,10 +10,13 @@ const (
 	ClsBot     = 2
 	ClsMonitor = 3
 	ClsUnknown = 4
+	// ClsAPI is a program the product signed in: automated, known by its account.
+	ClsAPI = 5
 )
 
 // ClassNames maps an event.cls code to the class name the API and actor_class use.
-var ClassNames = map[int]string{ClsHuman: "human", ClsBot: "bot", ClsMonitor: "monitor", ClsUnknown: "unknown"}
+var ClassNames = map[int]string{ClsHuman: "human", ClsBot: "bot", ClsMonitor: "monitor", ClsUnknown: "unknown",
+	ClsAPI: "api"}
 
 // ClassCode is the event.cls code of a class name, ClsPending for an unknown one.
 func ClassCode(name string) int {
@@ -102,6 +105,9 @@ type ActorClass struct {
 	Day     int64
 	Class   string
 	Reasons []string
+	// Rest is the class of the events of clients without one of their own (SetActorClass), Class when empty. Set, the
+	// events written as an API client's keep that: nobody weighed their client against the account. No column.
+	Rest string
 }
 
 // Briefing is the model's cached briefing for a site and range.
@@ -149,7 +155,7 @@ type AggDay struct {
 type AggHour struct {
 	SiteID      int64
 	Hour        int64 // unix hour
-	Cls         int   // 1-4, pending as 4
+	Cls         int   // 1-5, pending as 4
 	Events      int64
 	Views       int64
 	Actions     int64

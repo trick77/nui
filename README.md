@@ -16,8 +16,9 @@ makes up a figure.
   reports every request it serves. Together they give a 360° view of what reaches your product.
 - **Who is doing what.** Every address with its network, country and client, and the trail of what it did. Nothing
   is sampled and nothing leaves your server.
-- **People or bots.** Each visitor is classed as a person, a known bot, an uptime probe or unknown automation, and
-  the dashboard shows the reasons. Known bots come from the [ipverse](https://github.com/ipverse) lists.
+- **People or bots.** Each visitor is classed as a person, an API client your backend signed in, a known bot, an uptime
+  probe or unknown automation, and the dashboard shows the reasons. Known bots come from the
+  [ipverse](https://github.com/ipverse) lists.
 - **AI built in, not bolted on.** The model is part of the analysis, not a chat box on top of the charts: it works from
   the facts and verdicts Stakeout has already computed, writes a short briefing of what changed and says in a sentence
   what an address is up to. Every figure is computed without it; the model never produces a number.

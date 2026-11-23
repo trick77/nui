@@ -15,8 +15,8 @@ under `/dashboard`. `backend/`: Go on ship's kit, embeds `ui/` (React, Vite, Tai
 - Stored names never carry the product's name (user): database file, cookies, session key label, `localStorage`
   keys, simulator markers. A rename once started the server on an empty database beside its data and would have
   signed everyone out and counted every browser as new.
-- Migrations: never edit an applied one; the next number, DDL only, data steps are background jobs.
-  `docs/schema.md` is generated: `SCHEMADOC_UPDATE=1 go test ./... -run TestSchemaDoc` in `backend/`.
+- Migrations: never edit an applied one; the next number, DDL only, data steps are background jobs (0004 copies two
+  tables: a CHECK changes no other way, owner's OK). `docs/schema.md` is generated: `SCHEMADOC_UPDATE=1 go test ./... -run TestSchemaDoc` in `backend/`.
 - Aggregates (owner): every raw change (writes, restamps, retention's cuts) bumps a built day's version in the same
   transaction, or figures drift unseen. Permanent once raw is gone: the sketch format and the dimension
   definitions; change either only with a builder version bump. The last 3 days are unbuilt: raw lost there is lost
@@ -29,6 +29,8 @@ under `/dashboard`. `backend/`: Go on ship's kit, embeds `ui/` (React, Vite, Tai
   a day 0.02 s). A 12-month page took ~60 s raw at that size.
 - Feed: one event's content never refuses the batch, its fields are the product's public clients' (one crafted
   method would blind the feed). Clip, drop and count; `/api/in` stays strict.
+- `account` outranks the bot list (owner): the list held our own host as Amazonbot (a scraper read its own address
+  off the page), so an MCP client with a good key read as a known bot.
 - Sites never self-register: a browser can name any host.
 - Own prefix table, JSON sites file: `gaissmai/bart` (173 stars) and `yaml/go-yaml` (571) failed the 1k-star rule.
   AS prefixes nest across owners: one sorted level per prefix length, never flat ranges.

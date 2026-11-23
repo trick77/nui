@@ -112,7 +112,7 @@ func TestBackfillDeterministic(t *testing.T) {
 		if raceOn {
 			minKinds = 8 // a day of a small world may miss a rare kind
 		}
-		if classes != 4 || kinds < minKinds || newest >= anchor.UnixMilli() {
+		if classes != len(store.ClassNames) || kinds < minKinds || newest >= anchor.UnixMilli() {
 			t.Errorf("classes %d, kinds %d, newest %v", classes, kinds, time.UnixMilli(newest))
 		}
 	}

@@ -375,7 +375,7 @@ func audWhere(aud string) string {
 	case "humans":
 		return "cls = 1"
 	case "bots":
-		return "cls IN (0, 2, 3, 4)"
+		return "cls IN (0, 2, 3, 4, 5)"
 	}
 	return "1"
 }

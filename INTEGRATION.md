@@ -85,7 +85,7 @@ load (the first 50):
 | `ua`, `ref`, `lang` | `User-Agent`, `Referer`, `Accept-Language`. |
 | `ch_ua`, `sf_site`, `sf_mode`, `sf_dest` | `Sec-CH-UA`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`. |
 | `sig_agent` | `Signature-Agent` (Web Bot Auth): the agent a client says it is, as sent. Empty when absent. |
-| `account` | The signed-in account, if any: an opaque id, never an email or a name. |
+| `account` | The account the request acted as, once its key or session was checked: an opaque id, never an email or a name. Never one a client merely claims (a login attempt's user name). Report it on every request that came with a good key or session: Stakeout takes a client as signed in when at least half of its requests carry one, those answered 401, 403 or 429 not counted as carrying it. A signed-in program is an API client, whatever its address or user agent is listed as; a signed-in browser a person's once it loaded a document or an asset, sent Sec-Fetch-Site, or its script reported. |
 
 Send exactly these fields, never raw headers (they carry cookies and credentials). Every request counts, 404s and
 401s above all: the probing is what the feed is for. Leave out only the emitter's own traffic and local health

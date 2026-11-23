@@ -1016,7 +1016,10 @@ func classOf(cls int) string {
 	return "unknown"
 }
 
-var classOrder = []string{"human", "bot", "monitor", "unknown"}
+var classOrder = []string{"human", "bot", "monitor", "unknown", "api"}
+
+// classError refuses a class filter that is none of classOrder.
+const classError = "class must be human, bot, monitor, unknown or api"
 
 func (s *Server) handleClasses(w http.ResponseWriter, r *http.Request, q *query) {
 	if serverOnly(w, q) {
@@ -1166,8 +1169,8 @@ func (c classSums) merge(o classSums) {
 	}
 }
 
-// classVerdict judges a class's change: more people is good, more unknown automation bad; known bots and uptime
-// probes are neutral, their volume is the services' business.
+// classVerdict judges a class's change: more people is good, more unknown automation bad; API clients, known bots and
+// uptime probes are neutral, their volume is their operators' business.
 func classVerdict(class string, c change) string {
 	switch class {
 	case "human":

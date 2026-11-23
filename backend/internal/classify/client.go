@@ -12,6 +12,9 @@ func looksLikeBrowser(ua string) bool {
 	return strings.HasPrefix(ua, "Mozilla/")
 }
 
+// isBrowserUA: a browser's user agent that names no tool behind the Mozilla prefix.
+func isBrowserUA(ua string) bool { return looksLikeBrowser(ua) && !automationUA.MatchString(ua) }
+
 var productRE = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9._-]*)(?:/([0-9][0-9A-Za-z._-]*))?`)
 
 // botToken is a product token naming a bot: "PetalBot", "PetalBot/1.0".
@@ -23,7 +26,7 @@ func Client(ua string) string {
 	if ua == "" {
 		return "no user agent"
 	}
-	if looksLikeBrowser(ua) && !automationUA.MatchString(ua) {
+	if isBrowserUA(ua) {
 		b, o, _ := ParseUA(ua)
 		return b + apix.Sep + o
 	}
