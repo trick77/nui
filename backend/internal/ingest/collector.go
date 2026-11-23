@@ -38,6 +38,8 @@ const (
 	// maxClientSkew is how far the client's own clock may place an event before the batch was received: a batch is
 	// sent within seconds of its events, a hidden tab's flush within minutes.
 	maxClientSkew = 30 * time.Minute
+	// maxFeedAge is how far before its receipt the feed may date a record; an older one is dated on receipt.
+	maxFeedAge = time.Hour
 	// maxCtx bounds the context as stored (encoded), maxHeader each stored browser header, maxHeaders all of them
 	// (encoded): the tracker budgets a batch by these, a header it cannot see included.
 	maxCtx     = 4 << 10
@@ -688,7 +690,7 @@ func (c *Collector) feedEvents(site *sites.Site, in []json.RawMessage) ([]store.
 		}
 		ts := e.T
 		// The backend's clock dates its own records; one far off is the receive time instead.
-		if ts < now-int64(time.Hour/time.Millisecond) || ts > now+int64(time.Minute/time.Millisecond) {
+		if ts < now-maxFeedAge.Milliseconds() || ts > now+int64(time.Minute/time.Millisecond) {
 			ts = now
 		}
 		path := stripQuery(e.Path)

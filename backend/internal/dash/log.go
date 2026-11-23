@@ -282,13 +282,22 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 		s.fail(w, r, err)
 		return
 	}
-	// The first figure: the oldest readable built hour or the oldest raw event, whichever is older.
+	// Where raw begins as the dashboard reads it (rawStart): the footer's "since", never a stray older day.
+	since, ok, err := s.rawStart(ctx, q.site.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if !ok {
+		since = 0
+	}
+	// The first figure: the oldest readable built hour or where raw begins, whichever is older.
 	firstHour, ok, err := s.firstFigure(ctx, q.site.ID)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	figures := first
+	figures := since
 	if ok && (figures == 0 || firstHour*hourMS < figures) {
 		figures = firstHour * hourMS
 	}
@@ -299,15 +308,26 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 		sources["server"] = source(server, s.now())
 	}
 	var oldest, figuresSince any
-	if first > 0 {
-		oldest = iso(time.UnixMilli(first))
+	if since > 0 {
+		oldest = iso(time.UnixMilli(since))
 	}
 	if figures > 0 {
 		figuresSince = iso(time.UnixMilli(figures))
 		sources["first"] = figuresSince
 	}
-	// Raw events are kept as long as everything else until their own retention ships: the months, in days.
+	// Raw events are kept the raw days, at most the months (age retention takes raw too); until the purge's first
+	// start is recorded (or while it cannot be read: retention warns) nothing is purged, raw is kept the months.
+	// purge_from: during the purge's grace, when raw older than the raw days starts to go, if the site holds any (the
+	// oldest event, a stray one too); null otherwise.
 	rawDays := int(s.now().Sub(s.now().AddDate(0, -s.RetentionMonths, 0)).Hours() / 24)
+	var purgeFrom any
+	if armed, ok, err := s.DB.RawPurgeArmed(ctx); err == nil && ok && s.RawDays > 0 && s.RawDays < rawDays {
+		rawDays = s.RawDays
+		if from := armed.Add(store.PurgeGrace); s.now().Before(from) && first > 0 &&
+			first/dayMS < store.RawCutDay(s.now(), rawDays) {
+			purgeFrom = iso(from)
+		}
+	}
 	rules := map[string]any{"rate": ingest.RateRule(), "batch": ingest.BatchRule(), "tz": q.tz,
 		"botlist": map[string]any{"services": 0, "updated": nil}, "networks": map[string]any{"updated": nil},
 		"llm": map[string]any{"calls_today": 0, "budget": 0, "configured": false}}
@@ -328,7 +348,7 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 		"sources":  sources,
 		"storage": map[string]any{"events": events, "bytes": used, "retention_months": s.RetentionMonths,
 			"oldest": oldest, "identity": "address + user agent, plus browser id", "raw_days": rawDays,
-			"figures_since": figuresSince},
+			"purge_from": purgeFrom, "figures_since": figuresSince},
 		"rules": rules,
 	})
 }

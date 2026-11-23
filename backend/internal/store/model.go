@@ -139,6 +139,8 @@ type AggDay struct {
 	Raw     bool
 	Events  int64
 	BuiltAt int64
+	// AddrsCut: the size cap deleted the day's per-address rows, all of them in the transaction that set it.
+	AddrsCut bool
 }
 
 // AggHour is one site's sums and sketches for one UTC hour and class.
@@ -213,6 +215,26 @@ type AggAddr struct {
 type AggAddrKey struct {
 	IPKey string
 	Part  int
+}
+
+// AggCarried is one key's carried sessions a rebuild saved before rewriting a day whose day before has no raw
+// (IPKey "" and Part 0: the copy is whole).
+//
+// Table: agg_carried
+type AggCarried struct {
+	SiteID  int64
+	Day     int64
+	IPKey   string
+	Part    int
+	Carried int64
+}
+
+// AggMeta is one marker of the background jobs: raw_purge_armed_at, the first start of the release that purges raw.
+//
+// Table: agg_meta
+type AggMeta struct {
+	Key   string
+	Value string
 }
 
 // Usage is one site's model calls and tokens on one day.

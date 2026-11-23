@@ -52,6 +52,9 @@ type plan struct {
 	days     map[int64]dayState
 	lo, hi   int64 // the days loaded, inclusive
 	loaded   bool
+	// gaps counts the pieces read as nothing although they held events: raw only (off the aggregates' grain) and
+	// their day's raw cut by retention. A figure whose reads added one is short; a change against it is unknown.
+	gaps int
 }
 
 // planOf is the request's plan, made on first use for the whole of its period.
@@ -60,11 +63,11 @@ func (s *Server) planOf(ctx context.Context, q *query) (*plan, error) {
 		return q.plan, nil
 	}
 	pl := &plan{s: s, src: s.Source, site: q.site.ID, now: q.p.Now, days: map[int64]dayState{}}
-	var oldest sql.NullInt64
-	if err := s.row(ctx, `SELECT MIN(ts) FROM event WHERE site_id = ?`, q.site.ID).Scan(&oldest); err != nil {
+	oldest, ok, err := s.rawStart(ctx, q.site.ID)
+	if err != nil {
 		return nil, err
 	}
-	pl.oldestTS, pl.oldest, pl.hasRaw = oldest.Int64, oldest.Int64/dayMS, oldest.Valid
+	pl.oldestTS, pl.oldest, pl.hasRaw = oldest, oldest/dayMS, ok
 	first := minTime(q.p.Bounds[0], q.p.win.From)
 	if q.p.Prev != nil {
 		first = minTime(first, q.p.Prev[0])
@@ -117,6 +120,30 @@ func (pl *plan) ensure(ctx context.Context, first, last int64) error {
 	}
 	pl.lo, pl.hi = min(pl.lo, first), max(pl.hi, last)
 	return nil
+}
+
+// rawStart is where a site's raw begins for the dashboard (ok false: none): its first event after the newest day
+// retention deleted raw from (agg_day.raw = 0), the oldest event when none was cut. Leftovers before that day (a
+// cut stopped part-way, an older day the purge has not reached) are no detail anyone can read a span of: the oldest
+// stray event would move the horizon back over the purged gap. The cut day is looked for back from today, over the
+// months (the raw days' rows, a few pages, on the primary key).
+func (s *Server) rawStart(ctx context.Context, site int64) (int64, bool, error) {
+	now := s.now()
+	var cut sql.NullInt64
+	if err := s.row(ctx, `SELECT day FROM agg_day WHERE site_id = ? AND day >= ? AND day <= ? AND raw = 0
+		ORDER BY day DESC LIMIT 1`, site, now.AddDate(0, -s.RetentionMonths, -1).UnixMilli()/dayMS,
+		now.UnixMilli()/dayMS+1).Scan(&cut); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, false, err
+	}
+	from := int64(0)
+	if cut.Valid {
+		from = (cut.Int64 + 1) * dayMS
+	}
+	var ts sql.NullInt64
+	if err := s.row(ctx, `SELECT MIN(ts) FROM event WHERE site_id = ? AND ts >= ?`, site, from).Scan(&ts); err != nil {
+		return 0, false, err
+	}
+	return ts.Int64, ts.Valid, nil
 }
 
 // rawFrom is from, or the oldest raw event when that is later: where a raw-only figure of a span begins.
@@ -188,7 +215,8 @@ func (pl *plan) rawCovers(ctx context.Context, from, to time.Time) (bool, error)
 }
 
 // pick is the source of the piece [lo, hi). unit is the table's grain (an hour, a day): a piece not on it is no
-// aggregate's and is read raw. short marks a 24h or 7d range and its prior period: raw first.
+// aggregate's and is read raw; with its day's raw cut by retention nothing can answer it, and it counts as a gap
+// (never an empty piece taken for a quiet one). short marks a 24h or 7d range and its prior period: raw first.
 func (pl *plan) pick(ctx context.Context, lo, hi time.Time, unit time.Duration, short bool) (how, error) {
 	if pl.src == SourceRaw {
 		return readRaw, nil
@@ -196,14 +224,18 @@ func (pl *plan) pick(ctx context.Context, lo, hi time.Time, unit time.Duration, 
 	if !lo.Before(pl.now) { // the open bucket's future: nothing is there yet
 		return readNone, nil
 	}
-	if !lo.Equal(lo.Truncate(unit)) || !hi.Equal(hi.Truncate(unit)) {
-		return readRaw, nil
-	}
 	day := ms(lo) / dayMS
 	if err := pl.ensure(ctx, day, day); err != nil {
 		return readNone, err
 	}
 	st, ok := pl.days[day]
+	if !lo.Equal(lo.Truncate(unit)) || !hi.Equal(hi.Truncate(unit)) {
+		if ok && !st.raw {
+			pl.gaps++
+			return readNone, nil
+		}
+		return readRaw, nil
+	}
 	aggOK, rawOK := ok && st.frozen && st.clean, pl.rawOK(day)
 	switch {
 	case pl.src == SourceAgg && aggOK:

@@ -217,15 +217,9 @@ func (s *Server) overview(ctx context.Context, q *query) (overview, error) {
 	if err != nil {
 		return ov, err
 	}
-	cur, err := s.buckets(ctx, pl, q.aud, q.p.Bounds, !q.p.agg)
+	cur, prev, gaps, err := s.curPrev(ctx, pl, q, q.aud)
 	if err != nil {
 		return ov, err
-	}
-	var prev []bucketStats
-	if q.p.Prev != nil {
-		if prev, err = s.buckets(ctx, pl, q.aud, q.p.Prev, !q.p.prevAgg); err != nil {
-			return ov, err
-		}
 	}
 	ov.Period.From, ov.Period.To = iso(q.p.From()), iso(q.p.Now)
 	ov.Period.Bucket, ov.Period.Labels, ov.Period.PrevLabel = q.p.Bucket, q.p.labels, q.p.prevL
@@ -233,12 +227,32 @@ func (s *Server) overview(ctx context.Context, q *query) (overview, error) {
 	if ov.Live, err = s.live(ctx, q.site.ID); err != nil {
 		return ov, err
 	}
-	ov.Tiles = s.tiles(q, cur, prev)
+	ov.Tiles = s.tiles(q, cur, prev, gaps)
 	return ov, nil
 }
 
-// tiles builds the tiles from the buckets; value, prev and median leave the open bucket out.
-func (s *Server) tiles(q *query, cur, prev []bucketStats) []tile {
+// curPrev reads the range's buckets and its comparison's (nil without one), and which of the two had a gap
+// (plan.gaps): [0] the range, [1] the comparison.
+func (s *Server) curPrev(ctx context.Context, pl *plan, q *query, aud string) (cur, prev []bucketStats, gaps [2]bool,
+	err error) {
+	g := pl.gaps
+	if cur, err = s.buckets(ctx, pl, aud, q.p.Bounds, !q.p.agg); err != nil {
+		return nil, nil, gaps, err
+	}
+	gaps[0], g = pl.gaps > g, pl.gaps
+	if q.p.Prev != nil {
+		if prev, err = s.buckets(ctx, pl, aud, q.p.Prev, !q.p.prevAgg); err != nil {
+			return nil, nil, gaps, err
+		}
+	}
+	gaps[1] = pl.gaps > g
+	return cur, prev, gaps, nil
+}
+
+// tiles builds the tiles from the buckets; value, prev and median leave the open bucket out. A gap in the range
+// (gaps[0]) leaves every change unknown (null); one in the comparison (gaps[1]) its prior figures too, never a short
+// prior period's dip or a percentage against it.
+func (s *Server) tiles(q *query, cur, prev []bucketStats, gaps [2]bool) []tile {
 	closed := q.p.n() - 1
 	out := []tile{}
 	for _, d := range tileDefs {
@@ -255,16 +269,16 @@ func (s *Server) tiles(q *query, cur, prev []bucketStats) []tile {
 		}
 		t.Median = round1(median(t.Series[:closed]))
 		t.Value = s.total(d, cur[:closed])
-		if prev != nil {
+		if prev != nil && !gaps[1] {
 			for _, b := range prev {
 				t.PrevSeries = append(t.PrevSeries, round1(d.of(b)))
 			}
 			pv := s.total(d, prev[:closed])
 			t.Prev = &pv
 			if d.kind == "rate" {
-				t.Change = rateChange(t.Value, pv, true, totalOf(prev[:closed], func(b bucketStats) float64 { return b.allReq }) > 0)
+				t.Change = rateChange(t.Value, pv, !gaps[0], totalOf(prev[:closed], func(b bucketStats) float64 { return b.allReq }) > 0)
 			} else {
-				t.Change = sumChange(t.Value, pv, true)
+				t.Change = sumChange(t.Value, pv, !gaps[0])
 			}
 		}
 		t.Verdict = verdict(t.Change, d.upBad)

@@ -26,6 +26,13 @@ type Queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
+// BuiltBy reports whether the day's rows are a clean build by builder or a newer one. The job, Cover, the purge and
+// the cap all ask this: older code never replaces a newer build (a downgrade), so a rule of "this builder only" in
+// one of them and "this or newer" in another stalls the cap and the purge on every day the newer release built.
+func (d AggDay) BuiltBy(builder int64) bool {
+	return d.Frozen && d.Dirty == AggClean && d.Builder >= builder
+}
+
 // AggDays returns a site's agg_day rows for the days from first to last, keyed by day.
 func (s *Store) AggDays(ctx context.Context, siteID, first, last int64) (map[int64]AggDay, error) {
 	return AggDaysIn(ctx, s.DB, siteID, first, last)
@@ -33,8 +40,8 @@ func (s *Store) AggDays(ctx context.Context, siteID, first, last int64) (map[int
 
 // AggDaysIn is AggDays read through q.
 func AggDaysIn(ctx context.Context, q Queryer, siteID, first, last int64) (map[int64]AggDay, error) {
-	rows, err := q.QueryContext(ctx, `SELECT site_id, day, frozen, dirty, version, builder, raw, events, built_at
-		FROM agg_day WHERE site_id = ? AND day >= ? AND day <= ?`, siteID, first, last)
+	rows, err := q.QueryContext(ctx, `SELECT site_id, day, frozen, dirty, version, builder, raw, events, built_at,
+		addrs_cut FROM agg_day WHERE site_id = ? AND day >= ? AND day <= ?`, siteID, first, last)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +50,7 @@ func AggDaysIn(ctx context.Context, q Queryer, siteID, first, last int64) (map[i
 	for rows.Next() {
 		var d AggDay
 		if err := rows.Scan(&d.SiteID, &d.Day, &d.Frozen, &d.Dirty, &d.Version, &d.Builder, &d.Raw, &d.Events,
-			&d.BuiltAt); err != nil {
+			&d.BuiltAt, &d.AddrsCut); err != nil {
 			return nil, err
 		}
 		out[d.Day] = d
@@ -115,6 +122,32 @@ func AggCarriedIn(ctx context.Context, q Queryer, siteID, day int64) (map[AggAdd
 	return out, rows.Err()
 }
 
+// AggSavedCarriedIn returns the carried sessions a rewrite of a site-day saved before it deleted the day's rows
+// (AggBuild.Carried), read through q; ok false without a whole copy. Only for a day left AggWriting: its own rows
+// are partial then.
+func AggSavedCarriedIn(ctx context.Context, q Queryer, siteID, day int64) (map[AggAddrKey]int64, bool, error) {
+	rows, err := q.QueryContext(ctx, `SELECT ip_key, part, carried FROM agg_carried WHERE site_id = ? AND day = ?`,
+		siteID, day)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = rows.Close() }()
+	out, whole := map[AggAddrKey]int64{}, false
+	for rows.Next() {
+		var k AggAddrKey
+		var n int64
+		if err := rows.Scan(&k.IPKey, &k.Part, &n); err != nil {
+			return nil, false, err
+		}
+		if k == (AggAddrKey{}) {
+			whole = true
+			continue
+		}
+		out[k] = n
+	}
+	return out, whole, rows.Err()
+}
+
 // The deletes take at most a chunk's rows each, by primary key: agg_list's starts with (site_id, dim, day), so it
 // is cleared a dimension at a time.
 const (
@@ -124,6 +157,9 @@ const (
 		IN (SELECT part, other, parent, key, sub FROM agg_list WHERE site_id = ?1 AND dim = ?2 AND day = ?3 LIMIT ?4)`
 	delAggAddr = `DELETE FROM agg_addr WHERE site_id = ?1 AND day = ?2 AND (ip_key, part) IN
 		(SELECT ip_key, part FROM agg_addr WHERE site_id = ?1 AND day = ?2 LIMIT ?3)`
+	delAggCarried = `DELETE FROM agg_carried WHERE site_id = ?1 AND day = ?2 AND (ip_key, part) IN
+		(SELECT ip_key, part FROM agg_carried WHERE site_id = ?1 AND day = ?2 LIMIT ?3)`
+	insAggCarried = `INSERT INTO agg_carried (site_id, day, ip_key, part, carried) VALUES (?, ?, ?, ?, ?)`
 
 	insAggHour = `INSERT INTO agg_hour (site_id, hour, cls, events, views, actions, starts, requests, refused, errors,
 		browser_ids, addrs, server_addrs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -223,6 +259,11 @@ type AggBuild struct {
 	Lists       []AggList
 	// Addrs come streamed from the build's sums: a busy day has hundreds of thousands, a second copy doubles the peak.
 	Addrs iter.Seq[AggAddr]
+	// Carried, when set, is the carried sessions the build kept from the day's stored rows (the day before has no
+	// raw to count them against): WriteAggDay saves them to agg_carried, whole, before it deletes a row, unless
+	// CarriedSaved (they come from that copy: a retry after a rewrite cut short).
+	Carried      map[AggAddrKey]int64
+	CarriedSaved bool
 }
 
 // ErrNoAggDay is WriteAggDay on a day BeginAggDay did not start.
@@ -237,6 +278,23 @@ var ErrNoAggDay = errors.New("no agg_day row")
 func (s *Store) WriteAggDay(ctx context.Context, b AggBuild) (bool, error) {
 	c := &chunks{s: s, ctx: ctx}
 	defer c.rollback()
+	if b.Carried != nil && !b.CarriedSaved {
+		// The copy replaced, its whole-marker last: the AggWriting mark below commits with or after it.
+		if err := c.del(delAggCarried, b.Site, b.Day); err != nil {
+			return false, err
+		}
+		for k, n := range b.Carried {
+			if n == 0 {
+				continue
+			}
+			if err := c.ins(insAggCarried, b.Site, b.Day, k.IPKey, k.Part, n); err != nil {
+				return false, err
+			}
+		}
+		if err := c.ins(insAggCarried, b.Site, b.Day, "", 0, 0); err != nil {
+			return false, err
+		}
+	}
 	if _, err := c.room(); err != nil {
 		return false, err
 	}
@@ -289,6 +347,13 @@ func (s *Store) WriteAggDay(ctx context.Context, b AggBuild) (bool, error) {
 	clean, err := finishAggDay(ctx, c.tx, b)
 	if err != nil {
 		return false, err
+	}
+	if err := c.commit(); err != nil || b.Carried == nil {
+		return clean, err
+	}
+	// Written: the copy is no longer needed (one left behind is replaced before the next rewrite deletes a row).
+	if err := c.del(delAggCarried, b.Site, b.Day); err != nil {
+		return clean, err
 	}
 	return clean, c.commit()
 }

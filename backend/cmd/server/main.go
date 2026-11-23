@@ -234,7 +234,7 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	model := llm.New(st, llm.Options{Client: client, Model: cfg.LLMModel, DailyCalls: int64(cfg.LLMDailyCalls),
 		DailyTokens: int64(cfg.LLMDailyTokens)})
 	ds := &dash.Server{DB: st, Sites: reg, Ref: ref, Counters: counters, Model: model,
-		RetentionMonths: cfg.RetentionMonths, Build: version.String()}
+		RetentionMonths: cfg.RetentionMonths, RawDays: cfg.RawRetentionDays, Build: version.String()}
 
 	// Background work runs on its own context: the server drains first, then the writer flushes what the drained
 	// requests queued.
@@ -265,17 +265,21 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	})
 	// The aggregate job backfills every day with raw after an upgrade, then builds each day as it falls due. It waits
 	// for the reference data as the classifier does: the start's own reads first.
+	aggOpts := agg.Options{Months: cfg.RetentionMonths}
 	start(func(c context.Context) {
 		select {
 		case <-refCached:
-			agg.Run(c, st, agg.Options{Months: cfg.RetentionMonths})
+			agg.Run(c, st, aggOpts)
 		case <-c.Done():
 		}
 	})
 	start(model.Run)
 	start(verifier.Run)
+	// Retention purges raw only from days the job built clean; the cap builds a day through Cover before it deletes
+	// the day's raw.
 	start(func(c context.Context) {
-		st.RunRetention(c, store.RetentionOptions{Months: cfg.RetentionMonths, MaxBytes: int64(cfg.MaxDBMB) << 20})
+		st.RunRetention(c, store.RetentionOptions{Months: cfg.RetentionMonths, RawDays: cfg.RawRetentionDays,
+			Builder: agg.Version, Cover: agg.Cover(st, aggOpts), MaxBytes: int64(cfg.MaxDBMB) << 20})
 	})
 	if cfg.OIDCConfigured() && !cfg.AuthDisabled {
 		start(func(c context.Context) {

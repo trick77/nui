@@ -1134,3 +1134,13 @@ func TestEventTimeAndNames(t *testing.T) {
 		t.Error("helpers")
 	}
 }
+
+// The oldest time the collector dates an event (the feed's hour, the browser's skew, from receipt) lies on today or
+// yesterday (UTC): among the days the raw purge and the size cap never touch (store.CapTail), so no write lands in a
+// day being purged.
+func TestBackdate_WithinRawTail(t *testing.T) {
+	if back := max(maxFeedAge, maxClientSkew); back >= 24*time.Hour || store.CapTail < 2 {
+		t.Errorf("events dated up to %v back can land before yesterday, the purge's tail is %d days", back,
+			store.CapTail)
+	}
+}

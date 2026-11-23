@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -60,6 +61,26 @@ func seed(t *testing.T, st *Store) int64 {
 		t.Fatal(err)
 	}
 	return sites["a.example.com"].ID
+}
+
+// coverOpts is o with a Cover that builds a site-day as the job's handshake does, without rows (store has no
+// builder): frozen and clean by o.Builder unless it is built already (the job's own rule) or its raw is cut.
+func coverOpts(st *Store, o RetentionOptions) RetentionOptions {
+	o.Cover = func(ctx context.Context, site, day int64) error {
+		if err := st.BeginAggDay(ctx, site, day); err != nil {
+			return err
+		}
+		days, err := st.AggDays(ctx, site, day, day)
+		if err != nil {
+			return err
+		}
+		if d := days[day]; !d.Raw || d.BuiltBy(o.Builder) {
+			return nil
+		}
+		_, err = st.WriteAggDay(ctx, AggBuild{Site: site, Day: day, Version: days[day].Version, Builder: o.Builder})
+		return err
+	}
+	return o
 }
 
 func TestEventsAndActorClass(t *testing.T) {
@@ -194,7 +215,7 @@ func TestPrune_Cap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deleted, err := st.Prune(t.Context(), time.Now().AddDate(0, -25, 0), used/2)
+	deleted, err := st.Prune(t.Context(), coverOpts(st, RetentionOptions{Months: 25, MaxBytes: used / 2}), time.Now())
 	if err != nil || deleted == 0 {
 		t.Fatalf("capped prune %d, %v", deleted, err)
 	}
@@ -232,8 +253,8 @@ func TestRunRetention_Cap(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
-		st.RunRetention(ctx, RetentionOptions{Months: 25, MaxBytes: used / 2, CapEvery: 20 * time.Millisecond,
-			Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		st.RunRetention(ctx, coverOpts(st, RetentionOptions{Months: 25, MaxBytes: used / 2,
+			CapEvery: 20 * time.Millisecond, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}))
 		close(done)
 	}()
 	deadline := time.Now().Add(10 * time.Second)
@@ -248,6 +269,67 @@ func TestRunRetention_Cap(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+// Free pages left by anything (here a delete outside retention) are handed back a budget per round, and a round
+// that leaves some is followed by the next right away, not after CapEvery: the cap and the purge run between
+// budgets, the shrink still finishes.
+func TestRunRetention_VacuumBudget(t *testing.T) {
+	st := open(t)
+	id := seed(t, st)
+	var evs []Event
+	for i := range 6000 {
+		evs = append(evs, Event{SiteID: id, TS: time.Now().UnixMilli() - int64(i), Source: "browser",
+			Kind: "page_view", IP: "192.0.2.1", IPKey: "192.0.2.1", Props: `{"pad":"` + strings.Repeat("x", 1000) + `"}`})
+	}
+	if err := st.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.Exec(`DELETE FROM event`); err != nil {
+		t.Fatal(err)
+	}
+	var free int64
+	if err := st.DB.QueryRow(`PRAGMA freelist_count`).Scan(&free); err != nil || free < 4*vacuumStep {
+		t.Fatalf("free pages %d, %v", free, err)
+	}
+	budget := vacuumBudget
+	vacuumBudget = time.Millisecond // a step per round
+	t.Cleanup(func() { vacuumBudget = budget })
+	var logs bytes.Buffer
+	var mu sync.Mutex
+	log := slog.New(slog.NewTextHandler(writerFunc(func(p []byte) (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return logs.Write(p)
+	}), nil))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	start := time.Now()
+	const every = 500 * time.Millisecond
+	go func() {
+		st.RunRetention(ctx, RetentionOptions{Months: 25, CapEvery: every, Log: log})
+		close(done)
+	}()
+	defer func() { cancel(); <-done }()
+	for {
+		mu.Lock()
+		out := logs.String()
+		mu.Unlock()
+		if strings.Contains(out, "Vacuum done") {
+			if !strings.Contains(out, "Vacuum continues over the next rounds") {
+				t.Errorf("done in one round:\n%s", out)
+			}
+			break
+		}
+		// One CapEvery per budget would take a round per step: free/vacuumStep of them.
+		if time.Since(start) > every*time.Duration(free/vacuumStep) {
+			t.Fatalf("not shrunk a budget per prompt round:\n%s", out)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := st.DB.QueryRow(`PRAGMA freelist_count`).Scan(&free); err != nil || free != 0 {
+		t.Errorf("free pages left %d, %v", free, err)
+	}
 }
 
 // A database that held events before incremental auto-vacuum was switched on keeps its mode: Vacuum returns at once
@@ -304,8 +386,8 @@ func TestVacuum_WrongModeAndStall(t *testing.T) {
 	rctx, rcancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
-		st.RunRetention(rctx, RetentionOptions{Months: 25, MaxBytes: used / 2, CapEvery: 20 * time.Millisecond,
-			Log: slog.New(slog.NewTextHandler(&logs, nil))})
+		st.RunRetention(rctx, coverOpts(st, RetentionOptions{Months: 25, MaxBytes: used / 2,
+			CapEvery: 20 * time.Millisecond, Log: slog.New(slog.NewTextHandler(&logs, nil))}))
 		close(done)
 	}()
 	deadline := time.Now().Add(10 * time.Second)
@@ -438,7 +520,7 @@ func TestUpgrade_0002(t *testing.T) {
 	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event`).Scan(&events); err != nil || events != 50 {
 		t.Errorf("events after upgrade = %d, %v", events, err)
 	}
-	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 2 {
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 3 {
 		t.Errorf("migrations = %d, %v", migrated, err)
 	}
 	for _, tbl := range []string{"agg_day", "agg_hour", "agg_list", "agg_addr"} {
@@ -493,8 +575,8 @@ func TestPrune_DayCoverage(t *testing.T) {
 	if _, ok := days[day+2]; ok {
 		t.Errorf("a kept day marked: %+v", days[day+2])
 	}
-	// The cap takes the oldest chunks, here part of day+2 (a padded day of 5000 events): that day has no whole raw
-	// left either.
+	// The cap takes the oldest chunks, here part of day+2 (a padded day of 5000 events, before the age floor: age
+	// retention's, never built): that day has no whole raw left either.
 	evs = nil
 	for _, d := range []int64{day + 2, day + 3} {
 		for i := range 5000 {
@@ -508,8 +590,8 @@ func TestPrune_DayCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	used, _ := st.UsedBytes(t.Context())
-	if n, err := st.EnforceCap(t.Context(), used*95/100, time.Now(), slog.Default()); err != nil || n == 0 ||
-		n >= 5000 {
+	if n, err := st.EnforceCap(t.Context(), RetentionOptions{Months: 25, MaxBytes: used * 95 / 100}, time.Now()); err != nil ||
+		n == 0 || n >= 5000 {
 		t.Fatalf("capped %d, %v", n, err)
 	}
 	days, _ = st.AggDays(t.Context(), id, day, day+3)
@@ -538,7 +620,7 @@ func TestPrune(t *testing.T) {
 	if err := st.InsertEvents(t.Context(), evs); err != nil {
 		t.Fatal(err)
 	}
-	n, err := st.Prune(t.Context(), now.AddDate(0, -25, 0), 0)
+	n, err := st.Prune(t.Context(), RetentionOptions{Months: 25}, now)
 	if err != nil || n != 3500 {
 		t.Fatalf("pruned %d, %v", n, err)
 	}
@@ -588,7 +670,7 @@ func TestCapFloor(t *testing.T) {
 		}
 	}
 	sites, _ := st.Sites(t.Context())
-	floor, err := st.capFloor(t.Context(), sites, today-(capTail-1), today)
+	floor, err := st.capFloor(t.Context(), sites, map[int64]int64{id: today - (CapTail - 1)}, today)
 	used, _ := st.UsedBytes(t.Context())
 	if err != nil || floor <= 0 || floor > used-empty {
 		t.Fatalf("floor %d of %d bytes, %v", floor, used-empty, err)
@@ -597,9 +679,10 @@ func TestCapFloor(t *testing.T) {
 }
 
 // The cap's order: raw before the last three UTC days first, then the per-address rows, the lists, the hours, each
-// oldest day first, each step warned once; a day it cut aggregates of is marked unbuilt and partial, the others stay
-// clean. No aggregate goes while the last three days' raw alone exceeds the cap; every agg_day row survives. Age
-// retention takes the per-address rows with the events and leaves the other aggregates.
+// oldest day first, each step warned once; a day whose per-address rows went (all of them) stays clean, one it cut
+// lists or hours of is marked unbuilt and partial. No aggregate goes while the last three days' raw alone exceeds the
+// cap; every agg_day row survives. Age retention takes the per-address rows with the events and leaves the other
+// aggregates.
 func TestEnforceCap_Order(t *testing.T) {
 	st := open(t)
 	id := seed(t, st)
@@ -633,9 +716,13 @@ func TestEnforceCap_Order(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logs, nil))
 	count := func(q string, args ...any) int { t.Helper(); return countRows(t, st, q, args...) }
 
-	// Half the size: the old raw and the oldest per-address days go; lists and hours stay.
+	// Half the size: the old raw (each day built first: the last built day's next one through Cover) and the oldest
+	// per-address days go; lists and hours stay.
 	used, _ := st.UsedBytes(t.Context())
-	if _, err := st.EnforceCap(t.Context(), used/2, now, log); err != nil {
+	capOpts := func(max int64) RetentionOptions {
+		return coverOpts(st, RetentionOptions{Months: 25, MaxBytes: max, Log: log})
+	}
+	if _, err := st.EnforceCap(t.Context(), capOpts(used/2), now); err != nil {
 		t.Fatal(err)
 	}
 	if n := count(`SELECT COUNT(*) FROM event WHERE ts < ?`, (today-2)*dayMS); n != 0 {
@@ -658,16 +745,13 @@ func TestEnforceCap_Order(t *testing.T) {
 	if i, j := strings.Index(first, "raw events"), strings.Index(first, "per-address"); i > j {
 		t.Errorf("per-address rows cut before the raw:\n%s", first)
 	}
-	// Cut days read as none: unbuilt, rows partial; the newest built day untouched and clean.
-	cut, clean := count(`SELECT COUNT(*) FROM agg_day WHERE frozen = 0 AND dirty = ? AND day < ?`, AggWriting,
-		today-11), count(`SELECT COUNT(*) FROM agg_day WHERE frozen = 1 AND dirty = 0`)
-	if cut == 0 || cut+clean != 10 || count(`SELECT COUNT(*) FROM agg_day WHERE day = ? AND frozen = 1 AND dirty = 0`,
-		today-11) != 1 {
-		t.Errorf("after the cut: %d days marked, %d clean", cut, clean)
-	}
-	if n := count(`SELECT COUNT(*) FROM agg_addr a JOIN agg_day d ON d.site_id = a.site_id AND d.day = a.day
-		WHERE d.frozen = 1 AND d.dirty = 0`); n != clean*300 {
-		t.Errorf("clean days hold %d per-address rows, want %d", n, clean*300)
+	// A day whose per-address rows went whole keeps its other figures readable: frozen and clean, every built day.
+	addrCut := count(`SELECT COUNT(*) FROM agg_day d WHERE day <= ? AND NOT EXISTS (SELECT 1 FROM agg_addr a
+		WHERE a.site_id = d.site_id AND a.day = d.day)`, today-11)
+	if addrCut == 0 || count(`SELECT COUNT(*) FROM agg_day WHERE frozen = 1 AND dirty = 0 AND day <= ?`, today-11) != 10 ||
+		count(`SELECT COUNT(*) FROM (SELECT day FROM agg_addr GROUP BY day HAVING COUNT(*) != 300)`) != 0 {
+		t.Errorf("after the cut: %d days without per-address rows, built days not all clean, or a day cut in part",
+			addrCut)
 	}
 
 	// One byte: the last three days' raw alone exceeds it, so no aggregate goes; the tail's raw and agg_day stay.
@@ -677,7 +761,7 @@ func TestEnforceCap_Order(t *testing.T) {
 			count(`SELECT COUNT(*) FROM agg_hour`)}
 	}
 	kept := rows()
-	if _, err := st.EnforceCap(t.Context(), 1, now, log); err != nil {
+	if _, err := st.EnforceCap(t.Context(), capOpts(1), now); err != nil {
 		t.Fatal(err)
 	}
 	if n := count(`SELECT COUNT(*) FROM event WHERE ts >= ?`, (today-2)*dayMS); n != 60 {
@@ -695,7 +779,7 @@ func TestEnforceCap_Order(t *testing.T) {
 		t.Fatal(err)
 	}
 	logs.Reset()
-	if _, err := st.EnforceCap(t.Context(), 1, now, log); err != nil {
+	if _, err := st.EnforceCap(t.Context(), capOpts(1), now); err != nil {
 		t.Fatal(err)
 	}
 	if got := rows(); got != [3]int{} {

@@ -179,15 +179,11 @@ func (s *Server) briefingInput(ctx context.Context, q *query) (insight.BriefingI
 	if err != nil {
 		return in, err
 	}
-	cur, err := s.buckets(ctx, pl, "all", q.p.Bounds, !q.p.agg)
+	cur, prev, gaps, err := s.curPrev(ctx, pl, q, "all")
 	if err != nil {
 		return in, err
 	}
-	prev, err := s.buckets(ctx, pl, "all", q.p.Prev, !q.p.prevAgg)
-	if err != nil {
-		return in, err
-	}
-	tiles := s.tiles(q, cur, prev)
+	tiles := s.tiles(q, cur, prev, gaps)
 	for _, t := range tiles {
 		pv := ""
 		if t.Prev != nil {
@@ -303,13 +299,21 @@ func closedPart(w window) window { return closedWin(w.From, w.Closed) }
 // newKeys reports the keys of a list dimension that have at least min in the closed part and nothing in the
 // comparison: not among its rows, and not maybe collapsed into one of its days' Other rows.
 func (s *Server) newKeys(ctx context.Context, q *query, dim string, minValue int64, fn func(string, int64)) error {
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		return err
+	}
 	sc := scanOf(dim)
 	cur, prev := newSums(), newSums()
+	gaps := pl.gaps
 	if err := s.scanDim(ctx, q, sc, closedPart(q.p.win), !q.p.agg, cur); err != nil {
 		return err
 	}
 	if err := s.scanDim(ctx, q, sc, *q.p.prevWin, !q.p.prevAgg, prev); err != nil {
 		return err
+	}
+	if pl.gaps > gaps { // a key missing from a gap is not new
+		return nil
 	}
 	type kv struct {
 		k string
@@ -338,6 +342,11 @@ func (s *Server) newKeys(ctx context.Context, q *query, dim string, minValue int
 // are its networks list's server rows (b); one collapsed into a day's Other row counts as nothing that day, and one
 // that may sit in a prior day's Other is no spike: its growth is not known.
 func (s *Server) spikes(ctx context.Context, q *query, add func(insight.Fact)) error {
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		return err
+	}
+	gaps := pl.gaps
 	total, err := s.requestsIn(ctx, q, closedPart(q.p.win), !q.p.agg)
 	if err != nil {
 		return err
@@ -381,6 +390,9 @@ func (s *Server) spikes(ctx context.Context, q *query, add func(insight.Fact)) e
 		prev, prevOther, err := sp.sums(*q.p.prevWin, !q.p.prevAgg, spiking)
 		if err != nil {
 			return err
+		}
+		if pl.gaps > gaps { // a share or a growth over a gap is not known
+			return nil
 		}
 		for k := range spiking {
 			n, was := cur[k], prev[k]

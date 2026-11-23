@@ -27,9 +27,12 @@ type Config struct {
 
 	// SitesFile declares the sites, their feed key hashes and path rules (docs/sites.example.json).
 	SitesFile string
-	// RetentionMonths is how long raw events and the per-address aggregates are kept; the other figures stay, unless
-	// the size cap takes them.
+	// RetentionMonths is how long the per-address aggregates, actor classes and model usage are kept, and raw events
+	// at most; the other figures stay, unless the size cap takes them.
 	RetentionMonths int
+	// RawRetentionDays is how long raw events are kept (store.PurgeRaw): at least MinRawRetentionDays, at most
+	// RetentionMonths in effect.
+	RawRetentionDays int
 	// MaxDBMB caps what the rows may take; past it the oldest raw events go first, then aggregates
 	// (store.EnforceCap). 0 is no cap.
 	MaxDBMB int
@@ -66,6 +69,7 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 		LogLevel:         r.String("BACKEND_LOG_LEVEL", "info"),
 		SitesFile:        r.String("BACKEND_SITES_FILE", ""),
 		RetentionMonths:  r.Int("BACKEND_RETENTION_MONTHS", 25),
+		RawRetentionDays: r.Int("BACKEND_RAW_RETENTION_DAYS", 90),
 		MaxDBMB:          r.Int("BACKEND_MAX_DB_MB", 20480),
 		SessionSecret:    r.String("BACKEND_SESSION_SECRET", ""),
 		OIDCIssuer:       r.String("BACKEND_OIDC_ISSUER", ""),
@@ -94,6 +98,10 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 	}
 	if cfg.RetentionMonths < 1 {
 		r.Fail("BACKEND_RETENTION_MONTHS must be at least 1")
+	}
+	if cfg.RawRetentionDays < MinRawRetentionDays {
+		r.Fail("BACKEND_RAW_RETENTION_DAYS must be at least %d: 7d and its prior period read raw two weeks back",
+			MinRawRetentionDays)
 	}
 	if cfg.MaxDBMB < 0 || cfg.LLMDailyCalls < 0 || cfg.LLMDailyTokens < 0 {
 		r.Fail("BACKEND_MAX_DB_MB, BACKEND_LLM_DAILY_CALLS and BACKEND_LLM_DAILY_TOKENS cannot be negative")
@@ -127,6 +135,12 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 	}
 	return cfg, r.Err()
 }
+
+// MinRawRetentionDays is the shortest raw retention. 7d and its prior period read raw back to the local midnight 13
+// days before today's: a piece off the aggregates' grain (a zone on a half hour, a local midnight inside a UTC day)
+// has nothing else to be read from, and at any UTC offset (-12 to +14 h) that midnight falls on a UTC day at most 14
+// days back. One day more as a margin; far above the days not built yet (store.CapTail).
+const MinRawRetentionDays = 15
 
 // Bounds of BACKEND_ADMIN_TOKEN. The minimum refuses a guessable token (`openssl rand -hex 32` makes 64); the
 // maximum keeps the longest token inside the sign-in form's body cap, every byte url-encoded as %XX.

@@ -43,11 +43,24 @@ type Options struct {
 }
 
 // ageFloor is the oldest day the job builds at now: the day after the one holding the age cutoff, 0 without one.
-func ageFloor(now time.Time, months int) int64 {
-	if months <= 0 {
-		return 0
+func ageFloor(now time.Time, months int) int64 { return store.AgeFloor(now, months) }
+
+// Cover is the size cap's way to build a day before it deletes the day's raw (store.RetentionOptions.Cover): it
+// builds a site-day the job would build now (due, not before the age floor) unless it is built clean already, under
+// the job's lock. A day the job would not build is left as it is: the cap then deletes none of its raw.
+func Cover(st *store.Store, o Options) func(ctx context.Context, site, day int64) error {
+	now := o.Now
+	if now == nil {
+		now = time.Now
 	}
-	return now.AddDate(0, -months, 0).UnixMilli()/dayMS + 1
+	b := &Builder{Store: st, K: o.K}
+	return func(ctx context.Context, site, day int64) error {
+		if t := now(); day > lastDue(t) || day < ageFloor(t, o.Months) {
+			return nil
+		}
+		_, err := b.buildIfNeeded(ctx, site, day)
+		return err
+	}
 }
 
 // lastDue is the newest day due at now: a day is built once freezeLag has passed since the end of the day after it.
@@ -124,8 +137,12 @@ func (j *job) pass(ctx context.Context, last int64) (int, error) {
 	built := 0
 	logged := time.Now()
 	for _, w := range todo {
-		if _, err := j.b.BuildDay(ctx, w.site, w.day); err != nil {
+		did, err := j.b.buildIfNeeded(ctx, w.site, w.day)
+		if err != nil {
 			return built, fmt.Errorf("site %d day %d: %w", w.site, w.day, err)
+		}
+		if !did {
+			continue
 		}
 		built++
 		if time.Since(logged) >= progressEvery {
@@ -177,7 +194,7 @@ func (j *job) todo(ctx context.Context, last int64) ([]work, error) {
 						return nil, err
 					}
 				}
-			case ok && r.Frozen && r.Dirty == 0 && r.Builder >= j.b.builder():
+			case ok && r.BuiltBy(j.b.builder()):
 			default:
 				out = append(out, work{s.ID, d})
 			}

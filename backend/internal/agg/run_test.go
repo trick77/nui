@@ -352,7 +352,9 @@ func TestBuildThrough_CapCutDay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.EnforceCap(t.Context(), used/10, anchor, slog.New(slog.DiscardHandler)); err != nil {
+	// Below what the schema's pages take: every aggregate row goes, the lists and hours too.
+	if _, err := st.EnforceCap(t.Context(), store.RetentionOptions{MaxBytes: used / 100, Builder: Version,
+		Log: slog.New(slog.DiscardHandler)}, anchor); err != nil {
 		t.Fatal(err)
 	}
 	cut := func(when string) {
@@ -484,10 +486,10 @@ func dayEvents(t *testing.T, st *store.Store, id, d int64) (store.AggDay, int64)
 	return days[d], hours
 }
 
-// Retention cutting a day while it is built (the whole day by age, or one chunk of it by the cap) never leaves it
-// read clean from part of its raw. Cut before the build's read: nothing is written, the rows built before from all
-// of it stand. Cut after the read: the rows written are the whole raw the read saw, the day not clean until the job,
-// finding the raw gone, lets them stand.
+// Retention cutting a day while it is rebuilt (the whole day by age, a chunk of it by the cap or the raw purge)
+// never leaves it read clean from part of its raw. Cut before the build's read: nothing is written, the rows built
+// before from all of it stand. Cut after the read: the rows written are the whole raw the read saw, the day not clean
+// until the job, finding the raw gone, lets them stand.
 func TestBuildDay_CutDuringBuild(t *testing.T) {
 	const n = 5000
 	discard := slog.New(slog.DiscardHandler)
@@ -496,11 +498,21 @@ func TestBuildDay_CutDuringBuild(t *testing.T) {
 			_, err := st.PruneAge(t.Context(), time.UnixMilli((d+1)*dayMS))
 			return err
 		},
-		"one cap chunk": func(st *store.Store, _ int64) error {
+		"cap chunks": func(st *store.Store, _ int64) error {
 			used, err := st.UsedBytes(t.Context())
 			if err == nil {
-				_, err = st.EnforceCap(t.Context(), used*97/100, anchor, discard)
+				_, err = st.EnforceCap(t.Context(), store.RetentionOptions{MaxBytes: used * 97 / 100, Builder: Version,
+					Log: discard}, anchor)
 			}
+			return err
+		},
+		// The raw purge, the day built clean by this builder before the rebuild started.
+		"purge": func(st *store.Store, _ int64) error {
+			if _, err := st.ArmRawPurge(t.Context(), anchor.Add(-store.PurgeGrace)); err != nil {
+				return err
+			}
+			_, _, err := st.PurgeRaw(t.Context(), store.RetentionOptions{RawDays: 3, Builder: Version, Log: discard},
+				anchor)
 			return err
 		},
 	}
@@ -537,7 +549,17 @@ func TestBuildDay_CutDuringBuild(t *testing.T) {
 		})
 		t.Run(name+" after the read", func(t *testing.T) {
 			st, id, d := cutDay(t, n)
-			b := &Builder{Store: st, afterRead: func(int64, int64) {
+			// As a build of this builder leaves the day and the next one (no rows needed: the rebuild replaces them),
+			// so the cap and the purge may cut it.
+			for _, day := range []int64{d, d + 1} {
+				if err := st.BeginAggDay(t.Context(), id, day); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := st.DB.Exec(`UPDATE agg_day SET frozen = 1, builder = ?`, Version); err != nil {
+				t.Fatal(err)
+			}
+			b := &Builder{Store: st, version: Version + 1, afterRead: func(int64, int64) {
 				if err := cut(st, d); err != nil {
 					t.Fatal(err)
 				}
@@ -603,5 +625,271 @@ func TestBuildDay_CrashThenCut(t *testing.T) {
 	}
 	if day, _ := dayEvents(t, st, id, d); day.Dirty != store.AggWriting || day.Raw {
 		t.Errorf("partial rows cleared to clean: %+v", day)
+	}
+}
+
+// The purge never deletes a day before the day after it is built against its raw: a first build of that day would
+// find no sessions to carry over midnight and count them twice. Purged afterwards, a rebuild of the next day keeps
+// the carried count it had.
+func TestPurge_NextDayCarried(t *testing.T) {
+	st := openStore(t)
+	id := site(t, st)
+	d := anchor.UnixMilli()/dayMS - 10
+	insert(t, st, view(id, "192.0.2.1", "s1", (d+1)*dayMS-600_000), view(id, "192.0.2.1", "s1", (d+1)*dayMS+600_000),
+		view(id, "192.0.2.2", "s2", (d+2)*dayMS+1000))
+	if _, err := st.ArmRawPurge(t.Context(), anchor.Add(-store.PurgeGrace)); err != nil {
+		t.Fatal(err)
+	}
+	discard := slog.New(slog.DiscardHandler)
+	o := store.RetentionOptions{RawDays: 3, Builder: Version, Log: discard}
+	purge := func() []store.PurgeWait {
+		t.Helper()
+		_, waits, err := st.PurgeRaw(t.Context(), o, anchor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return waits
+	}
+	carried := func() (n int64) {
+		t.Helper()
+		if err := st.DB.QueryRow(`SELECT carried FROM agg_addr WHERE site_id = ? AND day = ? AND ip_key = '192.0.2.1'`,
+			id, d+1).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	// Day d built, the next day not yet: d waits.
+	if _, err := (&Builder{Store: st}).BuildDay(t.Context(), id, d); err != nil {
+		t.Fatal(err)
+	}
+	if w := purge(); len(w) != 1 || w[0].Day != d {
+		t.Fatalf("waits %v, want day %d", w, d)
+	}
+	if days, _ := st.AggDays(t.Context(), id, d, d); !days[d].Raw {
+		t.Fatal("day purged before the next day was built")
+	}
+	// Every day built; a write into d+2 keeps d+1's raw (its next day dirty) while d goes.
+	if _, err := BuildThrough(t.Context(), st, anchor, TopK); err != nil {
+		t.Fatal(err)
+	}
+	insert(t, st, view(id, "192.0.2.3", "s3", (d+2)*dayMS+2000))
+	if w := purge(); len(w) != 1 || w[0].Day != d+1 {
+		t.Fatalf("waits %v, want day %d", w, d+1)
+	}
+	// d+1 rebuilt with d's raw gone (a new builder): s1 is still carried, one visit over the two days.
+	if _, err := (&Builder{Store: st, version: Version + 1}).BuildDay(t.Context(), id, d+1); err != nil {
+		t.Fatal(err)
+	}
+	if n := carried(); n != 1 {
+		t.Errorf("carried after the purge and a rebuild = %d, want 1", n)
+	}
+}
+
+// Cover builds only what the job would build now: not a day before the age floor, not one not yet due; and a day
+// built clean by this builder not again. The job and Cover never build at once (one lock per store).
+func TestCover(t *testing.T) {
+	st := openStore(t)
+	id := site(t, st)
+	today := anchor.UnixMilli() / dayMS
+	floor := ageFloor(anchor, 1)
+	for _, d := range []int64{floor - 1, floor, today - 2, today - 1} {
+		insert(t, st, view(id, "192.0.2.1", fmt.Sprint("s", d), d*dayMS+1000))
+	}
+	cover := Cover(st, Options{Months: 1, Now: func() time.Time { return anchor }})
+	for _, d := range []int64{floor - 1, floor, today - 2, today - 1} {
+		if err := cover(t.Context(), id, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	days, err := st.AggDays(t.Context(), id, floor-1, today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The anchor is the 22nd 13:30: the 20th (today-2) is due, the 21st not.
+	built := func(d int64) bool { r, ok := days[d]; return ok && r.Frozen && r.Dirty == store.AggClean }
+	if built(floor-1) || !built(floor) || !built(today-2) || built(today-1) {
+		t.Errorf("covered days %+v", days)
+	}
+	// Built clean already: neither Cover nor the job builds it again, whatever a stale list of the job's says.
+	if err := cover(t.Context(), id, floor); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := st.AggDays(t.Context(), id, floor, floor); again[floor].BuiltAt != days[floor].BuiltAt {
+		t.Errorf("Cover built a clean day again: %+v", again[floor])
+	}
+	j, started := recorder(st)
+	if did, err := j.b.buildIfNeeded(t.Context(), id, floor); err != nil || did || len(*started) != 0 {
+		t.Errorf("the job built a clean day again: %v %v %v", did, *started, err)
+	}
+}
+
+// The first raw day after a purged one keeps its carried sessions (they cannot be counted again: the day before's
+// raw is gone) through rewrites cut short, twice: each retry takes them from the copy saved before the first
+// delete, not from the partial rows, and the finished day holds them all, the copy gone.
+func TestBuildDay_KeepAfterCrash(t *testing.T) {
+	st := openStore(t)
+	id := site(t, st)
+	d := anchor.UnixMilli()/dayMS - 10
+	const n = 3000 // past a chunk: the copy is saved in more than one transaction
+	var evs []store.Event
+	for i := range n {
+		k := fmt.Sprintf("2001:db8::%x", i)
+		evs = append(evs, view(id, k, fmt.Sprint("s", i), d*dayMS-60_000), view(id, k, fmt.Sprint("s", i), d*dayMS+60_000))
+	}
+	insert(t, st, evs...)
+	if _, err := BuildThrough(t.Context(), st, anchor, TopK); err != nil {
+		t.Fatal(err)
+	}
+	carried := func() (n int64) {
+		t.Helper()
+		if err := st.DB.QueryRow(`SELECT COALESCE(SUM(carried), 0) FROM agg_addr WHERE site_id = ? AND day = ?`, id,
+			d).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if c := carried(); c != n {
+		t.Fatalf("carried before %d", c)
+	}
+	if _, err := st.ArmRawPurge(t.Context(), anchor.Add(-store.PurgeGrace)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PurgeRaw(t.Context(), store.RetentionOptions{Months: 25, RawDays: 10, Builder: Version,
+		Log: slog.New(slog.DiscardHandler)}, anchor); err != nil {
+		t.Fatal(err)
+	}
+	if days, _ := st.AggDays(t.Context(), id, d-1, d); days[d-1].Raw || !days[d].Raw {
+		t.Fatalf("days %+v", days)
+	}
+	// A rewrite for a new builder, cut short after at rows written.
+	crash := func(at int) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		b := &Builder{Store: st, version: Version + 1, beforeWrite: func(w *store.AggBuild) {
+			addrs := w.Addrs
+			w.Addrs = func(yield func(store.AggAddr) bool) {
+				i := 0
+				for a := range addrs {
+					if i++; i == at {
+						cancel()
+					}
+					if !yield(a) {
+						return
+					}
+				}
+			}
+		}}
+		if _, err := b.BuildDay(ctx, id, d); err == nil {
+			t.Fatal("rewrite cut short succeeded")
+		}
+		if days, _ := st.AggDays(t.Context(), id, d, d); days[d].Dirty != store.AggWriting || carried() == n {
+			t.Fatalf("after the cut-short rewrite: %+v, carried %d", days[d], carried())
+		}
+	}
+	crash(2100)
+	crash(500)
+	j := &job{b: &Builder{Store: st, version: Version + 1}, log: slog.New(slog.DiscardHandler)}
+	if _, err := j.passes(t.Context(), lastDue(anchor), 0); err != nil {
+		t.Fatal(err)
+	}
+	days, _ := st.AggDays(t.Context(), id, d, d)
+	if c := carried(); c != n || !days[d].BuiltBy(Version+1) {
+		t.Errorf("after the rebuild: %+v, carried %d, want %d", days[d], c, n)
+	}
+	var copies int
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM agg_carried`).Scan(&copies); err != nil || copies != 0 {
+		t.Errorf("%d saved rows left, %v", copies, err)
+	}
+}
+
+// padded is per events on each day from first to last, each a session of its own, a long user agent each: rows the
+// size cap has to work through.
+func padded(t *testing.T, st *store.Store, id, first, last int64, per int) {
+	t.Helper()
+	var evs []store.Event
+	for d := first; d <= last; d++ {
+		for i := range per {
+			e := view(id, fmt.Sprint("192.0.2.", i%200), fmt.Sprint("s", d, i), d*dayMS+int64(i)*1000)
+			e.UA = strings.Repeat("u", 400)
+			evs = append(evs, e)
+		}
+	}
+	insert(t, st, evs...)
+}
+
+// After a downgrade every day is a newer builder's: the older release neither rebuilds them (newer rows stand) nor
+// stalls on them. The purge and the size cap count them as built, the real Cover included, and delete their raw.
+func TestRetention_Downgrade(t *testing.T) {
+	st := openStore(t)
+	id := site(t, st)
+	today := anchor.UnixMilli() / dayMS
+	padded(t, st, id, today-12, today, 400)
+	newer := &job{b: &Builder{Store: st, version: Version + 1}, log: slog.New(slog.DiscardHandler)}
+	if _, err := newer.passes(t.Context(), today, 0); err != nil {
+		t.Fatal(err)
+	}
+	older := &job{b: &Builder{Store: st}, log: slog.New(slog.DiscardHandler)}
+	if n, err := older.passes(t.Context(), lastDue(anchor), 3); err != nil || n != 0 {
+		t.Fatalf("the older job rebuilt %d days, %v", n, err)
+	}
+	if _, err := st.ArmRawPurge(t.Context(), anchor.Add(-store.PurgeGrace)); err != nil {
+		t.Fatal(err)
+	}
+	o := store.RetentionOptions{Months: 25, RawDays: 6, Builder: Version, Log: slog.New(slog.DiscardHandler),
+		Cover: Cover(st, Options{Months: 25, Now: func() time.Time { return anchor }})}
+	if n, waits, err := st.PurgeRaw(t.Context(), o, anchor); err != nil || n == 0 || len(waits) != 0 {
+		t.Fatalf("purge after a downgrade: %d, waits %v, %v", n, waits, err)
+	}
+	used, _ := st.UsedBytes(t.Context())
+	o.MaxBytes = used / 2
+	if _, err := st.EnforceCap(t.Context(), o, anchor); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := st.UsedBytes(t.Context()); after > o.MaxBytes {
+		t.Errorf("cap not enforced after a downgrade: %d > %d", after, o.MaxBytes)
+	}
+}
+
+// The size cap stops part-way through a day (its raw cut), then a release with a newer builder rebuilds every day
+// with raw, not the cut one: the purge takes the rest of the cut day (its rows complete, an older builder's) and goes
+// on to the raw days.
+func TestPurge_CapCutThenBump(t *testing.T) {
+	st := openStore(t)
+	id := site(t, st)
+	today := anchor.UnixMilli() / dayMS
+	padded(t, st, id, today-6, today-1, 5000)
+	if _, err := BuildThrough(t.Context(), st, anchor, TopK); err != nil {
+		t.Fatal(err)
+	}
+	used, _ := st.UsedBytes(t.Context())
+	if _, err := st.EnforceCap(t.Context(), store.RetentionOptions{Months: 25, Builder: Version, MaxBytes: used - 1,
+		Cover: Cover(st, Options{Months: 25, Now: func() time.Time { return anchor }}),
+		Log:   slog.New(slog.DiscardHandler)}, anchor); err != nil {
+		t.Fatal(err)
+	}
+	var cut, left int64
+	if err := st.DB.QueryRow(`SELECT MIN(ts) / ?, COUNT(*) FROM event WHERE ts < (SELECT MIN(ts) / ? * ? + ? FROM event)`,
+		dayMS, dayMS, dayMS, dayMS).Scan(&cut, &left); err != nil {
+		t.Fatal(err)
+	}
+	if day, _ := dayEvents(t, st, id, cut); day.Raw || left == 0 || left == 5000 {
+		t.Fatalf("the cap left no day cut part-way: oldest raw day %+v with %d events", day, left)
+	}
+	newer := &job{b: &Builder{Store: st, version: Version + 1}, log: slog.New(slog.DiscardHandler)}
+	if _, err := newer.passes(t.Context(), lastDue(anchor), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ArmRawPurge(t.Context(), anchor.Add(-store.PurgeGrace)); err != nil {
+		t.Fatal(err)
+	}
+	if _, waits, err := st.PurgeRaw(t.Context(), store.RetentionOptions{Months: 25, RawDays: 3, Builder: Version + 1,
+		Log: slog.New(slog.DiscardHandler)}, anchor); err != nil || len(waits) != 0 {
+		t.Fatalf("waits %v, %v", waits, err)
+	}
+	var old int
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE ts < ?`, store.RawCutDay(anchor, 3)*dayMS).
+		Scan(&old); err != nil || old != 0 {
+		t.Errorf("%d raw events older than the raw days stay (%v)", old, err)
 	}
 }

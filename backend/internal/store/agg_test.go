@@ -238,9 +238,20 @@ func TestAggDayStates(t *testing.T) {
 // statement trace, so the plans checked are the SQL the code runs, not copies of it.
 func traced(t *testing.T, st *Store, fn func()) []string {
 	t.Helper()
-	st.DB.SetMaxOpenConns(1)
 	var mu sync.Mutex
 	var out []string
+	onStmt(t, st, func(q string) {
+		mu.Lock()
+		out = append(out, q)
+		mu.Unlock()
+	}, fn)
+	return out
+}
+
+// onStmt runs fn with see called on every statement the store sends, its values expanded, as it starts.
+func onStmt(t *testing.T, st *Store, see func(q string), fn func()) {
+	t.Helper()
+	st.DB.SetMaxOpenConns(1)
 	setTrace := func(on bool) {
 		conn, err := st.DB.Conn(t.Context())
 		if err != nil {
@@ -254,9 +265,7 @@ func traced(t *testing.T, st *Store, fn func()) []string {
 			}
 			return c.Trace(sqlite3.TRACE_STMT, func(_ sqlite3.TraceEvent, a1, _ any) error {
 				if s, ok := a1.(*sqlite3.Stmt); ok {
-					mu.Lock()
-					out = append(out, s.ExpandedSQL())
-					mu.Unlock()
+					see(s.ExpandedSQL())
 				}
 				return nil
 			})
@@ -267,7 +276,6 @@ func traced(t *testing.T, st *Store, fn func()) []string {
 	setTrace(true)
 	fn()
 	setTrace(false)
-	return out
 }
 
 // The statements the store runs on the event and aggregate tables (writes, retention's deletes and the cap's every
@@ -287,11 +295,18 @@ func TestAggPlans(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, d := range []int64{day - 1, day, day + 1} {
-			write(t, st, AggBuild{Site: id, Day: d, Dims: []string{"pages"}, RequeueNext: true,
+			b := AggBuild{Site: id, Day: d, Dims: []string{"pages"}, RequeueNext: true,
 				Hours: []AggHour{{Hour: d * 24, Cls: 4, Events: 1}}, Lists: []AggList{{Dim: "pages", Part: 2, Key: "/"}},
-				Addrs: slices.Values(aggAddrs(id, d, 3))})
+				Addrs: slices.Values(aggAddrs(id, d, 3))}
+			if d == day+1 { // a rewrite keeping its carried sessions: saved first
+				b.Carried = map[AggAddrKey]int64{{IPKey: "192.0.2.1", Part: 2}: 1}
+			}
+			write(t, st, b)
 		}
 		if _, err := AggCarriedIn(ctx, st.DB, id, day); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := AggSavedCarriedIn(ctx, st.DB, id, day); err != nil {
 			t.Fatal(err)
 		}
 		if err := st.InsertEvents(ctx, []Event{ev(day)}); err != nil {
@@ -313,12 +328,23 @@ func TestAggPlans(t *testing.T) {
 		if err := st.ClearAggDirtyBefore(ctx, id, day); err != nil {
 			t.Fatal(err)
 		}
-		// Half the size: within reach of the aggregate steps (one byte is not: the tail's raw alone exceeds it).
+		// The purge past its grace: it finds the oldest raw day (dirty) and waits.
+		if _, err := st.ArmRawPurge(ctx, now.Add(-PurgeGrace-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if _, waits, err := st.PurgeRaw(ctx, RetentionOptions{RawDays: 3, Months: 25}, now); err != nil ||
+			len(waits) != 1 {
+			t.Fatalf("purge waits %v, %v", waits, err)
+		}
+		// Half the size: within reach of the aggregate steps (one byte is not: the tail's raw alone exceeds it). The
+		// raw step builds the dirty day first (Cover), then deletes it.
 		used, err := st.UsedBytes(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := st.EnforceCap(ctx, used/2, now, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		o := coverOpts(st, RetentionOptions{MaxBytes: used / 2, Months: 25,
+			Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		if _, err := st.EnforceCap(ctx, o, now); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -353,6 +379,11 @@ func TestAggPlans(t *testing.T) {
 		"DELETE FROM agg_addr WHERE site_id = 1 AND day =",               // a chunk of a day: write, cap
 		"DELETE FROM agg_list WHERE", "DELETE FROM agg_hour WHERE", "SELECT MIN(day) FROM agg_addr",
 		"SELECT MIN(hour) FROM agg_hour", "SELECT dim FROM agg_list WHERE", "SELECT MIN(ts) FROM event",
+		"SELECT MIN(ts) FROM event WHERE site_id = 1 AND ts >=",                           // the purge's next day
+		"DELETE FROM event WHERE id IN (SELECT id FROM event WHERE site_id = 1 AND ts >=", // a day's chunk
+		"INSERT INTO agg_meta", "SELECT value FROM agg_meta",
+		"INSERT INTO agg_carried", "DELETE FROM agg_carried", "SELECT ip_key, part, carried FROM agg_carried",
+		"UPDATE agg_day SET addrs_cut = 1", // the cap's per-address cut of a day
 	} {
 		found := false
 		for q := range seen {
