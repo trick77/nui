@@ -78,7 +78,9 @@ func (r *rig) both(t *testing.T, ep string, params map[string]string) (raw, got 
 // sourceCase is a zone, range and comparison both sources are asked in.
 type sourceCase struct{ tz, rng, cmp string }
 
-func (c sourceCase) String() string { return strings.ReplaceAll(c.tz, "/", "-") + "_" + c.rng + "_" + c.cmp }
+func (c sourceCase) String() string {
+	return strings.ReplaceAll(c.tz, "/", "-") + "_" + c.rng + "_" + c.cmp
+}
 
 // raceCases replace the full matrix under -race, where SQLite crawls: every zone, range and comparison at least
 // once, and the pairs with a path of their own (Kolkata's half hour at 24h and 7d, read raw, and at 30d, floored;
