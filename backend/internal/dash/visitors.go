@@ -530,11 +530,13 @@ func (s *Server) readRows(ctx context.Context, q *query, span visitorCursor, row
 }
 
 // labelClients sets the model's label for an unknown automated client's user agent (one per distinct value, kept
-// for good), the same in the table and the visitor detail. The model must be configured.
+// for good), the same in the table and the visitor detail. The model must be configured. A browser's user agent keeps
+// its parsed name ("Chrome · Windows"): the model only said "Chrome web browser" or "Chrome browser" for it, no
+// two alike.
 func (s *Server) labelClients(ctx context.Context, site int64, rows []visitorRow) {
 	var uas []string
 	for _, r := range rows {
-		if r.Class == "unknown" && r.ua != "" && !slices.Contains(uas, r.ua) {
+		if r.Class == "unknown" && r.ua != "" && !browserClient(r.Client) && !slices.Contains(uas, r.ua) {
 			uas = append(uas, r.ua)
 		}
 	}
@@ -1089,7 +1091,7 @@ const noClient = "no+client"
 // browserJoin, so a change of the shown separator changes no id (and orphans no cached reading); any other name as
 // written, its version dropped (curl/8.4 and curl/8.5 behave alike), case, digits and punctuation kept.
 func clientFamily(c string) string {
-	if b, o, ok := strings.Cut(c, apix.Sep); ok && browserPart(b) && browserPart(o) {
+	if b, o, ok := strings.Cut(c, apix.Sep); ok && browserClient(c) {
 		return b + browserJoin + o
 	}
 	if strings.TrimSpace(c) == "" {
@@ -1099,6 +1101,12 @@ func clientFamily(c string) string {
 		return c[:i]
 	}
 	return c
+}
+
+// browserClient reports whether c is a browser's client name, its browser and OS around the separator.
+func browserClient(c string) bool {
+	b, o, ok := strings.Cut(c, apix.Sep)
+	return ok && browserPart(b) && browserPart(o)
 }
 
 // browserPart reports whether s is one of classify.ParseUA's browser or OS names: ASCII letters and spaces, a letter

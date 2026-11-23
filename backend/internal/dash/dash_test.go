@@ -532,6 +532,22 @@ func TestLists(t *testing.T) {
 	}
 }
 
+func TestLabelClientsKeepsBrowsers(t *testing.T) {
+	s := &Server{Model: &fakeModel{labels: map[string]string{"chrome-ua": "Chrome web browser",
+		"python-requests/2.32.3": "Python scraping script"}}}
+	rows := []visitorRow{
+		{Class: "unknown", Client: "Chrome" + apix.Sep + "Windows", ua: "chrome-ua"},
+		{Class: "unknown", Client: "python-requests/2.32.3", ua: "python-requests/2.32.3"},
+	}
+	s.labelClients(t.Context(), 1, rows)
+	if rows[0].ClientGen != nil {
+		t.Errorf("a browser relabelled: %q", *rows[0].ClientGen)
+	}
+	if rows[1].ClientGen == nil || *rows[1].ClientGen != "Python scraping script" {
+		t.Errorf("a tool unlabelled: %v", rows[1].ClientGen)
+	}
+}
+
 func TestVisitorsAndDetail(t *testing.T) {
 	model := &fakeModel{readings: map[string]insight.Reading{}, labels: map[string]string{
 		"python-requests/2.32.3": "Python scraping script"}}
