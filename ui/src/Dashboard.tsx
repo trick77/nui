@@ -22,10 +22,12 @@ import { Origin } from "./Origin";
 import { OverviewSection } from "./Overview";
 import {
   AUDIENCES,
+  PRODUCT,
   RANGES,
   basePath,
   parseView,
   storeAudience,
+  tabTitle,
   viewHref,
   type View,
 } from "./state";
@@ -105,6 +107,18 @@ export default function Dashboard({ me }: { me: Me }) {
   const list = sites.data?.sites ?? null;
   const site: SiteInfo | null =
     list?.find((s) => s.site === view.site) ?? list?.[0] ?? null;
+
+  const title = tabTitle(site?.site ?? null, view);
+  useEffect(() => {
+    document.title = title;
+  }, [title]);
+  // Signed out, the sign-in card shows under the plain name again.
+  useEffect(
+    () => () => {
+      document.title = PRODUCT;
+    },
+    [],
+  );
 
   const scope: Scope | null = site
     ? { site: site.site, range: view.range, aud: view.aud, cmp: view.cmp }

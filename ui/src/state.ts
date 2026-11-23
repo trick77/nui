@@ -4,6 +4,7 @@
 // browser.
 
 import type { Audience, Compare, LogFilter, Range } from "./api";
+import { SEP } from "./format";
 
 export const RANGES: Range[] = ["24h", "7d", "30d", "90d", "12mo"];
 export const AUDIENCES: Audience[] = ["all", "humans", "bots"];
@@ -71,6 +72,21 @@ export function parseView(pathname: string, search: string): View {
     cmp: COMPARES.includes(cmp) ? cmp : "prev",
     log,
   };
+}
+
+export const PRODUCT = "Stakeout";
+
+// The tab names the domain shown and, on the log, the address or network it
+// follows or the log itself: several tabs open side by side stay apart.
+// Range, audience and the other filters stay out, a tab has no room for them.
+export function tabTitle(site: string | null, v: View): string {
+  if (!site) return PRODUCT;
+  const parts = [PRODUCT, site];
+  if (v.page === "log") {
+    const asn = v.log.asn && `AS${v.log.asn.replace(/^as/i, "")}`;
+    parts.push(v.log.addr || asn || "Log");
+  }
+  return parts.join(SEP);
 }
 
 export function viewHref(base: string, v: View): string {
