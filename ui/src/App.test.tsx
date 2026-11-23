@@ -12,6 +12,7 @@ import App from "./App";
 import { MainChart, StackChart } from "./charts";
 import { type FixtureOptions, TRAIL_NEXT, fixtureFetch } from "./fixtures";
 import { SEP } from "./format";
+import { VitalHint } from "./ui";
 
 let calls: string[] = [];
 
@@ -1339,6 +1340,27 @@ describe("log page", () => {
     expect(within(log).queryByRole("combobox", { name: "Status" })).toBeNull();
     expect(within(log).queryByText("Source")).toBeNull();
     expect(within(log).queryByRole("option", { name: "request" })).toBeNull();
+  });
+});
+
+describe("vital hint", () => {
+  it("explains only a line the backend wrote for a vital", () => {
+    const hint = (kind: string, what: string) => {
+      const { container, unmount } = render(
+        <VitalHint kind={kind} what={what} />,
+      );
+      const has = container.querySelector("button") !== null;
+      unmount();
+      return has;
+    };
+    expect(hint("vital", "vital LCP")).toBe(true);
+    expect(hint("vital", "vital LCP 2.1 s")).toBe(true);
+    expect(hint("vital", "vital INP 184 ms")).toBe(true);
+    expect(hint("vital", "vital CLS 0.004")).toBe(true);
+    expect(hint("vital", "vital LCP fake")).toBe(false);
+    expect(hint("vital", "vital CLS 9 hacked")).toBe(false);
+    expect(hint("vital", "vital constructor")).toBe(false);
+    expect(hint("custom", "event LCP")).toBe(false);
   });
 });
 
