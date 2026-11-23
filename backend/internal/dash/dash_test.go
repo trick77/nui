@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -75,7 +76,10 @@ type rig struct {
 	h     http.Handler
 	end   time.Time
 	world *sim.World // the simulated history's, nil without one
+	trace func(fromAgg, aligned bool)
 }
+
+var rigEnd = time.Date(2026, 11, 22, 13, 30, 0, 0, time.UTC)
 
 func newRig(t *testing.T, days, people int, model insight.Model) *rig {
 	t.Helper()
@@ -84,11 +88,43 @@ func newRig(t *testing.T, days, people int, model insight.Model) *rig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	w, err := fillRig(t.Context(), st, t.TempDir(), days, people)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rigOver(t, st, w, model)
+}
+
+// fillRig syncs the two sites into st and, with days, writes a history ending at rigEnd and builds its aggregates.
+func fillRig(ctx context.Context, st *store.Store, dir string, days, people int) (*sim.World, error) {
 	rules, _ := json.Marshal(sim.LookupRules)
-	rows, err := st.SyncSites(t.Context(), []store.Site{
+	rows, err := st.SyncSites(ctx, []store.Site{
 		{Domain: feedSite, Kind: "site", Product: "Lens", FeedKeyHash: sites.HashKey("k"), PathRules: string(rules)},
 		{Domain: plainSite, Kind: "site", Product: "Blog", PathRules: "[]"},
 	})
+	if err != nil || days == 0 {
+		return nil, err
+	}
+	// About people visitors a day on each site, the API walker and a scan wave on the lookup site.
+	w, _, err := sim.History(ctx, st, sim.HistoryOptions{Seed: 7, Anchor: rigEnd, Days: days,
+		Scale: float64(people) / 25, Scenarios: "api-walker,scan-wave", RefDir: filepath.Join(dir, "ref"),
+		Classify: true})
+	if err != nil {
+		return nil, err
+	}
+	if err := st.AddStats(ctx, []store.IngestStat{{SiteID: rows[feedSite].ID, Hour: rigEnd.Unix()/3600 - 30,
+		Accepted: 100, AcceptedServer: 60, RateLimited: 4}, {SiteID: 0, Hour: rigEnd.Unix() / 3600, UnknownDomain: 2}}); err != nil {
+		return nil, err
+	}
+	// Every day built, as the job would have up to two days ago: auto reads them, SourceAgg all of them.
+	_, err = agg.BuildThrough(ctx, st, rigEnd, agg.TopK)
+	return w, err
+}
+
+// rigOver is a dashboard over st as of a minute after rigEnd.
+func rigOver(t *testing.T, st *store.Store, w *sim.World, model insight.Model) *rig {
+	t.Helper()
+	rows, err := st.Sites(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,33 +132,84 @@ func newRig(t *testing.T, days, people int, model insight.Model) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	end := time.Date(2026, 11, 22, 13, 30, 0, 0, time.UTC)
-	r := &rig{end: end}
-	if days > 0 {
-		// About people visitors a day on each site, the API walker and a scan wave on the lookup site.
-		if r.world, _, err = sim.History(t.Context(), st, sim.HistoryOptions{Seed: 7, Anchor: end, Days: days,
-			Scale: float64(people) / 25, Scenarios: "api-walker,scan-wave", RefDir: filepath.Join(t.TempDir(), "ref"),
-			Classify: true}); err != nil {
-			t.Fatal(err)
-		}
-		if err := st.AddStats(t.Context(), []store.IngestStat{{SiteID: rows[feedSite].ID, Hour: end.Unix()/3600 - 30,
-			Accepted: 100, AcceptedServer: 60, RateLimited: 4}, {SiteID: 0, Hour: end.Unix() / 3600, UnknownDomain: 2}}); err != nil {
-			t.Fatal(err)
-		}
-		// Every day built, as the job would have up to two days ago: auto reads them, SourceAgg all of them.
-		if _, err := agg.BuildThrough(t.Context(), st, end, agg.TopK); err != nil {
-			t.Fatal(err)
-		}
-	}
-	counters := ingest.NewCounters(func() time.Time { return end })
-	counters.Add(rows[feedSite].ID, func(s *store.IngestStat) { s.Accepted += 5 })
-	counters.Seen(rows[feedSite].ID, "browser")
-	s := &Server{DB: st, Sites: reg, Counters: counters, Model: model, RetentionMonths: 25,
-		Now: func() time.Time { return end.Add(time.Minute) }}
+	feed, _ := reg.Lookup(feedSite)
+	counters := ingest.NewCounters(func() time.Time { return rigEnd })
+	counters.Add(feed.ID, func(s *store.IngestStat) { s.Accepted += 5 })
+	counters.Seen(feed.ID, "browser")
+	r := &rig{end: rigEnd, world: w}
+	r.s = &Server{DB: st, Sites: reg, Counters: counters, Model: model, RetentionMonths: 25,
+		Now: func() time.Time { return rigEnd.Add(time.Minute) }}
+	r.h = handler(r.s)
+	return r
+}
+
+func handler(s *Server) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/dash/{endpoint}", s)
-	r.s, r.h = s, mux
-	return r
+	return mux
+}
+
+// sharedStore is the (20 days, 12 people) history and its aggregates, built once for every test that only reads
+// it: under -race its build is about 18 s. TestMain removes it.
+var sharedStore struct {
+	once  sync.Once
+	dir   string
+	st    *store.Store
+	world *sim.World
+	err   error
+}
+
+func sharedHistory(t *testing.T) (*store.Store, *sim.World) {
+	t.Helper()
+	h := &sharedStore
+	h.once.Do(func() {
+		ctx := context.Background() // outlives the test that builds it
+		if h.dir, h.err = os.MkdirTemp("", "nui-dash-test-"); h.err != nil {
+			return
+		}
+		if h.st, h.err = store.Open(ctx, filepath.Join(h.dir, "nui.db")); h.err != nil {
+			return
+		}
+		h.world, h.err = fillRig(ctx, h.st, h.dir, 20, 12)
+	})
+	if h.err != nil {
+		t.Fatal(h.err)
+	}
+	return h.st, h.world
+}
+
+// sharedRig is a dashboard over the shared history: for tests that do not write.
+func sharedRig(t *testing.T, model insight.Model) *rig {
+	t.Helper()
+	st, w := sharedHistory(t)
+	return rigOver(t, st, w, model)
+}
+
+// copyRig is a dashboard over a copy of the shared history, for a test that writes.
+func copyRig(t *testing.T, model insight.Model) *rig {
+	t.Helper()
+	src, w := sharedHistory(t)
+	path := filepath.Join(t.TempDir(), "nui.db")
+	if _, err := src.DB.ExecContext(t.Context(), `VACUUM INTO ?`, path); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return rigOver(t, st, w, model)
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if sharedStore.st != nil {
+		_ = sharedStore.st.Close()
+	}
+	if sharedStore.dir != "" {
+		_ = os.RemoveAll(sharedStore.dir)
+	}
+	os.Exit(code)
 }
 
 // monitor is the simulated uptime probe's address on the lookup site.
@@ -137,12 +224,17 @@ func (r *rig) monitor(t *testing.T) string {
 
 func (r *rig) get(t *testing.T, endpoint string, params map[string]string) (int, map[string]any) {
 	t.Helper()
+	return serve(t, r.h, endpoint, params)
+}
+
+func serve(t *testing.T, h http.Handler, endpoint string, params map[string]string) (int, map[string]any) {
+	t.Helper()
 	v := url.Values{}
 	for k, x := range params {
 		v.Set(k, x)
 	}
 	w := httptest.NewRecorder()
-	r.h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/dash/"+endpoint+"?"+v.Encode(), nil))
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/dash/"+endpoint+"?"+v.Encode(), nil))
 	plainDots(t, endpoint, w.Body.String())
 	var out map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
@@ -352,7 +444,7 @@ func tiles(t *testing.T, body map[string]any) map[string]map[string]any {
 }
 
 func TestOverview(t *testing.T) {
-	r := newRig(t, 20, 12, nil)
+	r := sharedRig(t, nil)
 	for _, rng := range []string{"24h", "7d", "30d", "90d", "12mo"} {
 		for _, aud := range []string{"all", "humans", "bots"} {
 			for _, c := range []string{"prev", "yoy", "off"} {

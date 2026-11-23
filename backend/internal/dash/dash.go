@@ -38,6 +38,15 @@ type Server struct {
 	Source Source
 
 	snaps snapshots // the visitor tables a cursor pages through
+	// trace, when set (tests), sees the source of every piece a plan read: from the aggregates or not, and whether
+	// the piece was on the table's grain (one off it is raw under every source).
+	trace func(fromAgg, aligned bool)
+}
+
+func (s *Server) traced(fromAgg, aligned bool) {
+	if s.trace != nil {
+		s.trace(fromAgg, aligned)
+	}
 }
 
 func (s *Server) now() time.Time {

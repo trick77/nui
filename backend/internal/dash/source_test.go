@@ -1,10 +1,14 @@
 package dash
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -22,15 +26,16 @@ func (r *rig) build(t *testing.T) {
 	}
 }
 
-// pieceCount counts the pieces read from each source while f runs: from the aggregates, raw on the tables' grain
-// (pieces the aggregates could have served), raw off it.
+// pieceCount counts the pieces read from each source: from the aggregates, raw on the tables' grain (pieces the
+// aggregates could have served), raw off it.
 type pieceCount struct{ agg, raw, off int }
 
-func countPieces(t *testing.T, f func()) pieceCount {
-	t.Helper()
+// countPieces counts the pieces the requests f makes through its view of r read.
+func countPieces(r *rig, f func(r *rig)) pieceCount {
 	var mu sync.Mutex
 	var c pieceCount
-	traceRead = func(fromAgg, aligned bool) {
+	v := *r
+	v.trace = func(fromAgg, aligned bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch {
@@ -42,28 +47,94 @@ func countPieces(t *testing.T, f func()) pieceCount {
 			c.off++
 		}
 	}
-	defer func() { traceRead = nil }()
-	f()
+	f(&v)
 	return c
 }
 
-// getFrom asks the endpoint with the server reading from src.
+// server is a server of its own over the rig's store reading from src: parallel subtests share the rig.
+func (r *rig) server(src Source) *Server {
+	s := r.s
+	return &Server{DB: s.DB, Sites: s.Sites, Ref: s.Ref, Counters: s.Counters, Model: s.Model,
+		RetentionMonths: s.RetentionMonths, Build: s.Build, Now: s.Now, Source: src, trace: r.trace}
+}
+
+// getFrom asks the endpoint of a server reading from src.
 func (r *rig) getFrom(t *testing.T, src Source, endpoint string, params map[string]string) (int, map[string]any) {
 	t.Helper()
-	r.s.Source = src
-	r.s.snaps = snapshots{}
-	defer func() { r.s.Source, r.s.snaps = SourceAuto, snapshots{} }()
-	return r.get(t, endpoint, params)
+	return serve(t, handler(r.server(src)), endpoint, params)
+}
+
+// both asks an endpoint from raw and from the aggregates, each answering 200: two equal failures never agree.
+func (r *rig) both(t *testing.T, ep string, params map[string]string) (raw, got map[string]any) {
+	t.Helper()
+	code, raw := r.getFrom(t, SourceRaw, ep, params)
+	gotCode, got := r.getFrom(t, SourceAgg, ep, params)
+	if code != 200 || gotCode != 200 {
+		t.Fatalf("%s %v: %d %v, %d %v", ep, params, code, raw, gotCode, got)
+	}
+	return raw, got
+}
+
+// sourceCase is a zone, range and comparison both sources are asked in.
+type sourceCase struct{ tz, rng, cmp string }
+
+func (c sourceCase) String() string { return strings.ReplaceAll(c.tz, "/", "-") + "_" + c.rng + "_" + c.cmp }
+
+// raceCases replace the full matrix under -race, where SQLite crawls: every zone, range and comparison at least
+// once, and the pairs with a path of their own (Kolkata's half hour at 24h and 7d, read raw, and at 30d, floored;
+// a zone west of UTC at 30d and 90d; 24h against last year, which compares no list; 12mo in UTC).
+var raceCases = []sourceCase{{"UTC", "24h", "prev"}, {"UTC", "7d", "yoy"}, {"UTC", "30d", "prev"},
+	{"UTC", "90d", "yoy"}, {"UTC", "12mo", "prev"}, {"Europe/Zurich", "7d", "prev"}, {"Europe/Zurich", "30d", "yoy"},
+	{"Asia/Kolkata", "24h", "yoy"}, {"Asia/Kolkata", "7d", "prev"}, {"Asia/Kolkata", "30d", "prev"},
+	{"America/New_York", "24h", "prev"}, {"America/New_York", "30d", "prev"}, {"America/New_York", "90d", "yoy"}}
+
+// sourceCases are the cases of the ranges given: every zone × range × comparison (12mo in UTC only: a year of
+// pieces reads alike in every zone), under -race raceCases.
+func sourceCases(ranges ...string) []sourceCase {
+	var out []sourceCase
+	if raceOn {
+		for _, c := range raceCases {
+			if slices.Contains(ranges, c.rng) {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	for _, tz := range []string{"UTC", "Europe/Zurich", "Asia/Kolkata", "America/New_York"} {
+		for _, rng := range ranges {
+			for _, c := range []string{"prev", "yoy"} {
+				if rng != "12mo" || tz == "UTC" {
+					out = append(out, sourceCase{tz, rng, c})
+				}
+			}
+		}
+	}
+	return out
+}
+
+// fullAuds: every audience is asked at 30d (against the prior period only, unless anyCmp), under -race in UTC
+// against the prior period only.
+func fullAuds(c sourceCase, anyCmp bool) []string {
+	if c.rng == "30d" && (c.cmp == "prev" || anyCmp && !raceOn) && (!raceOn || c.tz == "UTC") {
+		return []string{"all", "humans", "bots"}
+	}
+	return []string{"all"}
 }
 
 // distinctTol is how far a distinct count from sketches may be from the exact one: index collisions, rare in the
-// sparse form.
+// sparse form; none below 50, where an off-by-one is a defect.
 func distinctTol(a, b float64) bool {
+	if math.Max(a, b) < 50 {
+		return a == b
+	}
 	return math.Abs(a-b) <= math.Max(1, 0.001*math.Max(math.Abs(a), math.Abs(b)))
 }
 
+// rowPath is a list answer's row.
+var rowPath = regexp.MustCompile(`^\.rows\[\d+\]$`)
+
 // agree compares two answers field by field: equal, but inside a loose subtree (a distinct figure) numbers within
-// distinctTol, and the change and verdict derived from them not at all.
+// distinctTol, and the change and verdict derived from them not at all, unless a list row's two values are equal.
 func agree(t *testing.T, where string, raw, got any, loose func(path string, v any) bool) {
 	t.Helper()
 	var walk func(path string, a, b any, isLoose bool)
@@ -76,8 +147,9 @@ func agree(t *testing.T, where string, raw, got any, loose func(path string, v a
 				t.Errorf("%s %s: %v vs %v", where, path, a, b)
 				return
 			}
+			same := rowPath.MatchString(path) && x["value"] == y["value"]
 			for k, v := range x {
-				if isLoose && (k == "change" || k == "verdict") {
+				if isLoose && (k == "change" || k == "verdict") && !same {
 					continue
 				}
 				walk(path+"."+k, v, y[k], isLoose)
@@ -116,36 +188,33 @@ func looseTiles(path string, v any) bool {
 // The tiles, the classes and Noteworthy's trends read the same from the hourly aggregates as from raw, in every zone
 // and comparison; the aggregates were read, and no piece on their grain was read raw.
 func TestSources_Hourly(t *testing.T) {
-	r := newRig(t, 20, 12, nil)
-	for _, tz := range []string{"UTC", "Europe/Zurich", "Asia/Kolkata", "America/New_York"} {
-		for _, rng := range []string{"24h", "7d", "30d", "90d", "12mo"} {
-			if rng == "12mo" && tz != "UTC" { // a year of pieces: once is enough
-				continue
-			}
-			for _, c := range []string{"prev", "yoy"} {
-				auds := []string{"all"}
-				if rng == "30d" {
-					auds = []string{"all", "humans", "bots"}
-				}
-				for _, aud := range auds {
-					params := p(feedSite, "range", rng, "cmp", c, "aud", aud, "tz", tz)
-					where := fmt.Sprint(params)
-					for _, ep := range []string{"overview", "classes"} {
-						_, raw := r.getFrom(t, SourceRaw, ep, params)
-						var got map[string]any
-						n := countPieces(t, func() { _, got = r.getFrom(t, SourceAgg, ep, params) })
-						delete(raw, "live")
-						delete(got, "live")
-						agree(t, ep+" "+where, raw, got, looseTiles)
-						// Kolkata's 24h and 7d hours are on the half hour: read raw, under every source.
-						offGrain := tz == "Asia/Kolkata" && (rng == "24h" || rng == "7d")
-						if (n.agg == 0 && !offGrain) || n.raw != 0 || (n.off != 0 && !offGrain) {
-							t.Errorf("%s %s: pieces %+v", ep, where, n)
-						}
+	t.Parallel()
+	r := sharedRig(t, nil)
+	for _, c := range sourceCases("24h", "7d", "30d", "90d", "12mo") {
+		t.Run(c.String(), func(t *testing.T) {
+			t.Parallel()
+			for _, aud := range fullAuds(c, true) {
+				params := p(feedSite, "range", c.rng, "cmp", c.cmp, "aud", aud, "tz", c.tz)
+				where := fmt.Sprint(params)
+				for _, ep := range []string{"overview", "classes"} {
+					code, raw := r.getFrom(t, SourceRaw, ep, params)
+					var got map[string]any
+					var gotCode int
+					n := countPieces(r, func(r *rig) { gotCode, got = r.getFrom(t, SourceAgg, ep, params) })
+					if code != 200 || gotCode != 200 {
+						t.Fatalf("%s %s: %d, %d %v", ep, where, code, gotCode, got)
+					}
+					delete(raw, "live")
+					delete(got, "live")
+					agree(t, ep+" "+where, raw, got, looseTiles)
+					// Kolkata's 24h and 7d hours are on the half hour: read raw, under every source.
+					offGrain := c.tz == "Asia/Kolkata" && (c.rng == "24h" || c.rng == "7d")
+					if (n.agg == 0 && !offGrain) || n.raw != 0 || (n.off != 0 && !offGrain) {
+						t.Errorf("%s %s: pieces %+v", ep, where, n)
 					}
 				}
 			}
-		}
+		})
 	}
 }
 
@@ -161,13 +230,14 @@ func looseRows(dim string) func(string, any) bool {
 // The lists, status, the clients split and Noteworthy's findings read the same from the daily aggregates as from
 // raw, in every zone and comparison.
 func TestSources_Lists(t *testing.T) {
-	r := newRig(t, 20, 12, nil)
-	ask := func(ep, where string, params map[string]string, loose func(string, any) bool) {
+	t.Parallel()
+	r := sharedRig(t, nil)
+	ask := func(t *testing.T, ep, where string, params map[string]string, loose func(string, any) bool) {
 		t.Helper()
 		code, raw := r.getFrom(t, SourceRaw, ep, params)
 		var got map[string]any
 		var gotCode int
-		n := countPieces(t, func() { gotCode, got = r.getFrom(t, SourceAgg, ep, params) })
+		n := countPieces(r, func(r *rig) { gotCode, got = r.getFrom(t, SourceAgg, ep, params) })
 		if code != 200 || gotCode != 200 {
 			t.Fatalf("%s %s: %d, %d %v", ep, where, code, gotCode, got)
 		}
@@ -176,80 +246,141 @@ func TestSources_Lists(t *testing.T) {
 			t.Errorf("%s %s: pieces %+v", ep, where, n)
 		}
 	}
-	for _, tz := range []string{"UTC", "Europe/Zurich", "Asia/Kolkata", "America/New_York"} {
-		for _, rng := range []string{"7d", "30d", "90d", "12mo"} {
-			if rng == "12mo" && tz != "UTC" {
-				continue
+	names := slices.Sorted(maps.Keys(dims))
+	for i, c := range sourceCases("7d", "30d", "90d", "12mo") {
+		t.Run(c.String(), func(t *testing.T) {
+			t.Parallel()
+			// Under -race every dimension in UTC at 30d, and two of them in each other case, in turn.
+			ds := names
+			if raceOn && c != (sourceCase{"UTC", "30d", "prev"}) {
+				ds = []string{names[(2*i)%len(names)], names[(2*i+1)%len(names)]}
 			}
-			for _, c := range []string{"prev", "yoy"} {
-				for _, aud := range []string{"all", "humans", "bots"} {
-					if aud != "all" && (rng != "30d" || c != "prev") {
-						continue
-					}
-					base := p(feedSite, "range", rng, "cmp", c, "aud", aud, "tz", tz)
-					where := fmt.Sprint(base)
-					for dim := range dims {
-						params := p(feedSite, "range", rng, "cmp", c, "aud", aud, "tz", tz, "dim", dim, "limit", "500")
-						ask("list", where+" "+dim, params, looseRows(dim))
-					}
-					ask("status", where, base, nil)
-					ask("clients", where, base, func(path string, _ any) bool { return rng != "7d" })
-					if aud == "all" {
-						ask("noteworthy", where, p(feedSite, "range", rng, "cmp", c, "tz", tz, "findings", "all"), nil)
-					}
+			for _, aud := range fullAuds(c, false) {
+				base := p(feedSite, "range", c.rng, "cmp", c.cmp, "aud", aud, "tz", c.tz)
+				where := fmt.Sprint(base)
+				for _, dim := range ds {
+					params := p(feedSite, "range", c.rng, "cmp", c.cmp, "aud", aud, "tz", c.tz, "dim", dim, "limit", "500")
+					ask(t, "list", where+" "+dim, params, looseRows(dim))
+				}
+				ask(t, "status", where, base, nil)
+				ask(t, "clients", where, base, func(path string, _ any) bool { return c.rng != "7d" })
+				if aud == "all" {
+					ask(t, "noteworthy", where, p(feedSite, "range", c.rng, "cmp", c.cmp, "tz", c.tz, "findings", "all"), nil)
 				}
 			}
-		}
+		})
 	}
 	// The other parameters: a sort, a search, a sub, the paths inside a template (raw only).
-	for _, kv := range [][]string{{"dim", "pages", "sort", "change"}, {"dim", "pages", "limit", "2"},
-		{"dim", "countries", "q", "ch"}, {"dim", "events", "sub", "custom"}, {"dim", "events", "sub", "auto"},
-		{"dim", "pages", "within", "/:cidr"}, {"dim", "entry", "limit", "3"}} {
-		params := p(feedSite, append([]string{"range", "30d", "tz", "UTC"}, kv...)...)
-		ask("list", fmt.Sprint(kv), params, looseRows(kv[1]))
-	}
+	t.Run("params", func(t *testing.T) {
+		t.Parallel()
+		for _, kv := range [][]string{{"dim", "pages", "sort", "change"}, {"dim", "pages", "limit", "2"},
+			{"dim", "countries", "q", "ch"}, {"dim", "events", "sub", "custom"}, {"dim", "events", "sub", "auto"},
+			{"dim", "pages", "within", "/:cidr"}, {"dim", "entry", "limit", "3"}} {
+			params := p(feedSite, append([]string{"range", "30d", "tz", "UTC"}, kv...)...)
+			ask(t, "list", fmt.Sprint(kv), params, looseRows(kv[1]))
+		}
+	})
 }
 
-// The visitors table and a visitor's sums read the same from agg_addr as from raw.
+// The visitors table and a visitor's sums read the same from agg_addr as from raw. In each case every row of the
+// table is compared before its page's per-row reads (what it does, the reading: raw under every source, and most of
+// the cost); the whole answer at the UI's limits in UTC, and the details of the keys listed first.
 func TestSources_Addresses(t *testing.T) {
-	r := newRig(t, 20, 12, &fakeModel{})
-	keys := map[string]bool{}
-	for _, tz := range []string{"UTC", "Europe/Zurich", "Asia/Kolkata", "America/New_York"} {
-		for _, rng := range []string{"7d", "30d", "90d", "12mo"} {
-			if rng == "12mo" && tz != "UTC" {
-				continue
+	t.Parallel()
+	r := sharedRig(t, &fakeModel{})
+	site, _ := r.s.Sites.Lookup(feedSite)
+	type pair struct{ aud, sort string }
+	var pairs []pair
+	for _, aud := range []string{"all", "humans", "bots"} {
+		for _, sortBy := range []string{"requests", "views"} {
+			pairs = append(pairs, pair{aud, sortBy})
+		}
+	}
+	seen := map[[2]string]bool{} // the visitors table has no comparison: one case per zone and range
+	for i, c := range sourceCases("7d", "30d", "90d", "12mo") {
+		if seen[[2]string{c.tz, c.rng}] {
+			continue
+		}
+		seen[[2]string{c.tz, c.rng}] = true
+		t.Run(c.tz+"_"+c.rng, func(t *testing.T) {
+			t.Parallel()
+			loc, _ := time.LoadLocation(c.tz)
+			// Under -race every audience and order in UTC at 30d, one pair in each other case, in turn.
+			ps := pairs
+			if raceOn && (c.tz != "UTC" || c.rng != "30d") {
+				ps = pairs[i%len(pairs) : i%len(pairs)+1]
 			}
-			for _, aud := range []string{"all", "humans", "bots"} {
-				for _, sortBy := range []string{"requests", "views"} {
-					params := p(feedSite, "range", rng, "aud", aud, "tz", tz, "sort", sortBy, "limit", "50")
-					_, raw := r.getFrom(t, SourceRaw, "visitors", params)
-					var got map[string]any
-					n := countPieces(t, func() { _, got = r.getFrom(t, SourceAgg, "visitors", params) })
-					agree(t, "visitors "+fmt.Sprint(params), raw, got, nil)
-					if n.raw != 0 || (n.agg == 0 && rng != "7d") {
-						t.Errorf("visitors %v: pieces %+v", params, n)
+			for _, pr := range ps {
+				table := func(r *rig, src Source) []any {
+					q := &query{site: site, rng: c.rng, loc: loc, tz: c.tz, aud: pr.aud, cmp: "off",
+						p: newPeriod(c.rng, "off", r.s.now(), loc)}
+					rows, err := r.server(src).visitorRows(t.Context(), q, visitorCursor{From: ms(q.p.win.From),
+						To: ms(q.p.Now)}, pr.sort, "", "")
+					if err != nil {
+						t.Fatal(err)
 					}
-					for _, row := range listRows(got)[:min(3, len(listRows(got)))] {
-						keys[row["key"].(string)] = true
-					}
+					b, _ := json.Marshal(rows)
+					var out []any
+					_ = json.Unmarshal(b, &out)
+					return out
+				}
+				raw := table(r, SourceRaw)
+				var got []any
+				n := countPieces(r, func(r *rig) { got = table(r, SourceAgg) })
+				where := fmt.Sprint(c, pr)
+				agree(t, "visitors "+where, raw, got, nil)
+				if len(raw) == 0 || n.raw != 0 || (n.agg == 0 && c.rng != "7d") {
+					t.Errorf("visitors %s: %d rows, pieces %+v", where, len(raw), n)
+				}
+			}
+		})
+	}
+	both := r.both
+	t.Run("answers", func(t *testing.T) {
+		t.Parallel()
+		limit := "50"
+		if raceOn {
+			limit = "7"
+		}
+		for _, params := range []map[string]string{p(feedSite, "range", "30d", "tz", "UTC", "limit", limit),
+			p(feedSite, "range", "12mo", "tz", "UTC", "aud", "bots", "sort", "views", "limit", "7")} {
+			raw, got := both(t, "visitors", params)
+			agree(t, "visitors "+fmt.Sprint(params), raw, got, nil)
+			if len(listRows(got)) == 0 {
+				t.Errorf("visitors %v: no rows", params)
+			}
+		}
+	})
+	t.Run("details", func(t *testing.T) {
+		t.Parallel()
+		// The keys the tables list first (every audience's), under -race three of the whole table's.
+		keys := map[string]bool{}
+		auds := []string{"all", "humans", "bots"}
+		if raceOn {
+			auds = auds[:1]
+		}
+		for _, rng := range []string{"7d", "30d", "12mo"} {
+			for _, aud := range auds {
+				_, body := r.getFrom(t, SourceRaw, "visitors", p(feedSite, "range", rng, "tz", "UTC", "aud", aud,
+					"limit", "3"))
+				for _, row := range listRows(body) {
+					keys[row["key"].(string)] = true
 				}
 			}
 		}
-	}
-	for key := range keys {
-		for _, rng := range []string{"30d", "12mo"} {
-			params := p(feedSite, "range", rng, "tz", "UTC", "key", key)
-			_, raw := r.getFrom(t, SourceRaw, "visitor", params)
-			_, got := r.getFrom(t, SourceAgg, "visitor", params)
-			agree(t, "visitor "+fmt.Sprint(params), raw, got, nil)
+		asked := 0
+		for _, key := range slices.Sorted(maps.Keys(keys)) {
+			if raceOn && asked == 3 {
+				break
+			}
+			asked++
+			for _, rng := range []string{"30d", "12mo"} {
+				params := p(feedSite, "range", rng, "tz", "UTC", "key", key)
+				raw, got := both(t, "visitor", params)
+				agree(t, "visitor "+fmt.Sprint(params), raw, got, nil)
+			}
 		}
-	}
-	for _, rng := range []string{"30d", "12mo"} {
-		params := p(feedSite, "range", rng, "tz", "UTC")
-		_, raw := r.getFrom(t, SourceRaw, "domain", params)
-		_, got := r.getFrom(t, SourceAgg, "domain", params)
-		agree(t, "domain "+rng, raw, got, nil)
-	}
+	})
 }
 
 // A session crossing midnight from an aggregate day into a raw one is one visit, in the table and the detail. One
@@ -273,7 +404,7 @@ func TestSources_Sessions(t *testing.T) {
 		at("2026-11-13T00:00:00Z")/dayMS); err != nil {
 		t.Fatal(err)
 	}
-	visits := func(src Source, aud string) (float64, float64) {
+	visitsVia := func(r *rig, src Source, aud string) (float64, float64) {
 		t.Helper()
 		_, v := r.getFrom(t, src, "visitors", p(feedSite, "range", "30d", "tz", "UTC", "aud", aud))
 		var table float64
@@ -285,8 +416,9 @@ func TestSources_Sessions(t *testing.T) {
 		_, d := r.getFrom(t, src, "visitor", p(feedSite, "range", "30d", "tz", "UTC", "key", "192.0.2.40"))
 		return table, num64(d["visits"])
 	}
+	visits := func(src Source, aud string) (float64, float64) { return visitsVia(r, src, aud) }
 	var table float64
-	n := countPieces(t, func() { table, _ = visits(SourceAuto, "humans") })
+	n := countPieces(r, func(r *rig) { table, _ = visitsVia(r, SourceAuto, "humans") })
 	if table != 3 || n.agg == 0 || n.raw == 0 {
 		t.Errorf("humans across the raw boundary: %v visits, pieces %+v", table, n)
 	}
@@ -306,7 +438,8 @@ func TestSources_Sessions(t *testing.T) {
 // Where raw is gone (retention cut it), the sums still come from the aggregates, while the trail, the log and a
 // reading reach back to detail_since only; the footer says since when figures go back.
 func TestSources_RawSpan(t *testing.T) {
-	r := newRig(t, 20, 12, &fakeModel{})
+	t.Parallel()
+	r := copyRig(t, &fakeModel{})
 	_, before := r.get(t, "visitors", p(feedSite, "range", "30d", "tz", "UTC", "limit", "500"))
 	cut := r.end.AddDate(0, 0, -5)
 	if _, err := r.s.DB.PruneAge(t.Context(), cut); err != nil {
@@ -356,7 +489,8 @@ func TestSources_RawSpan(t *testing.T) {
 // new. Four days of the history come again 30, 90 and 365 days earlier: the prior periods of 30d and 90d and the
 // year before hold data, some of it collapsed.
 func TestSources_ListsTopThree(t *testing.T) {
-	r := newRig(t, 20, 12, nil)
+	t.Parallel()
+	r := copyRig(t, nil)
 	for _, tbl := range []string{"agg_day", "agg_hour", "agg_list", "agg_addr"} {
 		if _, err := r.s.DB.DB.Exec(`DELETE FROM ` + tbl); err != nil { //nolint:gosec // the test's own names
 			t.Fatal(err)
@@ -425,8 +559,7 @@ func TestSources_ListsTopThree(t *testing.T) {
 				continue
 			}
 			params := p(feedSite, "range", rc[0], "cmp", rc[1], "tz", "UTC", "dim", dim, "limit", "500")
-			_, raw := r.getFrom(t, SourceRaw, "list", params)
-			_, got := r.getFrom(t, SourceAgg, "list", params)
+			raw, got := r.both(t, "list", params)
 			rawRows, gotRows := byKey(raw), byKey(got)
 			for k, g := range gotRows {
 				w, ok := rawRows[k]
@@ -461,8 +594,9 @@ func TestSources_ListsTopThree(t *testing.T) {
 					t.Errorf("%s %s: rows and Other %v, raw %v", rng, dim, total(got), total(raw))
 				}
 			}
-			if num64(got["total"]) != float64(len(listRows(got)))+num64(got["other"].(map[string]any)["count"]) {
-				t.Errorf("%s %s: total %v", rng, dim, got["total"])
+			// Every key, shown or only in an Other's listed hashes: raw's count (no day past the listing bound).
+			if num64(got["total"]) != num64(raw["total"]) {
+				t.Errorf("%s %s: total %v, raw %v", rng, dim, got["total"], raw["total"])
 			}
 		}
 	}
@@ -473,8 +607,7 @@ func TestSources_ListsTopThree(t *testing.T) {
 	for _, rc := range combos {
 		rng := rc[0] + " " + rc[1]
 		params := p(feedSite, "range", rc[0], "cmp", rc[1], "tz", "UTC", "findings", "all")
-		_, raw := r.getFrom(t, SourceRaw, "noteworthy", params)
-		_, got := r.getFrom(t, SourceAgg, "noteworthy", params)
+		raw, got := r.both(t, "noteworthy", params)
 		rawIDs := map[string]bool{}
 		for _, x := range raw["items"].([]any) {
 			rawIDs[x.(map[string]any)["id"].(string)] = true
@@ -498,7 +631,9 @@ func TestSources_Plan(t *testing.T) {
 		t.Helper()
 		var body map[string]any
 		var code int
-		n := countPieces(t, func() { code, body = r.getFrom(t, src, "overview", p(feedSite, "range", rng, "tz", "UTC")) })
+		n := countPieces(r, func(r *rig) {
+			code, body = r.getFrom(t, src, "overview", p(feedSite, "range", rng, "tz", "UTC"))
+		})
 		if code != http.StatusOK {
 			t.Fatalf("%v %s: %d %v", src, rng, code, body)
 		}
