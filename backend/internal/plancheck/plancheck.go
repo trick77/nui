@@ -60,10 +60,14 @@ func oneProbe(q, c string) bool {
 // limited: q takes a LIMIT, a keyset page or a chunk: an open range read only that far.
 var limited = regexp.MustCompile(`(?i)\bLIMIT\b`)
 
+// oneActor: q asks for one address key's rows.
+var oneActor = regexp.MustCompile(`(?i)\bip_key\s*=\s*(?:\?\d*|'[^']*')`)
+
 // Problem names what of q's plan reads too much, "" when nothing: a SCAN of event or an agg_ table, or a SEARCH of
 // one whose index constraint is the leading site_id alone, or with a list's dim (every row of the site, every day of
-// the list), or bounds a range on one side only without a LIMIT (every row of the site after or before a point).
-// Plans name aliases; an alias q uses for several tables counts as each of them.
+// the list), or bounds a range on one side only without a LIMIT (every row of the site after or before a point), or
+// one key's events searched by anything but their key or id. Plans name aliases; an alias q uses for several tables
+// counts as each of them.
 func Problem(q string, plan []string) string {
 	alias := map[string][]string{}
 	for _, m := range tableRef.FindAllStringSubmatch(q, -1) {
@@ -95,6 +99,11 @@ func Problem(q string, plan []string) string {
 				return "every row of a site in " + tbl + " (" + c[1] + ")"
 			case oneSided(c[1]) && !limited.MatchString(q):
 				return "an open range of " + tbl + " (" + c[1] + ")"
+			// The planner took the site's time index for a key's trail ordered by time: a year's range walked for a
+			// key with few events in it (1.3 s, a month of the site per values read).
+			case tbl == "event" && oneActor.MatchString(q) && !strings.Contains(c[1], "ip_key=") &&
+				!strings.Contains(c[1], "rowid="):
+				return "one key's events by the site's time (" + c[1] + ")"
 			}
 		}
 	}

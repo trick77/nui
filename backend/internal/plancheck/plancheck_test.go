@@ -33,6 +33,10 @@ func TestProblem(t *testing.T) {
 		`SELECT MIN(hour) FROM agg_hour WHERE site_id = 1 AND hour >= 5`:                           false,
 		`SELECT day FROM agg_day WHERE site_id = 1 AND day > 5 AND dirty = 3 ORDER BY day LIMIT 1`: false,
 		`SELECT ts FROM event WHERE site_id = 1 AND ip_key = 'x' AND ts >= 5`:                      true,
+		// One key's events on the site's time index: every event of the range read for one key's.
+		`SELECT id FROM event INDEXED BY event_site_ts WHERE site_id = 1 AND ip_key = 'x' AND ts >= 1 AND ts < 2
+			ORDER BY ts DESC, id DESC LIMIT 5`: true,
+		`SELECT kind FROM event WHERE id = 1 AND site_id = 1 AND ip_key = 'x'`: false,
 
 		`SELECT MIN(ts) FROM event WHERE site_id = 1`:                                       false,
 		`SELECT COALESCE(MIN(ts), 0) FROM event WHERE site_id = 1`:                          false,

@@ -1,7 +1,9 @@
 package dash
 
 import (
+	"cmp"
 	"context"
+	"database/sql"
 	"fmt"
 	"regexp"
 	"slices"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/trick77/stakeout/backend/internal/agg"
+	"github.com/trick77/stakeout/backend/internal/classify"
 	"github.com/trick77/stakeout/backend/internal/plancheck"
 	"github.com/trick77/stakeout/backend/internal/sim"
 	"github.com/trick77/stakeout/backend/internal/store"
@@ -51,8 +54,10 @@ func TestLargeTable(t *testing.T) {
 	var mu sync.Mutex
 	seen, built := map[string]stmt{}, map[string]stmt{}
 	var wide []string // runs of days on agg_day read in one statement past a month
+	var count atomic.Int64
 	trace := func(into map[string]stmt) func(string, []any) {
 		return func(q string, args []any) {
+			count.Add(1)
 			mu.Lock()
 			defer mu.Unlock()
 			if strings.Contains(q, "FROM agg_day d") && strings.HasSuffix(strings.TrimSpace(q), "d.day <= ?") {
@@ -136,9 +141,24 @@ func TestLargeTable(t *testing.T) {
 			asked = append(slices.Clone(calls), weekCalls...)
 		}
 		for _, c := range asked {
-			start := time.Now()
-			if code, body := r.getFrom(t, src, c.ep, c.params); code != 200 {
+			start, before := time.Now(), count.Load()
+			uas := map[string]int{}
+			clientName = func(ua string) string {
+				mu.Lock()
+				uas[ua]++
+				mu.Unlock()
+				return classify.Client(ua)
+			}
+			code, body := r.getFrom(t, src, c.ep, c.params)
+			clientName = classify.Client
+			if code != 200 {
 				t.Errorf("%v %s %v: %d %v", src, c.ep, c.params, code, body)
+			}
+			if c.ep == "visitors" {
+				clientNames(t, c.params, body, uas)
+				if src == SourceAgg {
+					visitorsBounds(t, r.s.DB.DB, site.ID, c.params, body, count.Load()-before)
+				}
 			}
 			d := time.Since(start)
 			took += d
@@ -193,6 +213,59 @@ func TestLargeTable(t *testing.T) {
 }
 
 var srcName = map[Source]string{SourceAuto: "auto", SourceRaw: "raw", SourceAgg: "aggregates"}
+
+// visitorsBounds checks what one 12-month visitors table from the aggregates costs, by counts, not wall time (a year
+// of 23 M events once took 5.4 s warm, 26 s cold), from what the seeded history holds (45 days under -race, more
+// than the range without): a statement per built day, a month's piece of the classes over the range, and per page row
+// a statement per month of its raw span, its values and trail, and its reading's raw sums when raw begins inside the
+// range. The months are counted here, not from the code's spans: shorter windows must fail.
+func visitorsBounds(t *testing.T, db *sql.DB, site int64, params map[string]string, body map[string]any, stmts int64) {
+	t.Helper()
+	loc, err := time.LoadLocation(cmp.Or(params["tz"], "UTC"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := newPeriod(params["range"], "prev", rigEnd.Add(time.Minute), loc)
+	from, to := ms(p.win.From), ms(p.Now)
+	var days, oldest int64
+	if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM agg_day WHERE site_id = ? AND day >= ? AND day < ?
+		AND frozen = 1`, site, from/dayMS, to/dayMS).Scan(&days); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(t.Context(), `SELECT MIN(ts) FROM event WHERE site_id = ?`, site).Scan(&oldest); err != nil {
+		t.Fatal(err)
+	}
+	month := int64(31 * 24 * time.Hour / time.Millisecond)
+	raw := max(from, oldest)
+	perRow := (to-raw+month-1)/month + 2 // the raw span's months, the values, the trail
+	if raw > from {
+		perRow += 3 // the reading's raw sums, sessions and latest event
+	}
+	classes := (to/dayMS - from/dayMS + 31) / 31
+	rows := int64(len(body["rows"].([]any)))
+	// Besides: the plan's two, today's raw piece (two), detail_since's (up to three).
+	limit := days + classes + rows*perRow + 7
+	t.Logf("visitors %v: %d statements, limit %d: %d rows of %v, %d built days, %d per row", params, stmts, limit,
+		rows, body["total"], days, perRow)
+	if stmts > limit || rows == 0 {
+		t.Errorf("visitors %v: %d statements for %d rows over %d built days, want at most %d", params, stmts, rows, days,
+			limit)
+	}
+}
+
+// clientNames checks a visitors call derives a client name once per distinct user agent, not per actor (59k rows
+// parsed theirs one by one, 2.3 s), plus at most one per page row (a reading's own sums).
+func clientNames(t *testing.T, params map[string]string, body map[string]any, uas map[string]int) {
+	t.Helper()
+	calls := 0
+	for _, n := range uas {
+		calls += n
+	}
+	if rows := len(body["rows"].([]any)); calls > len(uas)+rows {
+		t.Errorf("visitors %v: %d client names derived for %d user agents, %d rows of %v", params, calls, len(uas), rows,
+			body["total"])
+	}
+}
 
 // addrKeySearch is a plan step searching agg_addr_key by site and key.
 var addrKeySearch = regexp.MustCompile(`INDEX agg_addr_key \(site_id=\? AND ip_key=\?`)

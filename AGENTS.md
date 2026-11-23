@@ -30,7 +30,8 @@ change to `/stakeout.js`, `/api/in`, `/api/feed` or `sites.json` updates it in t
 - A statement over a site's events or aggregates spans at most a day (`readSpan`): a read held for seconds keeps
   the WAL from restarting while the collector writes (ipverse-core's lesson; a month's actor GROUP BY took 0.8 s
   on 24 M events, a day 0.02 s). `internal/plancheck` fails a plan walking a table or a whole site; `agg_addr_key`
-  is pinned (else the planner walks the day's every address). At 24 M events a 12-month page took ~60 s raw.
+  is pinned (else the planner walks the day's every address); a key's event read on the site's time index tests every
+  event of the span, plancheck fails it. At 24 M events a 12-month page took ~60 s raw.
 - Feed: one event's content never refuses the batch, its fields are the product's public clients' (one crafted
   method would blind the feed). Clip to the README's limits, drop and count unusable events; `/api/in` stays strict.
 - Sites are declared in `<data>/sites.json` (`docs/sites.example.json`), never self-registering: a browser can name

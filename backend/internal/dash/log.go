@@ -42,7 +42,9 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 	v := r.URL.Query()
 	where := []string{"site_id = ?"}
 	args := []any{q.site.ID}
+	table := "event"
 	if a := strings.TrimSpace(v.Get("addr")); a != "" {
+		table = "event " + byActor // one key's page: its own events, not every event of the day tested
 		if _, err := netip.ParseAddr(a); err == nil {
 			where, args = append(where, "ip_key = ?", "ip = ?"), append(args, ratelimit.Key(a), netip.MustParseAddr(a).Unmap().String())
 		} else if p, err := netip.ParsePrefix(a); err == nil && p.Addr().Is6() && p.Bits() == 64 {
@@ -141,7 +143,7 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 			pageCond += " AND (ts < ? OR (ts = ? AND id < ?))"
 			pageArgs = append(pageArgs, cur.ts, cur.ts, cur.id)
 		}
-		more, err := s.logRows(ctx, pageCond, pageArgs, logPage+1-len(out))
+		more, err := s.logRows(ctx, table, pageCond, pageArgs, logPage+1-len(out))
 		if err != nil {
 			s.fail(w, r, err)
 			return
@@ -186,10 +188,10 @@ type cursorRow struct {
 	at  cursor
 }
 
-// logRows reads up to limit log rows matching cond, newest first.
-func (s *Server) logRows(ctx context.Context, cond string, args []any, limit int) ([]cursorRow, error) {
+// logRows reads up to limit log rows matching cond from table (event, pinned to an index or not), newest first.
+func (s *Server) logRows(ctx context.Context, table, cond string, args []any, limit int) ([]cursorRow, error) {
 	rows, err := s.query(ctx, `SELECT id, ts, ip, cls, source, kind, name, template, status, ua, `+vitalValue+`
-		FROM event WHERE `+cond+` ORDER BY ts DESC, id DESC LIMIT `+strconv.Itoa(limit), args...)
+		FROM `+table+` WHERE `+cond+` ORDER BY ts DESC, id DESC LIMIT `+strconv.Itoa(limit), args...)
 	if err != nil {
 		return nil, err
 	}

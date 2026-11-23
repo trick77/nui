@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/trick77/ship/kit/ratelimit"
 	"github.com/trick77/stakeout/backend/internal/insight"
 	"github.com/trick77/stakeout/backend/internal/store"
 )
@@ -374,6 +375,33 @@ func TestExact_LatestClient(t *testing.T) {
 	_, c := r.get(t, "clients", p(feedSite))
 	if ipv := c["ip_version"].([]any); len(ipv) != 1 || ipv[0].(map[string]any)["key"] != "IPv4" {
 		t.Errorf("ip_version %v", ipv)
+	}
+}
+
+// The detail's addresses are a key's distinct addresses over its raw span, read a month window at a time: a /64's
+// addresses recur from window to window and count once; a plain address is one, whatever windows it falls in.
+func TestExact_VisitorAddresses(t *testing.T) {
+	r, insert := exactRig(t)
+	const ua = "Mozilla/5.0 (Windows) Firefox/140"
+	a, b, c, d := "2001:db8:1:1::a", "2001:db8:1:1::b", "2001:db8:1:1::c", "2001:db8:1:1::d"
+	net := ratelimit.Key(a)
+	// Over a month apart, each day in a window of its own: per window 2 + 2 + 3 = 7, together 4.
+	days := []string{"2026-07-10", "2026-09-01", "2026-11-20"}
+	for i, ips := range [][]string{{a, b}, {b, c}, {a, c, d}} {
+		for _, ip := range ips {
+			evs := pageLoad(at(days[i]+"T10:00:00Z"), "v"+ip, ip, "CH", ua, 0)
+			for j := range evs {
+				evs[j].IPKey = net
+			}
+			insert(evs...)
+		}
+		insert(pageLoad(at(days[i]+"T11:00:00Z"), "w", "192.0.2.9", "CH", ua, 0)...)
+	}
+	for key, want := range map[string]float64{net: 4, "192.0.2.9": 1} {
+		code, v := r.get(t, "visitor", p(feedSite, "range", "12mo", "key", key))
+		if code != 200 || v["addresses"] != want {
+			t.Errorf("%s: %d, addresses %v, want %v", key, code, v["addresses"], want)
+		}
 	}
 }
 
