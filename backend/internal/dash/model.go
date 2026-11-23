@@ -4,6 +4,7 @@ package dash
 //
 // Table: -
 type bucketStats struct {
+	missing  bool // part of it holds no figures (plan.older)
 	visitors uniq // visitor ids (aud bots: address keys)
 	views    float64
 	events   float64
@@ -11,6 +12,7 @@ type bucketStats struct {
 	unknown  float64 // unknown automated requests, over all requests whatever aud
 	allReq   float64
 	errors   float64
+	api      apiStats // a site of kind api only
 }
 
 // live counts the address keys seen in the last five minutes, people apart from the automated.
@@ -24,7 +26,10 @@ type live struct {
 // dayState is one agg_day row as the dashboard needs it.
 //
 // Table: agg_day
-type dayState struct{ frozen, clean, raw bool }
+type dayState struct {
+	frozen, clean, raw bool
+	builder            int64
+}
 
 // classInfo is one address key's stored class and its reasons for a day.
 //

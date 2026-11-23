@@ -55,6 +55,12 @@ type plan struct {
 	// gaps counts the pieces read as nothing although they held events: raw only (off the aggregates' grain) and
 	// their day's raw cut by retention. A figure whose reads added one is short; a change against it is unknown.
 	gaps int
+	// older counts the gaps that are days an older builder made without the figure read (need), their raw gone.
+	older int
+	// need is the builder a day's aggregates must come from for what is being read (0: any): a figure an older build
+	// does not hold would read as nothing.
+	need int64
+	api  bool // the site is shown as an API
 }
 
 // planOf is the request's plan, made on first use for the whole of its period.
@@ -62,7 +68,7 @@ func (s *Server) planOf(ctx context.Context, q *query) (*plan, error) {
 	if q.plan != nil {
 		return q.plan, nil
 	}
-	pl := &plan{s: s, src: s.Source, site: q.site.ID, now: q.p.Now, days: map[int64]dayState{}}
+	pl := &plan{s: s, src: s.Source, site: q.site.ID, now: q.p.Now, days: map[int64]dayState{}, api: q.api()}
 	oldest, ok, err := s.rawStart(ctx, q.site.ID)
 	if err != nil {
 		return nil, err
@@ -91,7 +97,7 @@ func (pl *plan) ensure(ctx context.Context, first, last int64) error {
 		if a > b {
 			return nil
 		}
-		rows, err := pl.s.query(ctx, `SELECT day, frozen, dirty, raw FROM agg_day WHERE site_id = ? AND day >= ?
+		rows, err := pl.s.query(ctx, `SELECT day, frozen, dirty, raw, builder FROM agg_day WHERE site_id = ? AND day >= ?
 			AND day <= ?`, pl.site, a, b)
 		if err != nil {
 			return err
@@ -100,7 +106,7 @@ func (pl *plan) ensure(ctx context.Context, first, last int64) error {
 		for rows.Next() {
 			var d, dirty int64
 			var st dayState
-			if err := rows.Scan(&d, &st.frozen, &dirty, &st.raw); err != nil {
+			if err := rows.Scan(&d, &st.frozen, &dirty, &st.raw, &st.builder); err != nil {
 				return err
 			}
 			st.clean = dirty == 0
@@ -236,7 +242,11 @@ func (pl *plan) pick(ctx context.Context, lo, hi time.Time, unit time.Duration, 
 		}
 		return readRaw, nil
 	}
-	aggOK, rawOK := ok && st.frozen && st.clean, pl.rawOK(day)
+	aggOK, rawOK := ok && st.frozen && st.clean && st.builder >= pl.need, pl.rawOK(day)
+	if ok && !aggOK && !rawOK && st.builder < pl.need { // its raw is gone and its build never held the figure
+		pl.gaps++
+		pl.older++
+	}
 	switch {
 	case pl.src == SourceAgg && aggOK:
 		return readAgg, nil

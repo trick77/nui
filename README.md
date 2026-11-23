@@ -152,7 +152,9 @@ run), set it to 0: the caller could otherwise write its own address into the hea
 
 Stakeout only stores events for the sites listed in `data/sites.json` (the container's `/data/sites.json`; shape in
 [docs/sites.example.json](docs/sites.example.json)): domain, product, path rules that group raw paths into
-templates, and for a server feed the SHA-256 of its key. The file is read at start: restart Stakeout after changing it.
+templates, for a server feed the SHA-256 of its key, and its kind: `site`, or `api` for a domain with a feed and no
+pages, shown by its calls (endpoints, accounts, failures, durations) instead of its visits. The file is read at start:
+restart Stakeout after changing it.
 Without it Stakeout still starts, logs `Sites file missing`, refuses every event (403) and the dashboard lists no
 domain; with it, the start log names the loaded domains (`Sites loaded`).
 
@@ -212,6 +214,7 @@ with the unknown domains every footer shows.
 |---|---|
 | `method` | 16 |
 | `sf_site`, `sf_mode`, `sf_dest` | 32 |
+| `op`, `err` | 64 |
 | `account` | 128 |
 | `route` | 200 |
 | `sig_agent` | 256 |

@@ -3,6 +3,8 @@ package dash
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"math"
 	"net/http"
 	"slices"
 	"time"
@@ -24,6 +26,9 @@ func (s *Server) bucket(ctx context.Context, pl *plan, aud string, from, to time
 			func() error { return s.bucketPiece(ctx, pl.site, aud, pc[0], pc[1], &b) }); err != nil {
 			return b, err
 		}
+	}
+	if pl.api {
+		return b, s.apiBucket(ctx, pl, aud, from, to, short, &b.api)
 	}
 	return b, nil
 }
@@ -100,6 +105,7 @@ func (b *bucketStats) add(o *bucketStats) {
 	b.allReq += o.allReq
 	b.errors += o.errors
 	b.visitors.merge(&o.visitors)
+	b.api.add(&o.api)
 }
 
 // bucketPiece adds one piece to b: two short statements (the sums, the distinct visitors).
@@ -147,10 +153,12 @@ func (s *Server) bucketPiece(ctx context.Context, site int64, aud string, from, 
 func (s *Server) buckets(ctx context.Context, pl *plan, aud string, bounds []time.Time, short bool) ([]bucketStats, error) {
 	out := make([]bucketStats, 0, len(bounds))
 	for i := 0; i+1 < len(bounds); i++ {
+		older := pl.older
 		b, err := s.bucket(ctx, pl, aud, bounds[i], bounds[i+1], short)
 		if err != nil {
 			return nil, err
 		}
+		b.missing = pl.older > older
 		out = append(out, b)
 	}
 	return out, nil
@@ -193,6 +201,31 @@ type tile struct {
 	Server     bool      `json:"server"`
 }
 
+// MarshalJSON writes a figure that does not exist (NaN: a percentile of no calls, a bucket without figures) as null.
+func (t tile) MarshalJSON() ([]byte, error) {
+	orNull := func(v float64) *float64 {
+		if math.IsNaN(v) {
+			return nil
+		}
+		return &v
+	}
+	list := func(vs []float64) []*float64 {
+		out := make([]*float64, len(vs))
+		for i, v := range vs {
+			out[i] = orNull(v)
+		}
+		return out
+	}
+	type plain tile
+	return json.Marshal(struct {
+		plain
+		Value      *float64   `json:"value"`
+		Series     []*float64 `json:"series"`
+		PrevSeries []*float64 `json:"prev_series"`
+		Median     *float64   `json:"median"`
+	}{plain(t), orNull(t.Value), list(t.Series), list(t.PrevSeries), orNull(t.Median)})
+}
+
 type overview struct {
 	Period struct {
 		From           any      `json:"from"`
@@ -201,6 +234,9 @@ type overview struct {
 		Labels         []string `json:"labels"`
 		PrevLabel      string   `json:"prev_label"`
 		LastBucketOpen bool     `json:"last_bucket_open"`
+		// Since is set when the figures begin only within the range (an API's, over days an older builder made and
+		// whose raw is gone): the buckets before it are null.
+		Since any `json:"since"`
 	} `json:"period"`
 	Live  live   `json:"live"`
 	Tiles []tile `json:"tiles"`
@@ -211,6 +247,16 @@ type tileDef struct {
 	key, label, unit, kind string
 	server, upBad          bool
 	of                     func(b bucketStats) float64
+	// base is what a rate is a share of; nil: all requests.
+	base func(b bucketStats) float64
+}
+
+// tileDefsOf are a site's tiles: an API's own, or a website's.
+func (q *query) tileDefsOf() []tileDef {
+	if q.api() {
+		return apiTileDefs
+	}
+	return tileDefs
 }
 
 var tileDefs = []tileDef{
@@ -248,6 +294,11 @@ func (s *Server) overview(ctx context.Context, q *query) (overview, error) {
 	if ov.Live, err = s.live(ctx, q.site.ID); err != nil {
 		return ov, err
 	}
+	for i, b := range cur {
+		if b.missing {
+			ov.Period.Since = iso(q.p.Bounds[i+1])
+		}
+	}
 	ov.Tiles = s.tiles(q, cur, prev, cur, prevToCut, gaps)
 	return ov, nil
 }
@@ -275,8 +326,10 @@ func (s *Server) curPrev(ctx context.Context, pl *plan, q *query, aud string) (c
 // range (gaps[0]) leaves every change unknown (null); one in the comparison (gaps[1]) its prior figures too, never a
 // short prior period's dip or a percentage against it.
 func (s *Server) tiles(q *query, cur, prev, total, prevTotal []bucketStats, gaps [2]bool) []tile {
+	// A bucket that is not whole is in no figure, as in no series.
+	total = slices.DeleteFunc(slices.Clone(total), func(b bucketStats) bool { return b.missing })
 	out := []tile{}
-	for _, d := range tileDefs {
+	for _, d := range q.tileDefsOf() {
 		if d.server && !q.site.HasFeed {
 			continue
 		}
@@ -286,20 +339,32 @@ func (s *Server) tiles(q *query, cur, prev, total, prevTotal []bucketStats, gaps
 			t.Label = "Addresses"
 		}
 		for i, b := range cur {
-			t.Series[i] = round1(d.of(b))
+			t.Series[i] = math.NaN()
+			if !b.missing {
+				t.Series[i] = round1(d.of(b))
+			}
 		}
-		t.Median = round1(median(t.Series[:q.p.closedN()]))
+		t.Median = math.NaN()
+		if xs := slices.DeleteFunc(slices.Clone(t.Series[:q.p.closedN()]), math.IsNaN); len(xs) > 0 {
+			t.Median = round1(median(xs))
+		}
 		t.Value = s.total(d, total)
 		if prev != nil && !gaps[1] {
 			for _, b := range prev {
 				t.PrevSeries = append(t.PrevSeries, round1(d.of(b)))
 			}
 			pv := s.total(d, prevTotal)
-			t.Prev = &pv
+			if !math.IsNaN(pv) {
+				t.Prev = &pv
+			}
 			if d.kind == "rate" {
-				t.Change = rateChange(t.Value, pv, !gaps[0], totalOf(prevTotal, func(b bucketStats) float64 { return b.allReq }) > 0)
+				base := d.base
+				if base == nil {
+					base = func(b bucketStats) float64 { return b.allReq }
+				}
+				t.Change = rateChange(t.Value, pv, !gaps[0] && !math.IsNaN(t.Value), totalOf(prevTotal, base) > 0)
 			} else {
-				t.Change = sumChange(t.Value, pv, !gaps[0])
+				t.Change = sumChange(t.Value, pv, !gaps[0] && !math.IsNaN(t.Value) && !math.IsNaN(pv))
 			}
 		}
 		t.Verdict = verdict(t.Change, d.upBad)
@@ -320,6 +385,8 @@ func (s *Server) total(d tileDef, bs []bucketStats) float64 {
 	case "auto_share":
 		return round1(pct(totalOf(bs, func(b bucketStats) float64 { return b.unknown }),
 			totalOf(bs, func(b bucketStats) float64 { return b.allReq })))
+	case "calls", "accounts", "callers", "failed", "p95":
+		return apiTotal(d.key, bs)
 	}
 	return totalOf(bs, d.of)
 }
@@ -346,9 +413,11 @@ func (s *Server) live(ctx context.Context, site int64) (live, error) {
 }
 
 type siteRow struct {
-	Site    string         `json:"site"`
-	Product string         `json:"product"`
-	Kind    string         `json:"kind"`
+	Site    string `json:"site"`
+	Product string `json:"product"`
+	Kind    string `json:"kind"`
+	// Feed: a server feed is configured, delivered or not.
+	Feed    bool           `json:"feed"`
 	Browser map[string]any `json:"browser"`
 	Server  map[string]any `json:"server"`
 }
@@ -356,7 +425,7 @@ type siteRow struct {
 func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 	rows := []siteRow{}
 	for _, st := range s.Sites.All() {
-		row := siteRow{Site: st.Domain, Product: st.Product, Kind: st.Kind}
+		row := siteRow{Site: st.Domain, Product: st.Product, Kind: st.Kind, Feed: st.HasFeed}
 		b, sv, err := s.lastSeen(r.Context(), st.ID)
 		if err != nil {
 			s.fail(w, r, err)

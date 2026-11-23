@@ -423,6 +423,62 @@ func TestSignatureAgentKept(t *testing.T) {
 	}
 }
 
+// op and err are names: cleaned and clipped, never refused, and a field Stakeout does not know (an emitter newer than
+// it) is ignored.
+func TestFeed_OperationAndFailure(t *testing.T) {
+	r := newRig(t, 0, true)
+	for _, ev := range []string{
+		`{"t":1,"ip":"192.0.2.1","method":"POST","path":"/mcp","route":"POST /mcp","status":200,"op":"whois",` +
+			`"err":"invalid_params","field_of_tomorrow":{"x":[1]}}`,
+		`{"t":1,"ip":"192.0.2.1","method":"POST","path":"/mcp","route":"POST /mcp","status":200,` +
+			`"op":"ig nore <b>\u0000é","err":"` + strings.Repeat("é", 100) + `"}`,
+		`{"t":1,"ip":"192.0.2.1","method":"POST","path":"/mcp","route":"POST /mcp","status":200}`,
+	} {
+		if w := r.feed(feedBody(domain, 1, ev), feedKey); w.Code != http.StatusNoContent {
+			t.Fatalf("feed %d %s", w.Code, w.Body)
+		}
+	}
+	waitEvents(t, r.st, 3)
+	var got []string
+	rows, err := r.st.DB.Query(`SELECT op || '|' || err FROM event ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var s string
+		_ = rows.Scan(&s)
+		got = append(got, s)
+	}
+	want := []string{"whois|invalid_params", "ig_nore__b___|" + strings.Repeat("_", feedName/2), "|"}
+	if !slices.Equal(got, want) {
+		t.Errorf("stored %q, want %q", got, want)
+	}
+}
+
+// A request no route took is marked so: no route, or the catch-all's answer for another path. "/" asked for itself is a
+// route.
+func TestFeed_Unrouted(t *testing.T) {
+	r := newRig(t, 0, true)
+	for _, ev := range []string{
+		`{"t":1,"ip":"192.0.2.1","method":"POST","path":"/","route":"POST /","status":401}`,
+		`{"t":1,"ip":"192.0.2.1","method":"GET","path":"/admin","route":"GET /","status":401}`,
+		`{"t":1,"ip":"192.0.2.1","method":"GET","path":"/mcp","route":"","status":405}`,
+		`{"t":1,"ip":"192.0.2.1","method":"GET","path":"/users/1","route":"GET /users/{id}","status":401}`,
+		`{"t":1,"ip":"192.0.2.1","method":"GET","path":"/users/2","route":"GET /users/{id}","status":404}`,
+	} {
+		if w := r.feed(feedBody(domain, 1, ev), feedKey); w.Code != http.StatusNoContent {
+			t.Fatalf("feed %d %s", w.Code, w.Body)
+		}
+	}
+	waitEvents(t, r.st, 5)
+	var got string
+	if err := r.st.DB.QueryRow(`SELECT group_concat(unrouted, '') FROM (SELECT unrouted FROM event ORDER BY id)`).Scan(&got); err != nil ||
+		got != "01101" {
+		t.Errorf("unrouted %s, %v, want 01101", got, err)
+	}
+}
+
 // One crafted request of the feeding product's public clients must not blind the feed: over-long fields are clipped
 // on a rune boundary, unusable events dropped and counted, the rest of the batch stored.
 func TestFeed_PoisonedBatch(t *testing.T) {

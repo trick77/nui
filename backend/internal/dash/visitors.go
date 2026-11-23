@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/trick77/stakeout/backend/internal/agg"
 	"github.com/trick77/stakeout/backend/internal/apix"
 	"github.com/trick77/stakeout/backend/internal/classify"
 	"github.com/trick77/stakeout/backend/internal/insight"
@@ -879,7 +880,7 @@ func (s *Server) actions(ctx context.Context, lim limiter, site int64, key strin
 		tmpls map[string]string
 		ips   []string
 	}
-	cols := "source, kind, name, template, status"
+	cols := "source, kind, name, template, status, op"
 	if addrs != nil {
 		cols += ", ip"
 	}
@@ -895,19 +896,19 @@ func (s *Server) actions(ctx context.Context, lim limiter, site int64, key strin
 		}
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
-			var source, kind, name, tmpl, ip string
+			var source, kind, name, tmpl, op, ip string
 			var status int
 			var n int64
-			dest := []any{&source, &kind, &name, &tmpl, &status, &n}
+			dest := []any{&source, &kind, &name, &tmpl, &status, &op, &n}
 			if addrs != nil {
-				dest = []any{&source, &kind, &name, &tmpl, &status, &ip, &n}
+				dest = []any{&source, &kind, &name, &tmpl, &status, &op, &ip, &n}
 			}
 			if err := rows.Scan(dest...); err != nil {
 				return err
 			}
-			what, _ := describe(source, kind, name, tmpl, status)
+			what, _ := describe(source, kind, name, agg.Endpoint(tmpl, op), status)
 			p.whats, p.ns = append(p.whats, what), append(p.ns, n)
-			if source == "server" { // a request's action is its template and status: one template each
+			if source == "server" { // a request's action is its endpoint and status: one template each
 				p.tmpls[what] = tmpl
 			}
 			if addrs != nil {
@@ -1164,7 +1165,7 @@ func (s *Server) trail(ctx context.Context, site int64, key string, from, to tim
 	}
 	// One event past the bound: whether more follow, and whether the last run goes on into them.
 	limit := maxTrailEvents
-	rows, err := s.query(ctx, `SELECT id, ts, source, kind, name, template, status, `+vitalValue+` FROM event
+	rows, err := s.query(ctx, `SELECT id, ts, source, kind, name, `+endpointSQL+`, status, `+vitalValue+` FROM event
 		`+byActor+` WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?`+cond+` ORDER BY ts DESC, id DESC LIMIT `+
 		strconv.Itoa(limit+1), args...)
 	if err != nil {
@@ -1221,7 +1222,7 @@ func (s *Server) trail(ctx context.Context, site int64, key string, from, to tim
 	if before.id > 0 && len(tr.lines) > 0 {
 		var source, kind, name, tmpl string
 		var status int
-		err := s.row(ctx, `SELECT source, kind, name, template, status FROM event WHERE id = ? AND site_id = ?
+		err := s.row(ctx, `SELECT source, kind, name, `+endpointSQL+`, status FROM event WHERE id = ? AND site_id = ?
 			AND ip_key = ?`, before.id, site, key).Scan(&source, &kind, &name, &tmpl, &status)
 		switch {
 		case err == nil:

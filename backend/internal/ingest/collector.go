@@ -650,6 +650,9 @@ type feedEvent struct {
 	// SigAgent is the Signature-Agent header (Web Bot Auth): the agent a client says it is.
 	SigAgent string `json:"sig_agent"`
 	Account  string `json:"account"`
+	// Op and Err are names of the product's own: an operation inside the route, a failure the status does not show.
+	Op  string `json:"op"`
+	Err string `json:"err"`
 }
 
 // Per-field limits of a feed event in bytes (README, "Server feed"): longer values are clipped, never refused.
@@ -659,7 +662,20 @@ const (
 	feedSF       = 32
 	feedSigAgent = 256
 	feedAccount  = 128
+	feedName     = 64 // op and err
 )
+
+// feedToken cleans an op or err: the dashboard groups by it and the model reads it, so one a client got to choose
+// must not carry more than a name. Anything but ASCII letters, digits and _ . / : - is an underscore.
+func feedToken(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', strings.ContainsRune("_./:-", r):
+			return r
+		}
+		return '_'
+	}, truncate(s, feedName))
+}
 
 // feedEvents turns a feed batch into rows: strings clipped to their limits, events without a usable address or
 // with impossible numbers dropped (the count is returned).
@@ -701,7 +717,10 @@ func (c *Collector) feedEvents(site *sites.Site, in []json.RawMessage) ([]store.
 		template := e.Route
 		// No route (an unmatched 404, the probing case) or the app's catch-all: the path itself is the clue, so
 		// the site's rules or the heuristic name it.
-		if template == "" || e.Status == http.StatusNotFound || strings.HasSuffix(template, " /") || template == "/" {
+		// Asked for itself, "/" is a route: an API may be mounted there.
+		catchAll := strings.HasSuffix(template, " /") || template == "/"
+		unrouted := template == "" || e.Status == http.StatusNotFound || catchAll && path != "/"
+		if unrouted || catchAll {
 			template = strings.TrimSpace(method + " " + site.Template(path))
 		}
 		props := map[string]any{"bytes": e.Bytes}
@@ -721,7 +740,7 @@ func (c *Collector) feedEvents(site *sites.Site, in []json.RawMessage) ([]store.
 			SiteID: site.ID, TS: ts, Source: "server", Kind: "request", Name: e.SFDest,
 			Visitor: anonVisitor(ipKey, e.UA), IP: addr.String(), IPKey: ipKey, UA: e.UA, Path: path,
 			Template: template, Ref: stripQuery(e.Ref), RefHost: refHost, Method: method, Status: e.Status,
-			DurMS: e.DurMS, Account: e.Account, Props: pj,
+			DurMS: e.DurMS, Account: e.Account, Op: feedToken(e.Op), Err: feedToken(e.Err), Unrouted: unrouted, Props: pj,
 		})
 	}
 	return out, dropped

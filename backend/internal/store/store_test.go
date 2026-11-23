@@ -520,7 +520,7 @@ func TestUpgrade_0002(t *testing.T) {
 	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event`).Scan(&events); err != nil || events != 50 {
 		t.Errorf("events after upgrade = %d, %v", events, err)
 	}
-	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 4 {
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 5 {
 		t.Errorf("migrations = %d, %v", migrated, err)
 	}
 	for _, tbl := range []string{"agg_day", "agg_hour", "agg_list", "agg_addr"} {
@@ -568,10 +568,13 @@ func TestUpgrade_0004(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The columns 0004 copied: a later migration adds its own.
+	dumpCols := map[string]string{"actor_class": "*", "agg_hour": `site_id, hour, cls, events, views, actions, starts,
+		requests, refused, errors, browser_ids, addrs, server_addrs`}
 	dump := func(db *sql.DB, table string) string {
 		t.Helper()
 		//nolint:gosec // the test's own table names
-		rows, err := db.Query(`SELECT * FROM ` + table + ` ORDER BY 1, 2, 3`)
+		rows, err := db.Query(`SELECT ` + dumpCols[table] + ` FROM ` + table + ` ORDER BY 1, 2, 3`)
 		if err != nil {
 			t.Fatal(err)
 		}

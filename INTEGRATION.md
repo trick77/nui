@@ -69,7 +69,8 @@ load (the first 50):
   {"t": 1764000000000, "ip": "203.0.113.7", "method": "GET", "path": "/users/42", "route": "GET /users/{id}",
    "status": 200, "dur_ms": 12, "bytes": 5123, "ua": "Mozilla/5.0 ...", "ref": "https://example.org/",
    "lang": "en-US,en;q=0.9", "ch_ua": "\"Chromium\";v=\"142\"", "sf_site": "cross-site", "sf_mode": "navigate",
-   "sf_dest": "document", "sig_agent": "\"https://chatgpt.com\"", "account": "u_8f3a"}
+   "sf_dest": "document", "sig_agent": "\"https://chatgpt.com\"", "account": "u_8f3a",
+   "op": "", "err": ""}
 ]}
 ```
 
@@ -86,6 +87,14 @@ load (the first 50):
 | `ch_ua`, `sf_site`, `sf_mode`, `sf_dest` | `Sec-CH-UA`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`. |
 | `sig_agent` | `Signature-Agent` (Web Bot Auth): the agent a client says it is, as sent. Empty when absent. |
 | `account` | The account the request acted as, once its key or session was checked: an opaque id, never an email or a name. Never one a client merely claims (a login attempt's user name). Report it on every request that came with a good key or session: Stakeout takes a client as signed in when at least half of its requests carry one, those answered 401, 403 or 429 not counted as carrying it. A signed-in program is an API client, whatever its address or user agent is listed as; a signed-in browser a person's once it loaded a document or an asset, sent Sec-Fetch-Site, or its script reported. |
+| `op` | What the request did inside its route, where one route serves several things (an MCP tool, an RPC method): the operation's name. Empty when the route says it all. |
+| `err` | Why the request failed, where its status does not say it (a JSON-RPC error answered 200, a 429 that is a quota or a rate limit): the product's own code (`invalid_params`). Empty on success. |
+
+`op` and `err` are names from fixed lists of the product's own, never text a client chose (an unknown tool's name):
+Stakeout lists and groups by them. Both are optional; anything but ASCII letters, digits and `_ . / : -` is stored as
+`_`. A call failed when `err` is set or its status is 400 or above; a 404 is no call, whatever its route, nor is a 401,
+403 or 405 without a `route` (a scanner's path behind a key check, an MCP client's `GET` of a POST-only path). A site
+of kind `api` is shown by them: calls, accounts and failures per endpoint (`route` and `op`), with durations.
 
 Send exactly these fields, never raw headers (they carry cookies and credentials). Every request counts, 404s and
 401s above all: the probing is what the feed is for. Leave out only the emitter's own traffic and local health

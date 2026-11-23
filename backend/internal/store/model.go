@@ -66,6 +66,9 @@ type Event struct {
 	ASN      int64
 	Country  string
 	Account  string
+	Op       string // the operation inside the route, as the product names it
+	Err      string // why it failed when the status does not say, as the product names it
+	Unrouted bool   // the product's router matched nothing: the template is the path's
 	Cls      int
 	Props    string
 }
@@ -79,7 +82,7 @@ const rowOverhead = 96
 func (e *Event) Size() int {
 	return rowOverhead + len(e.Source) + len(e.Kind) + len(e.Name) + len(e.Visitor) + len(e.SID) + len(e.IP) +
 		2*len(e.IPKey) + len(e.UA) + len(e.Path) + len(e.Template) + len(e.URL) + len(e.Ref) + len(e.RefHost) +
-		len(e.Method) + len(e.Country) + len(e.Account) + len(e.Props)
+		len(e.Method) + len(e.Country) + len(e.Account) + len(e.Op) + len(e.Err) + len(e.Props)
 }
 
 // IngestStat is one site's collector counters for one hour.
@@ -167,6 +170,10 @@ type AggHour struct {
 	BrowserIDs  []byte
 	Addrs       []byte
 	ServerAddrs []byte
+	Failed      int64
+	Durations   []byte
+	Callers     []byte
+	Accounts    []byte
 }
 
 // AggList is one list entry, or a part's Other row, for one site, dimension and UTC day.
@@ -189,6 +196,8 @@ type AggList struct {
 	Addrs   []byte
 	Entries int64
 	Keys    []byte // Other: the collapsed keys' sorted 64-bit hashes, big-endian; nil past 50,000
+	// Durations is the duration histogram, endpoints only.
+	Durations []byte
 }
 
 // AggAddr is one address key's sums for one site, UTC day and part.

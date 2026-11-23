@@ -30,6 +30,11 @@ type dimSpec struct {
 	distinct string
 	server   bool
 	upBad    bool
+	// api marks the figures of calls: they need a day's aggregates from apiBuilder on. durations: rows carry
+	// percentiles. failedB: b counts the failed calls.
+	api, durations, failedB bool
+	// name turns the SQL key into the row's, where that is the server's to say: rows of one name are one.
+	name func(string) string
 	// value and second pick the row's figures from the sums and the distinct count.
 	value, second func(a, b, d int64) int64
 }
@@ -65,6 +70,14 @@ var dims = map[string]dimSpec{
 		key: "CASE WHEN kind = 'js_error' THEN name ELSE template END",
 		sub: "CASE WHEN kind = 'js_error' THEN 'js' ELSE 'server ' || status END", a: "COUNT(*)", b: "0",
 		distinct: "actor", upBad: true, value: countA, second: countD},
+	"endpoints": {where: callWhere, key: endpointSQL, sub: "op", a: "COUNT(*)", b: "SUM(" + failedSQL + ")",
+		distinct: "ip_key", server: true, api: true, durations: true, failedB: true, value: countA, second: countD},
+	"accounts": {where: callWhere + " AND account != ''", key: "account", a: "COUNT(*)", b: "SUM(" + failedSQL + ")",
+		distinct: "ip_key", server: true, api: true, failedB: true, value: countA, second: countD},
+	"agents": {where: callWhere, key: "ua", name: classify.Client, a: "COUNT(*)", b: "SUM(" + failedSQL + ")",
+		distinct: "ip_key", server: true, api: true, failedB: true, value: countA, second: countD},
+	"failures": {where: callWhere + " AND " + failedSQL, key: failureSQL, a: "COUNT(*)", b: "0",
+		distinct: "ip_key", server: true, api: true, upBad: true, value: countA, second: countD},
 }
 
 // distinctExpr is the SQL a list's distinct count runs on. "visitor" is who the Visitors tile counts: a browser's
@@ -87,6 +100,8 @@ type keySums struct {
 	sub  string
 	a, b int64
 	d    uniq
+	// durations is set for a list whose rows carry percentiles.
+	durations agg.Hist
 }
 
 // otherSums is what the aggregates collapsed into their days' Other rows (top-K per day): exact sums, n the
@@ -135,6 +150,7 @@ func (l *listSums) merge(o *listSums) {
 		t.a += g.a
 		t.b += g.b
 		t.d.merge(&g.d)
+		t.durations.Merge(&g.durations)
 	}
 	l.other.a += o.other.a
 	l.other.b += o.other.b
@@ -191,6 +207,10 @@ func (s *Server) scanDim(ctx context.Context, q *query, sc scan, w window, short
 	if err != nil {
 		return err
 	}
+	if sc.api {
+		pl.need = apiBuilder
+		defer func() { pl.need = 0 }()
+	}
 	sub := "''"
 	if sc.dimSpec.sub != "" {
 		sub = "MAX(" + sc.dimSpec.sub + ")"
@@ -210,7 +230,11 @@ func (s *Server) scanDim(ctx context.Context, q *query, sc scan, w window, short
 		for _, pc := range pieces(part.lo, part.hi) {
 			add := newSums()
 			raw := func() error {
-				return s.scanPiece(ctx, stmt, append([]any{q.site.ID, ms(pc[0]), ms(pc[1])}, sc.args...), add)
+				if err := s.scanPiece(ctx, stmt, append([]any{q.site.ID, ms(pc[0]), ms(pc[1])}, sc.args...), sc.name, add); err != nil ||
+					!sc.durations {
+					return err
+				}
+				return s.scanDurations(ctx, q, sc, pc[0], pc[1], add)
 			}
 			if sc.dim == "" {
 				err = raw()
@@ -235,8 +259,8 @@ func (s *Server) scanDim(ctx context.Context, q *query, sc scan, w window, short
 	return nil
 }
 
-// scanPiece adds one raw piece's rows to into.
-func (s *Server) scanPiece(ctx context.Context, stmt string, args []any, into *listSums) error {
+// scanPiece adds one raw piece's rows to into, under their names (nil: the keys as they are).
+func (s *Server) scanPiece(ctx context.Context, stmt string, args []any, name func(string) string, into *listSums) error {
 	rows, err := s.query(ctx, stmt, args...)
 	if err != nil {
 		return err
@@ -247,6 +271,9 @@ func (s *Server) scanPiece(ctx context.Context, stmt string, args []any, into *l
 		var x, y int64
 		if err := rows.Scan(&key, &sb, &x, &y, &dv); err != nil {
 			return err
+		}
+		if name != nil {
+			key = name(key)
 		}
 		g := into.get(key)
 		g.sub = max(g.sub, sb)
@@ -299,7 +326,7 @@ func (s *Server) refusedDay(ctx context.Context, q *query, day int64, into *list
 // keeps its own.
 func (s *Server) scanDay(ctx context.Context, q *query, sc scan, day int64, into *listSums) (bool, error) {
 	rows, err := s.query(ctx, `SELECT d.ok, t.other, t.key, t.sub, t.a, t.b, t.ids, t.addrs, t.n, t.addr_n,
-		t.entries, t.keys`+aggFrom("agg_list", "t.dim = ?3 AND t.day = ?2"+partCond(q.aud)), q.site.ID, day, sc.dim)
+		t.entries, t.keys, t.durations`+aggFrom("agg_list", "t.dim = ?3 AND t.day = ?2"+partCond(q.aud)), q.site.ID, day, sc.dim)
 	if err != nil {
 		return false, err
 	}
@@ -310,8 +337,9 @@ func (s *Server) scanDay(ctx context.Context, q *query, sc scan, day int64, into
 	for rows.Next() {
 		var other, a, b, n, addrN, entries sql.NullInt64
 		var key, sub sql.NullString
-		var ids, addrs, keys []byte
-		if err := rows.Scan(&ok, &other, &key, &sub, &a, &b, &ids, &addrs, &n, &addrN, &entries, &keys); err != nil {
+		var ids, addrs, keys, durations []byte
+		if err := rows.Scan(&ok, &other, &key, &sub, &a, &b, &ids, &addrs, &n, &addrN, &entries, &keys,
+			&durations); err != nil {
 			return false, err
 		}
 		if !ok {
@@ -349,6 +377,9 @@ func (s *Server) scanDay(ctx context.Context, q *query, sc scan, day int64, into
 		g.sub = max(g.sub, sub.String)
 		g.a += a.Int64
 		g.b += b.Int64
+		if err := g.durations.AddEncoded(durations); err != nil {
+			return false, err
+		}
 		sk := ids
 		if byAddr {
 			sk = addrs
@@ -381,6 +412,11 @@ type listRow struct {
 	Entry *float64 `json:"entry,omitempty"`
 	// Level is set for countries only: the map's shade step, 1-4 over the returned rows.
 	Level *int `json:"level,omitempty"`
+	// Failed is set for endpoints and accounts: percent of the calls that failed. P50 and P95 are set for endpoints:
+	// their durations in ms.
+	Failed *float64 `json:"failed,omitempty"`
+	P50    *int64   `json:"p50,omitempty"`
+	P95    *int64   `json:"p95,omitempty"`
 }
 
 type listResp struct {
@@ -537,6 +573,14 @@ func (s *Server) list(ctx context.Context, q *query, dim string, o listOpts) (li
 		}
 		row.Change = sumChange(c, p, cmpOn && !prevClosed.other.hides(k) && !closed.other.hides(k))
 		row.Verdict = verdict(row.Change, d.upBad)
+		if d.failedB {
+			f := round1(pct(float64(g.b), float64(g.a)))
+			row.Failed = &f
+		}
+		if p50, ok := g.durations.Percentile(50); d.durations && ok {
+			p95, _ := g.durations.Percentile(95)
+			row.P50, row.P95 = &p50, &p95
+		}
 		sum += row.Value
 		rows = append(rows, row)
 	}

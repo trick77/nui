@@ -253,6 +253,24 @@ func (w *World) integrations(p *dayPlan, s *Site, d int64) {
 				ip: per.addr, ua: ua, method: "GET", path: "/v1/prefix/" + v, route: "GET /v1/prefix/{addr}",
 				status: 200, dur: int64(8 + r.IntN(80)), bytes: 900, account: account})
 		}
+		// Its tool calls over one route: the operation is the product's name for them, and a failed call is answered
+		// 200 with the reason beside it. A generator of its own: the draws above stay what they were.
+		tr := newRng(w.Seed, 27, int64(s.idx), d, int64(i))
+		for k := range 2 + tr.IntN(12) {
+			op := pick(tr, []string{"whois", "whois", "whois", "search", "search", "tools/list"})
+			rec := record{t: start.Add(time.Duration(k*(900+tr.IntN(5000))) * time.Millisecond), ip: per.addr, ua: ua,
+				method: "POST", path: "/mcp", route: "POST /mcp", op: op, status: 200, bytes: 1800, account: account,
+				dur: int64(20 + tr.IntN(60) + tr.IntN(8)/7*400)}
+			switch n := tr.IntN(40); {
+			case n < 2:
+				rec.err = "invalid_params"
+			case n == 2:
+				rec.err = "upstream_error"
+			case n == 3:
+				rec.status = 429
+			}
+			p.records[s.idx] = append(p.records[s.idx], rec)
+		}
 	}
 }
 

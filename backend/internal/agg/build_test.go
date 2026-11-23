@@ -193,14 +193,15 @@ func checkHours(t *testing.T, st *store.Store, sd siteDay, classes map[int]bool)
 	t.Helper()
 	got := map[[2]int64]store.AggHour{}
 	rows, err := st.DB.Query(`SELECT hour, cls, events, views, actions, starts, requests, refused, errors, browser_ids,
-		addrs, server_addrs FROM agg_hour WHERE site_id = ? AND hour >= ? AND hour < ?`, sd.site, sd.day*24, sd.day*24+24)
+		addrs, server_addrs, failed, durations, callers, accounts FROM agg_hour WHERE site_id = ? AND hour >= ? AND hour < ?`,
+		sd.site, sd.day*24, sd.day*24+24)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for rows.Next() {
 		var h store.AggHour
 		if err := rows.Scan(&h.Hour, &h.Cls, &h.Events, &h.Views, &h.Actions, &h.Starts, &h.Requests, &h.Refused,
-			&h.Errors, &h.BrowserIDs, &h.Addrs, &h.ServerAddrs); err != nil {
+			&h.Errors, &h.BrowserIDs, &h.Addrs, &h.ServerAddrs, &h.Failed, &h.Durations, &h.Callers, &h.Accounts); err != nil {
 			t.Fatal(err)
 		}
 		got[[2]int64{h.Hour, int64(h.Cls)}] = h
@@ -211,7 +212,11 @@ func checkHours(t *testing.T, st *store.Store, sd siteDay, classes map[int]bool)
 		SUM(kind = 'session_start'), SUM(source = 'server'), SUM(source = 'server' AND status >= 400),
 		SUM(kind = 'js_error' OR (source = 'server' AND status >= 500)),
 		COUNT(DISTINCT CASE WHEN source = 'browser' THEN visitor END), COUNT(DISTINCT ip_key),
-		COUNT(DISTINCT CASE WHEN source = 'server' THEN ip_key END)
+		COUNT(DISTINCT CASE WHEN source = 'server' THEN ip_key END),
+		SUM(source = 'server' AND status != 404 AND NOT (unrouted = 1 AND status IN (401, 403, 405)) AND (err != '' OR status >= 400)),
+		SUM(source = 'server' AND status != 404 AND NOT (unrouted = 1 AND status IN (401, 403, 405))),
+		COUNT(DISTINCT CASE WHEN source = 'server' AND status != 404 AND NOT (unrouted = 1 AND status IN (401, 403, 405)) THEN ip_key END),
+		COUNT(DISTINCT CASE WHEN source = 'server' AND status != 404 AND NOT (unrouted = 1 AND status IN (401, 403, 405)) AND account != '' THEN account END)
 		FROM event WHERE site_id = ? AND ts >= ? AND ts < ? GROUP BY hour, c`, sd.site, sd.day*dayMS, (sd.day+1)*dayMS)
 	if err != nil {
 		t.Fatal(err)
@@ -220,9 +225,9 @@ func checkHours(t *testing.T, st *store.Store, sd siteDay, classes map[int]bool)
 	want := 0
 	for rows.Next() {
 		var w store.AggHour
-		var ids, addrs, srv int64
+		var ids, addrs, srv, calls, callers, accounts int64
 		if err := rows.Scan(&w.Hour, &w.Cls, &w.Events, &w.Views, &w.Actions, &w.Starts, &w.Requests, &w.Refused,
-			&w.Errors, &ids, &addrs, &srv); err != nil {
+			&w.Errors, &ids, &addrs, &srv, &w.Failed, &calls, &callers, &accounts); err != nil {
 			t.Fatal(err)
 		}
 		want++
@@ -233,8 +238,18 @@ func checkHours(t *testing.T, st *store.Store, sd siteDay, classes map[int]bool)
 			continue
 		}
 		if g.Events != w.Events || g.Views != w.Views || g.Actions != w.Actions || g.Starts != w.Starts ||
-			g.Requests != w.Requests || g.Refused != w.Refused || g.Errors != w.Errors {
+			g.Requests != w.Requests || g.Refused != w.Refused || g.Errors != w.Errors || g.Failed != w.Failed {
 			t.Errorf("%v hour %d cls %d: %+v, want %+v", sd, w.Hour, w.Cls, g, w)
+		}
+		var durations Hist
+		if err := durations.AddEncoded(g.Durations); err != nil || durations.Count() != calls {
+			t.Errorf("%v hour %d cls %d: %d durations (%v), want %d", sd, w.Hour, w.Cls, durations.Count(), err, calls)
+		}
+		if c := sketchCount(t, g.Callers); !near(c, callers) {
+			t.Errorf("%v hour %d cls %d: callers %d, want %d", sd, w.Hour, w.Cls, c, callers)
+		}
+		if c := sketchCount(t, g.Accounts); !near(c, accounts) {
+			t.Errorf("%v hour %d cls %d: accounts %d, want %d", sd, w.Hour, w.Cls, c, accounts)
 		}
 		if c := sketchCount(t, g.BrowserIDs); !near(c, ids) {
 			t.Errorf("%v hour %d cls %d: browser ids %d, want %d", sd, w.Hour, w.Cls, c, ids)
@@ -276,6 +291,13 @@ var dimSQL = map[string]struct{ where, key, sub, a, b, id, addr string }{
 		"CASE WHEN source = 'browser' THEN visitor ELSE ip_key END", "ip_key"},
 	"status": {"source = 'server' AND status > 0", "CAST(status / 100 AS TEXT) || 'xx'", "''", "COUNT(*)", "0", "''",
 		"''"},
+	"endpoints": {"source = 'server' AND status != 404 AND NOT (unrouted = 1 AND status IN (401, 403, 405))", "CASE WHEN op = '' THEN template ELSE template || ' ' || op END",
+		"MAX(op)", "COUNT(*)", "SUM(err != '' OR status >= 400)", "ip_key", "''"},
+	"accounts": {"source = 'server' AND status != 404 AND NOT (unrouted = 1 AND status IN (401, 403, 405)) AND account != ''", "account", "''", "COUNT(*)",
+		"SUM(err != '' OR status >= 400)", "ip_key", "''"},
+	"agents": {addr: "''"}, // Client has no SQL (wantAgents)
+	"failures": {"source = 'server' AND status != 404 AND NOT (unrouted = 1 AND status IN (401, 403, 405)) AND (err != '' OR status >= 400)",
+		"CASE WHEN err != '' THEN err ELSE 'HTTP ' || status END", "''", "COUNT(*)", "0", "ip_key", "''"},
 }
 
 // want is one expected list entry: its sums, exact distinct count and the bots audience's address count.
@@ -293,6 +315,9 @@ func wantLists(t *testing.T, st *store.Store, sd siteDay, dim string) []want {
 	t.Helper()
 	if dim == "clients" {
 		return wantClients(t, st, sd)
+	}
+	if dim == "agents" {
+		return wantAgents(t, st, sd)
 	}
 	d := dimSQL[dim]
 	//nolint:gosec // the test's own SQL fragments
@@ -312,6 +337,44 @@ func wantLists(t *testing.T, st *store.Store, sd siteDay, dim string) []want {
 		}
 		w.hasAddrs = d.addr != "''"
 		out = append(out, w)
+	}
+	return out
+}
+
+// wantAgents is the agents dimension from plain rows.
+func wantAgents(t *testing.T, st *store.Store, sd siteDay) []want {
+	t.Helper()
+	rows, err := st.DB.Query(`SELECT `+partSQL+`, ua, ip_key, err != '' OR status >= 400 FROM event
+		WHERE site_id = ? AND ts >= ? AND ts < ? AND source = 'server' AND status != 404
+		AND NOT (unrouted = 1 AND status IN (401, 403, 405))`, sd.site, sd.day*dayMS, (sd.day+1)*dayMS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	type k struct {
+		part int
+		key  string
+	}
+	sums, ids := map[k]*want{}, map[k]map[string]bool{}
+	for rows.Next() {
+		var part int
+		var ua, ip string
+		var failed int64
+		if err := rows.Scan(&part, &ua, &ip, &failed); err != nil {
+			t.Fatal(err)
+		}
+		x := k{part, classify.Client(ua)}
+		if sums[x] == nil {
+			sums[x], ids[x] = &want{part: part, key: x.key}, map[string]bool{}
+		}
+		sums[x].a++
+		sums[x].b += failed
+		ids[x][ip] = true
+	}
+	var out []want
+	for x, w := range sums {
+		w.n = int64(len(ids[x]))
+		out = append(out, *w)
 	}
 	return out
 }

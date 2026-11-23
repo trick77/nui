@@ -31,7 +31,7 @@ type Config struct {
 	Domain string `json:"domain"`
 	// Product groups domains in the dashboard's menu ("Lens").
 	Product string `json:"product"`
-	// Kind is site (pages) or api; api only shapes the schema in v1.
+	// Kind is site (pages) or api (with a feed, the dashboard shows calls instead of visits).
 	Kind string `json:"kind"`
 	// FeedKeySHA256 is the hex SHA-256 of the server feed's bearer key; empty means the site has no server feed.
 	FeedKeySHA256 string `json:"feed_key_sha256"`
