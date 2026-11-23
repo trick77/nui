@@ -186,13 +186,13 @@ func (s *Store) SetActorClass(ctx context.Context, a ActorClass, byUA map[string
 	if a.Rest != "" {
 		keep = ClsAPI
 	}
-	args := []any{rest, a.SiteID, a.IPKey, from, from + dayMS, rest, keep}
+	args := []any{rest, a.SiteID, a.IPKey, from, from + dayMS, rest, keep, a.Rest == "human", ClsUnknown}
 	for ua := range byUA {
 		args = append(args, ua)
 	}
 	//nolint:gosec // only placeholders are spliced in; values are bound
 	res, err := tx.ExecContext(ctx, `UPDATE event SET cls = ? WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?
-		AND cls NOT IN (?, ?) AND ua NOT IN (`+placeholders(len(byUA))+`)`, args...)
+		AND cls NOT IN (?, ?) AND NOT (? AND cls = ? AND ua NOT LIKE 'Mozilla/%') AND ua NOT IN (`+placeholders(len(byUA))+`)`, args...)
 	if err != nil {
 		return err
 	}

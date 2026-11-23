@@ -10,7 +10,8 @@
 //
 // A person is shown, never assumed: on a site whose script or feed can show a browser, a client is human only with a
 // browser's evidence (a script beacon, engagement or assets loaded). A browser user agent alone proves nothing: a
-// crawler wearing one (PetalBot reads "Safari · Android") once counted as a person for want of a contrary sign.
+// crawler wearing one (PetalBot reads "Safari · Android") once counted as a person for want of a contrary sign. A user
+// agent that is no browser's is a program's on any site, unless a script's beacon came with it.
 //
 // An address is often shared (an office, a carrier's NAT): the pass weighs each of its user agents on its own. The
 // actor's class follows the majority of its events; the clients that differ keep their own class on their own events,
@@ -27,6 +28,7 @@ import (
 	"net/netip"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,6 +83,13 @@ const (
 
 // reasonAPIOnly is the weak signal that says reasonNoPage with more: the calls were many.
 const reasonAPIOnly = "API only, no page loaded"
+
+// clientReason starts the reason that names a program. The first maxClientReasons are named, the rest are one reason.
+const (
+	clientReason      = "client "
+	maxClientReasons  = 3
+	reasonMoreClients = "more clients"
+)
 
 // reasonAPIClient is the verdict on a program calling with a good key.
 const reasonAPIClient = "signed-in API client"
@@ -200,13 +209,17 @@ func (c *Classifier) instant(a netip.Addr, ua string) int {
 // instantEvent is instant for one event: a script beacon from a browser user agent is a person's evidence itself
 // (the pass then confirms it), unless the browser says it is scripted. Only a batch's first event carries the
 // browser's context (navigator.webdriver): the others wait for the pass, counted with the key's person meanwhile. A
-// program's request answered with an account on it is an API client's, whatever the lists say.
+// program's request answered with an account on it is an API client's, whatever the lists say; one without is unknown
+// automation's at once.
 func (c *Classifier) instantEvent(a netip.Addr, e *store.Event) int {
 	if e.Source == "server" && e.Account != "" && e.Status > 0 && !slices.Contains(unsigned, e.Status) &&
 		!isBrowserUA(e.UA) {
 		return store.ClsAPI
 	}
 	inst := c.instant(a, e.UA)
+	if inst == store.ClsPending && e.Source == "server" && !looksLikeBrowser(e.UA) {
+		return store.ClsUnknown
+	}
 	if inst != store.ClsPending || e.Source != "browser" || !looksLikeBrowser(e.UA) {
 		return inst
 	}
@@ -374,6 +387,10 @@ func (c *Classifier) passSite(ctx context.Context, s *sites.Site, after, upto, s
 				if g.authed > 0 && cmp.Or(d.byUA[g.ua], d.class) != "api" {
 					k.notAPI[g.ua] = true
 				}
+				if d.class == "human" && d.byUA[g.ua] == "" && !looksLikeBrowser(g.ua) {
+					// A person's browser by its beacon, an odd user agent: its requests are not a new program's (Enrich).
+					k.ua[g.ua] = k.cls
+				}
 			}
 			out[m.key] = k
 		}
@@ -403,7 +420,8 @@ const beaconWindow = int64(time.Minute / time.Millisecond)
 // a minute: a crawler wearing a browser's user agent rarely meets a person's beacon for the same page that closely.
 func (c *Classifier) beaconsElsewhere(ctx context.Context, site int64, m actorKey, uas []uaDay, f siteFacts) error {
 	for i, g := range uas {
-		if !f.script || g.browser > 0 || g.engaged > 0 || g.assets > 0 || g.pages == 0 {
+		// Assets are evidence only with a browser's user agent.
+		if !f.script || g.browser > 0 || g.engaged > 0 || g.assets > 0 && looksLikeBrowser(g.ua) || g.pages == 0 {
 			continue
 		}
 		err := c.DB.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM (SELECT site_id, ts, ua, path, ip_key
@@ -623,21 +641,28 @@ func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 			d.class = cl
 		}
 	}
+	named := 0
 	for i, v := range verdicts {
 		switch {
 		case v.class == "api" && d.class != "api":
 			// Beside others a client's good key is no reason for their class.
 			d.reasons = append(d.reasons, also(v, a.uas[i], total))
+		case v.class != "" && strings.HasPrefix(v.reason, clientReason) && named >= maxClientReasons:
+			// A rotating program's names are one reason: each would be a signal and a reading of its own.
+			if !slices.Contains(d.reasons, v.reason) && !slices.Contains(d.reasons, reasonMoreClients) {
+				d.reasons = append(d.reasons, reasonMoreClients)
+			}
 		case v.class != "" && !slices.Contains(d.reasons, v.reason):
 			d.reasons = append(d.reasons, v.reason)
+			if strings.HasPrefix(v.reason, clientReason) {
+				named++
+			}
 		case v.class == "" && (browserEvidence(a.uas[i]) || vouchedFor(a.uas[i], f) || side[i] ||
-			d.class == "api" && isBrowserUA(a.uas[i].ua)):
+			isBrowserUA(a.uas[i].ua) && (d.class == "api" || !f.script && !f.assets)):
 			// A person's browser behind an automated address keeps its own class. Beside API clients one needs no
-			// evidence: a program with a good key casts no suspicion on the browser next to it.
+			// evidence (a program with a good key casts no suspicion on the browser next to it), nor on a site that
+			// cannot show any: alone it would be a person.
 			d.byUA[a.uas[i].ua] = "human"
-		case v.class == "" && d.class == "api":
-			// A program without an account beside one with.
-			d.byUA[a.uas[i].ua] = "unknown"
 		}
 		if v.class != "" && v.class != d.class {
 			d.byUA[a.uas[i].ua] = v.class
@@ -672,9 +697,11 @@ func also(v clientVerdict, g uaDay, total int64) string {
 }
 
 // setRest tells the weighed clients from the rest where a client was signed in (d.rest): nobody's account vouches for a
-// client that was not looked at, and a vouched-for client's new events are its own, not the bot list's (Enrich).
+// client that was not looked at, and a vouched-for client's new events are its own, not the bot list's (Enrich). Also
+// behind people with more clients than the pass weighs: the programs among the rest are no people (store.ActorClass).
 func (d *decision) setRest(uas []uaDay, verdicts []clientVerdict, listed clientVerdict) {
-	if listed.class == "" && !slices.ContainsFunc(verdicts, func(v clientVerdict) bool { return v.class == "api" }) {
+	if listed.class == "" && !slices.ContainsFunc(verdicts, func(v clientVerdict) bool { return v.class == "api" }) &&
+		(d.class != "human" || len(uas) < maxUAs) {
 		return
 	}
 	for i, g := range uas {
@@ -780,13 +807,18 @@ func (c *Classifier) clientVerdict(ip string, addr netip.Addr, g uaDay, f siteFa
 	case g.ua == "":
 		return clientVerdict{class: "unknown", reason: "no user agent"}
 	case automationUA.MatchString(g.ua):
-		return clientVerdict{class: "unknown", reason: "client " + Client(g.ua)}
+		return clientVerdict{class: "unknown", reason: clientReason + Client(g.ua)}
 	case f.fetchMeta && g.server > 0 && g.browser == 0 && g.noFetch == g.server && g.noLang == g.server &&
 		looksLikeBrowser(g.ua):
 		// Every browser sends Accept-Language, and every current one Sec-Fetch-Mode; this feed carries both.
 		return clientVerdict{class: "unknown", reason: "missing browser headers"}
 	case g.server >= machineRequests && apiOnly(g) && avgGap(g) < machineGap:
 		return clientVerdict{class: "unknown", reason: reasonMachinePace}
+	case !looksLikeBrowser(g.ua) && g.browser == 0 && g.engaged == 0 && !g.beaconElsewhere &&
+		(g.docs == 0 || !signedIn(g)):
+		// No browser's user agent, no script's beacon, no document loaded with an account: a program, on a site
+		// without the script too, where nothing else would tell. Assets prove no browser here (apiClient).
+		return clientVerdict{class: "unknown", reason: clientReason + Client(g.ua)}
 	case f.script && !browserEvidence(g) && !signedInBrowser(g):
 		// The site's script shows a browser by its beacon (its assets too, but on a feed alone one cached visit would
 		// be no person), and this client showed neither. Without a page delivered no script could run: a missing

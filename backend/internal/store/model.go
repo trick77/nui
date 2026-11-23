@@ -106,7 +106,8 @@ type ActorClass struct {
 	Class   string
 	Reasons []string
 	// Rest is the class of the events of clients without one of their own (SetActorClass), Class when empty. Set, the
-	// events written as an API client's keep that: nobody weighed their client against the account. No column.
+	// events written as an API client's keep that: nobody weighed their client against the account; and with people's
+	// as the rest, a program's (no "Mozilla/" user agent) written as unknown. No column.
 	Rest string
 }
 
