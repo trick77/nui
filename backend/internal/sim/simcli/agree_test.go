@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,24 +30,56 @@ var distinctDims = map[string]bool{"pages": true, "entry": true, "referrers": tr
 // a day keeps.
 var countValued = map[string]bool{"events": true, "outbound": true, "probed": true, "errors": true}
 
-// agreeCase is one zone and comparison of TestSourcesAgree.
-type agreeCase struct{ tz, cmp string }
+// agreeCase is one zone and comparison of TestSourcesAgree, and its ranges.
+type agreeCase struct {
+	tz, cmp string
+	rngs    []string
+}
 
 // agreeSetup is TestSourcesAgree's size: without -race seeds 3 and 7, 400 days, every zone, both comparisons and
 // every range (12mo in UTC only: its requests read a year of day pieces each, three quarters of the test's time in
-// every zone). Under -race (SQLite crawls: the 400 days alone took 100 s) a smoke run: seed 7, 40 days at a fifth
-// of the scale, Kolkata (a half-hour zone, floored buckets) against the prior period, 24h, 7d and 30d (90d and 12mo
-// read a day piece per statement for months), raceSkips left out, and the three-entry pass at 30d only.
-func agreeSetup() (seeds []uint64, days int, scale float64, cases []agreeCase, rngs []string) {
+// every zone). Under -race (SQLite crawls: the 400 days alone took 100 s) seed 7, 40 days at a fifth of the scale,
+// some days copied to the prior periods and the year before (echo), and a covering set: Zurich (a whole-hour zone:
+// its 24h and 7d hours are agg_hour's) against the prior period at 24h, 7d and 30d, UTC against last year at 90d and
+// 12mo, Kolkata (half hour, floored buckets) at 30d; raceSkips left out; the three-entry pass at 30d and 90d, both
+// comparisons.
+func agreeSetup() (seeds []uint64, days int, scale float64, cases []agreeCase, echo bool) {
 	if raceOn {
-		return []uint64{7}, 40, 0.06, []agreeCase{{"Asia/Kolkata", "prev"}}, []string{"24h", "7d", "30d"}
+		return []uint64{7}, 40, 0.06, []agreeCase{{"Europe/Zurich", "prev", []string{"24h", "7d", "30d"}},
+			{"UTC", "yoy", []string{"90d", "12mo"}}, {"Asia/Kolkata", "prev", []string{"30d"}}}, true
 	}
 	for _, tz := range []string{"UTC", "Europe/Zurich", "Asia/Kolkata", "America/New_York"} {
 		for _, c := range []string{"prev", "yoy"} {
-			cases = append(cases, agreeCase{tz, c})
+			rngs := ranges
+			if tz != "UTC" {
+				rngs = slices.DeleteFunc(slices.Clone(ranges), func(r string) bool { return r == "12mo" })
+			}
+			cases = append(cases, agreeCase{tz, c, rngs})
 		}
 	}
-	return []uint64{3, 7}, 400, 0.15, cases, ranges
+	return []uint64{3, 7}, 400, 0.15, cases, false
+}
+
+// echoDays copies five days of a short history 120 and 365 days back, the visitors and addresses as they were, the
+// sessions under ids of their own (one id a year apart would be one visit raw, two from the days): the prior periods
+// of 90d (and 30d's, in the history itself), the year before and 12mo's prior year hold data, the days the copies
+// land on built.
+func echoDays(t *testing.T, st *store.Store, w *sim.World) {
+	t.Helper()
+	from := w.Anchor.AddDate(0, 0, -10).Truncate(24 * time.Hour)
+	for _, back := range []int{120, 365} {
+		if _, err := st.DB.ExecContext(t.Context(), `INSERT INTO event (site_id, ts, source, kind, name, visitor, sid,
+			ip, ip_key, ua, path, template, url, ref, ref_host, method, status, dur_ms, asn, country, account, cls, props)
+			SELECT site_id, ts - ?1, source, kind, name, visitor, CASE WHEN sid = '' THEN '' ELSE sid || '~' || ?1 END,
+			ip, ip_key, ua, path, template, url, ref, ref_host, method, status, dur_ms, asn, country, account, cls, props
+			FROM event WHERE ts >= ?2 AND ts < ?3`,
+			int64(back)*86_400_000, from.UnixMilli(), from.AddDate(0, 0, 5).UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := agg.BuildThrough(t.Context(), st, w.Anchor, agg.TopK); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // agreeScenarios play on a 400-day history: the half year of growth, and the stories of the last days, whose lists
@@ -63,13 +96,23 @@ func TestSourcesAgree(t *testing.T) {
 	if testing.Short() {
 		t.Skip("400-day histories")
 	}
-	seeds, days, scale, cases, rngs := agreeSetup()
+	seeds, days, scale, cases, echo := agreeSetup()
 	for _, seed := range seeds {
 		t.Run("seed"+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
 			start := time.Now()
 			st, w := classifiedHistory(t, seed, scale, days, agreeScenarios)
+			if echo {
+				echoDays(t, st, w)
+			}
 			t.Logf("history in %v", time.Since(start).Round(time.Millisecond))
+			// The premise of equal visits: no session of a classified day has rows in both parts.
+			var mixed int64
+			if err := st.DB.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM (SELECT 1 FROM event WHERE sid != ''
+				GROUP BY site_id, ts / 86400000, ip_key, sid HAVING MIN(cls = 1) != MAX(cls = 1))`).Scan(&mixed); err != nil ||
+				mixed != 0 {
+				t.Errorf("sessions with rows in both parts: %d, %v", mixed, err)
+			}
 			now := w.Anchor.Add(time.Minute)
 			raw, err := newDashboard(t.Context(), st, w, now, dash.SourceRaw)
 			if err != nil {
@@ -85,10 +128,7 @@ func TestSourcesAgree(t *testing.T) {
 				for _, c := range cases {
 					t.Run(strings.ReplaceAll(c.tz, "/", "-")+"_"+c.cmp, func(t *testing.T) {
 						t.Parallel()
-						for _, rng := range rngs {
-							if rng == "12mo" && c.tz != "UTC" {
-								continue // a year of day pieces per request: in UTC only, as the dash tests
-							}
+						for _, rng := range c.rngs {
 							t.Run(rng, func(t *testing.T) {
 								t.Parallel()
 								get := func(ep string, params map[string]string) (map[string]any, error) {
@@ -248,11 +288,17 @@ func agreeBodies(t *testing.T, where, ep string, params map[string]string, raw, 
 		case "classes":
 			return strings.HasSuffix(path, ".addresses")
 		case "list":
-			return distinctDims[params["dim"]] && (strings.HasPrefix(path, ".rows[") || path == ".other")
+			return distinctDims[params["dim"]] && (rowPath.MatchString(path) || path == ".other")
 		case "clients": // at 30d and longer a sketch per client
 			return !short
 		}
 		return false
+	}
+	// In a list's loose rows only the distinct figure is loose (and the change derived from it when it is the
+	// value); the counted one stays exact.
+	field := ""
+	if ep == "list" {
+		field = distinctField(params["dim"])
 	}
 	var walk func(path string, a, b any, isLoose bool)
 	walk = func(path string, a, b any, isLoose bool) {
@@ -264,11 +310,13 @@ func agreeBodies(t *testing.T, where, ep string, params map[string]string, raw, 
 				t.Errorf("%s %s: raw %v, aggregates %v", where, path, a, b)
 				return
 			}
+			// A list row's change follows its distinct value: compared exactly whenever the two values are equal.
+			sameValue := ep == "list" && field == "value" && x["value"] == y["value"]
 			for k, v := range x {
-				if isLoose && (k == "change" || k == "verdict") {
+				if isLoose && (k == "change" || k == "verdict") && (field == "" || field == "value") && !sameValue {
 					continue
 				}
-				walk(path+"."+k, v, y[k], isLoose)
+				walk(path+"."+k, v, y[k], isLoose && (field == "" || k == field))
 			}
 		case []any:
 			y, ok := b.([]any)
@@ -293,35 +341,64 @@ func agreeBodies(t *testing.T, where, ep string, params map[string]string, raw, 
 	walk("", raw, got, false)
 }
 
-// near: a distinct count from sketches is off the exact one by index collisions only, while sparse.
+// distinctField is the JSON field of a list's rows holding its distinct count: the second figure of a counted list,
+// else the value.
+func distinctField(dim string) string {
+	if countValued[dim] {
+		return "second"
+	}
+	return "value"
+}
+
+// rowPath is a list row's own path in an answer.
+var rowPath = regexp.MustCompile(`^\.rows\[\d+\]$`)
+
+// near: a distinct count from sketches is off the exact one by index collisions only, while sparse: none below 50
+// (an off-by-one there is a defect, not a collision), at most max(1, 0.1 %) above.
 func near(a, b float64) bool {
+	if math.Max(a, b) < 50 {
+		return a == b
+	}
 	return math.Abs(a-b) <= math.Max(1, 0.001*math.Max(math.Abs(a), math.Abs(b)))
 }
 
-// topThree checks the lists and Noteworthy over aggregates kept to three entries a day per part.
-func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard) {
+// cutKeys is, per dimension, the hashes of the keys a site's Other rows hold on the days of spans (unix days,
+// inclusive).
+func cutKeys(t *testing.T, st *store.Store, site int64, spans [][2]int64) map[string]map[uint64]bool {
 	t.Helper()
-	collapsed := map[string]map[uint64]bool{} // per dimension, the hashes of every key some day cut
-	cut, err := st.DB.QueryContext(t.Context(), `SELECT dim, keys FROM agg_list WHERE other = 1`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for cut.Next() {
-		var dim string
-		var keys []byte
-		if err := cut.Scan(&dim, &keys); err != nil {
+	out := map[string]map[uint64]bool{}
+	for _, sp := range spans {
+		rows, err := st.DB.QueryContext(t.Context(), `SELECT dim, keys FROM agg_list WHERE site_id = ? AND other = 1
+			AND day >= ? AND day <= ?`, site, sp[0], sp[1])
+		if err != nil {
 			t.Fatal(err)
 		}
-		if collapsed[dim] == nil {
-			collapsed[dim] = map[uint64]bool{}
+		for rows.Next() {
+			var dim string
+			var keys []byte
+			if err := rows.Scan(&dim, &keys); err != nil {
+				t.Fatal(err)
+			}
+			if out[dim] == nil {
+				out[dim] = map[uint64]bool{}
+			}
+			for _, h := range agg.OtherKeys(keys) {
+				out[dim][h] = true
+			}
 		}
-		for _, h := range agg.OtherKeys(keys) {
-			collapsed[dim][h] = true
-		}
+		_ = rows.Close()
 	}
-	_ = cut.Close()
-	if len(collapsed["pages"]) == 0 {
-		t.Fatal("no page cut at three entries a day")
+	return out
+}
+
+// topThree checks the lists and Noteworthy over aggregates kept to three entries a day per part, both ways: every
+// row of either answer is the other's or, cut on a day of the range or its comparison, a lower bound of it (a counted
+// list), with no change or raw's; a key never cut there has raw's figures and change.
+func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard) {
+	t.Helper()
+	ids, err := st.Sites(t.Context())
+	if err != nil {
+		t.Fatal(err)
 	}
 	byKey := func(body map[string]any) map[string]map[string]any {
 		out := map[string]map[string]any{}
@@ -333,11 +410,21 @@ func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard)
 	num := func(v any) float64 { f, _ := v.(float64); return f }
 	rngs, cmps := []string{"30d", "90d", "12mo"}, []string{"prev", "yoy"}
 	if raceOn {
-		rngs, cmps = []string{"30d"}, []string{"prev"}
+		rngs = []string{"30d", "90d"}
 	}
+	today := w.Anchor.UnixMilli() / 86_400_000
+	anyCut := false
 	for _, s := range w.Sites {
 		for _, rng := range rngs {
 			for _, c := range cmps {
+				// The range and its comparison, a day's margin either side.
+				n := map[string]int64{"30d": 30, "90d": 90, "12mo": 366}[rng]
+				spans := [][2]int64{{today - 2*n - 2, today + 1}}
+				if c == "yoy" {
+					spans = [][2]int64{{today - n - 2, today + 1}, {today - 365 - n - 2, today - 365 + 2}}
+				}
+				collapsed := cutKeys(t, st, ids[s.Domain].ID, spans)
+				anyCut = anyCut || len(collapsed["pages"]) > 0
 				for _, dim := range listDims {
 					if dim == "refused" { // per address, from agg_addr: never cut
 						continue
@@ -346,17 +433,33 @@ func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard)
 						"limit": "500"}
 					where := fmt.Sprint(params)
 					rb, gb := answer(t, raw, "list", params), answer(t, aggs, "list", params)
-					rawRows := byKey(rb)
-					for k, g := range byKey(gb) {
+					rawRows, gotRows := byKey(rb), byKey(gb)
+					dfield, cfield := distinctField(dim), "second" // the distinct figure, the counted one
+					if dfield == "second" {
+						cfield = "value"
+					}
+					for k := range rawRows {
+						if _, ok := gotRows[k]; !ok && !collapsed[dim][agg.Hash(k)] {
+							t.Errorf("%s: %s, never cut, missing from the aggregates", where, k)
+						}
+					}
+					for k, g := range gotRows {
 						r, ok := rawRows[k]
+						cut := collapsed[dim][agg.Hash(k)]
+						sameChange := changeOf(g["change"]) == changeOf(r["change"]) && g["verdict"] == r["verdict"]
 						switch {
 						case !ok:
 							t.Errorf("%s: %s is no raw key", where, k)
 							continue
-						case !collapsed[dim][agg.Hash(k)] && (!near(num(g["value"]), num(r["value"])) ||
-							!near(num(g["second"]), num(r["second"])) ||
-							!distinctDims[dim] && (g["value"] != r["value"] || g["second"] != r["second"])):
+						case !cut && (!near(num(g[dfield]), num(r[dfield])) || g[cfield] != r[cfield]):
 							t.Errorf("%s %s, never cut: %v, raw %v", where, k, g, r)
+						case !cut && num(g[dfield]) == num(r[dfield]) && !sameChange:
+							t.Errorf("%s %s, never cut: change %v %v, raw %v %v", where, k, g["change"], g["verdict"],
+								r["change"], r["verdict"])
+						case cut && countValued[dim] && num(g["value"]) > num(r["value"]):
+							t.Errorf("%s %s, cut: %v above raw's %v", where, k, g["value"], r["value"])
+						case cut && g["change"] != nil && changeOf(g["change"]) != changeOf(r["change"]):
+							t.Errorf("%s %s, cut: change %v, raw %v", where, k, g["change"], r["change"])
 						}
 						if isNew(g["change"]) && !isNew(r["change"]) {
 							t.Errorf("%s %s: new from the aggregates, raw %v", where, k, r["change"])
@@ -372,8 +475,9 @@ func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard)
 					if countValued[dim] && sum(rb) != sum(gb) {
 						t.Errorf("%s: rows and Other %v, raw %v", where, sum(gb), sum(rb))
 					}
-					if num(gb["total"]) != float64(len(rows(gb)))+num(gb["other"].(map[string]any)["count"]) {
-						t.Errorf("%s: total %v", where, gb["total"])
+					// Every key, shown or only in an Other's listed hashes: raw's count (no day past the listing bound).
+					if num(gb["total"]) != num(rb["total"]) {
+						t.Errorf("%s: total %v, raw %v", where, gb["total"], rb["total"])
 					}
 				}
 				params := map[string]string{"site": s.Domain, "range": rng, "cmp": c, "tz": "UTC", "findings": "all"}
@@ -389,9 +493,17 @@ func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard)
 			}
 		}
 	}
+	if !anyCut {
+		t.Fatal("no page cut at three entries a day")
+	}
 }
 
 func isNew(change any) bool {
 	m, ok := change.(map[string]any)
 	return ok && m["new"] == true
+}
+
+func changeOf(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
 }
