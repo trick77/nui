@@ -129,6 +129,15 @@ func (pl *plan) rawOK(day int64) bool {
 	return pl.hasRaw && day >= pl.oldest && (!ok || st.raw)
 }
 
+// rawCovers: no day touching [from, to) lost raw to retention (a span before the first event never had any, which
+// is all there). Under every source: the raw-only reads (a template's paths) ask it.
+func (pl *plan) rawCovers(ctx context.Context, from, to time.Time) (bool, error) {
+	var cut bool
+	err := pl.s.row(ctx, `SELECT EXISTS (SELECT 1 FROM agg_day WHERE site_id = ? AND day >= ? AND day <= ? AND raw = 0)`,
+		pl.site, ms(from)/dayMS, (ms(to)-1)/dayMS).Scan(&cut)
+	return !cut, err
+}
+
 // pick is the source of the piece [lo, hi). unit is the table's grain (an hour, a day): a piece not on it is no
 // aggregate's and is read raw. short marks a 24h or 7d range and its prior period: raw first.
 func (pl *plan) pick(ctx context.Context, lo, hi time.Time, unit time.Duration, short bool) (how, error) {

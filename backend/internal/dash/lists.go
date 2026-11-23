@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/trick77/stakeout/backend/internal/agg"
 	"github.com/trick77/stakeout/backend/internal/apix"
 	"github.com/trick77/stakeout/backend/internal/classify"
 	"github.com/trick77/stakeout/backend/internal/store"
@@ -80,58 +81,158 @@ func distinctExpr(distinct, aud string) string {
 	return "CASE WHEN source = 'browser' THEN visitor ELSE '' END"
 }
 
-// keySums is one key's sums.
+// keySums is one key's sums: a and b added up, d its distinct ids.
 type keySums struct {
 	sub  string
 	a, b int64
-	d    map[string]struct{}
+	d    uniq
 }
 
-type aggMap map[string]*keySums
+// otherSums is what the aggregates collapsed into their days' Other rows (top-K per day): exact sums, n the
+// collapsed entries' daily distinct counts added up (an upper bound), and the collapsed keys' hashes.
+type otherSums struct {
+	a, b, n, entries int64
+	hashes           map[uint64]struct{}
+	partial          bool  // some day's Other did not list its keys (past 50,000)
+	unlisted         int64 // the most keys one such day's Other held
+}
 
-func (m aggMap) get(k string) *keySums {
-	g, ok := m[k]
+// hides reports whether key may be in an Other row: its figure there is not known.
+func (o *otherSums) hides(key string) bool {
+	if o.partial {
+		return true
+	}
+	_, ok := o.hashes[agg.Hash(key)]
+	return ok
+}
+
+// empty: no day collapsed anything.
+func (o *otherSums) empty() bool { return o.entries == 0 && !o.partial }
+
+// listSums is a list's keys over a span and what the aggregates' Other rows hold of it.
+type listSums struct {
+	m     map[string]*keySums
+	other otherSums
+}
+
+func newSums() *listSums { return &listSums{m: map[string]*keySums{}} }
+
+func (l *listSums) get(k string) *keySums {
+	g, ok := l.m[k]
 	if !ok {
-		g = &keySums{d: map[string]struct{}{}}
-		m[k] = g
+		g = &keySums{}
+		l.m[k] = g
 	}
 	return g
+}
+
+// merge adds o to l.
+func (l *listSums) merge(o *listSums) {
+	for k, g := range o.m {
+		t := l.get(k)
+		t.sub = max(t.sub, g.sub)
+		t.a += g.a
+		t.b += g.b
+		t.d.merge(&g.d)
+	}
+	l.other.a += o.other.a
+	l.other.b += o.other.b
+	l.other.n += o.other.n
+	l.other.entries += o.other.entries
+	l.other.partial = l.other.partial || o.other.partial
+	l.other.unlisted = max(l.other.unlisted, o.other.unlisted)
+	for h := range o.other.hashes {
+		if l.other.hashes == nil {
+			l.other.hashes = map[uint64]struct{}{}
+		}
+		l.other.hashes[h] = struct{}{}
+	}
 }
 
 // closedWin is [from, to) as a window without an open part.
 func closedWin(from, to time.Time) window { return window{From: from, Closed: to, End: to} }
 
-// scanDim reads a dimension over w into into[0] (the whole window) and into[1] (its closed part only).
-func (s *Server) scanDim(ctx context.Context, q *query, d dimSpec, extra string, args []any, w window,
-	into ...aggMap) error {
+// scan is what a list reads: the raw statement's (dimSpec, extra and args), and the agg_list dimension that serves
+// it, with what to take of its rows.
+type scan struct {
+	dimSpec
+	dim   string // "" when only raw answers (the paths inside a template)
+	extra string
+	args  []any
+	sub   string // only the rows of this sub (events' sub=)
+	fromB bool   // a row's b is the figure (a network's server rows, spike:net)
+}
+
+// scanOf is a list dimension's scan; one agg_list does not hold is read raw.
+func scanOf(dim string) scan {
+	sc := scan{dimSpec: dims[dim]}
+	if slices.Contains(agg.Dims, dim) {
+		sc.dim = dim
+	}
+	return sc
+}
+
+// partCond is the agg_list (and agg_addr) part an audience reads: people are part 1, everything automated part 2.
+func partCond(aud string) string {
+	switch aud {
+	case "humans":
+		return " AND t.part = 1"
+	case "bots":
+		return " AND t.part = 2"
+	}
+	return ""
+}
+
+// scanDim reads a list over w, a day at a time from its source, into into[0] (the whole window) and into[1] (its
+// closed part only). short: a 24h or 7d range or its prior period, read raw first.
+func (s *Server) scanDim(ctx context.Context, q *query, sc scan, w window, short bool, into ...*listSums) error {
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		return err
+	}
 	sub := "''"
-	if d.sub != "" {
-		sub = "MAX(" + d.sub + ")"
+	if sc.dimSpec.sub != "" {
+		sub = "MAX(" + sc.dimSpec.sub + ")"
 	}
-	dist, group := "''", d.key
-	if d.distinct != "" {
-		dist = distinctExpr(d.distinct, q.aud)
-		group = d.key + ", " + dist
+	dist, group := "''", sc.key
+	if sc.distinct != "" {
+		dist = distinctExpr(sc.distinct, q.aud)
+		group = sc.key + ", " + dist
 	}
-	stmt := `SELECT ` + d.key + `, ` + sub + `, ` + d.a + `, ` + d.b + `, ` + dist + ` FROM event
-		WHERE site_id = ? AND ts >= ? AND ts < ? AND ` + d.where + ` AND ` + audWhere(q.aud) + extra +
+	stmt := `SELECT ` + sc.key + `, ` + sub + `, ` + sc.a + `, ` + sc.b + `, ` + dist + ` FROM event
+		WHERE site_id = ? AND ts >= ? AND ts < ? AND ` + sc.where + ` AND ` + audWhere(q.aud) + sc.extra +
 		` GROUP BY ` + group
 	for _, part := range []struct {
 		lo, hi time.Time
 		open   bool
 	}{{w.From, w.Closed, false}, {w.Closed, w.End, true}} {
 		for _, pc := range pieces(part.lo, part.hi) {
-			a := append([]any{q.site.ID, ms(pc[0]), ms(pc[1])}, args...)
-			if err := s.scanPiece(ctx, stmt, a, part.open, into); err != nil {
+			add := newSums()
+			raw := func() error {
+				return s.scanPiece(ctx, stmt, append([]any{q.site.ID, ms(pc[0]), ms(pc[1])}, sc.args...), add)
+			}
+			if sc.dim == "" {
+				err = raw()
+			} else {
+				err = pl.read(ctx, pc[0], pc[1], readSpan, short, func() (bool, error) {
+					return s.scanDay(ctx, q, sc, ms(pc[0])/dayMS, add)
+				}, raw)
+			}
+			if err != nil {
 				return err
+			}
+			for j, m := range into {
+				if j == 0 || !part.open {
+					m.merge(add)
+				}
 			}
 		}
 	}
 	return nil
 }
 
-// scanPiece adds one piece's rows to the maps; an open bucket's skip the closed map (into[1]).
-func (s *Server) scanPiece(ctx context.Context, stmt string, args []any, open bool, into []aggMap) error {
+// scanPiece adds one raw piece's rows to into.
+func (s *Server) scanPiece(ctx context.Context, stmt string, args []any, into *listSums) error {
 	rows, err := s.query(ctx, stmt, args...)
 	if err != nil {
 		return err
@@ -143,20 +244,88 @@ func (s *Server) scanPiece(ctx context.Context, stmt string, args []any, open bo
 		if err := rows.Scan(&key, &sb, &x, &y, &dv); err != nil {
 			return err
 		}
-		for j, m := range into {
-			if j == 1 && open {
-				continue
-			}
-			g := m.get(key)
-			g.sub = max(g.sub, sb)
-			g.a += x
-			g.b += y
-			if dv != "" {
-				g.d[dv] = struct{}{}
-			}
+		g := into.get(key)
+		g.sub = max(g.sub, sb)
+		g.a += x
+		g.b += y
+		if dv != "" {
+			g.d.add(dv)
 		}
 	}
 	return rows.Err()
+}
+
+// scanDay adds one day's agg_list rows to into, false (nothing added) when the day is not clean in the statement's
+// snapshot. The distinct ids are the rows' identity sketch, for the bots audience the address keys of a visitor or
+// actor dimension (an Other row's: their counts' sum, addr_n). Events keep an Other row per sub, so a sub= filter
+// keeps its own.
+func (s *Server) scanDay(ctx context.Context, q *query, sc scan, day int64, into *listSums) (bool, error) {
+	rows, err := s.query(ctx, `SELECT d.ok, t.other, t.key, t.sub, t.a, t.b, t.ids, t.addrs, t.n, t.addr_n,
+		t.entries, t.keys`+aggFrom("agg_list", "t.dim = ?3 AND t.day = ?2"+partCond(q.aud)), q.site.ID, day, sc.dim)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	byAddr := q.aud == "bots" && (sc.distinct == "visitor" || sc.distinct == "actor")
+	add := newSums()
+	ok := false
+	for rows.Next() {
+		var other, a, b, n, addrN, entries sql.NullInt64
+		var key, sub sql.NullString
+		var ids, addrs, keys []byte
+		if err := rows.Scan(&ok, &other, &key, &sub, &a, &b, &ids, &addrs, &n, &addrN, &entries, &keys); err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+		if !other.Valid || (sc.sub != "" && sub.String != sc.sub) {
+			continue
+		}
+		if sc.fromB {
+			a.Int64 = b.Int64
+		}
+		if other.Int64 == 1 {
+			o := &add.other
+			o.a += a.Int64
+			o.b += b.Int64
+			if byAddr {
+				o.n += addrN.Int64
+			} else {
+				o.n += n.Int64
+			}
+			o.entries += entries.Int64
+			if keys == nil {
+				o.partial = true
+				o.unlisted = max(o.unlisted, entries.Int64)
+			}
+			for _, h := range agg.OtherKeys(keys) {
+				if o.hashes == nil {
+					o.hashes = map[uint64]struct{}{}
+				}
+				o.hashes[h] = struct{}{}
+			}
+			continue
+		}
+		g := add.get(key.String)
+		g.sub = max(g.sub, sub.String)
+		g.a += a.Int64
+		g.b += b.Int64
+		sk := ids
+		if byAddr {
+			sk = addrs
+		}
+		if sc.distinct != "" {
+			if err := g.d.addSketch(sk); err != nil {
+				return false, err
+			}
+		}
+	}
+	if err := rows.Err(); err != nil || !ok {
+		return false, err
+	}
+	into.merge(add)
+	return true, nil
 }
 
 type listRow struct {
@@ -215,28 +384,30 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request, q *query) {
 		apix.Error(w, http.StatusBadRequest, "sort must be volume or change")
 		return
 	}
-	o := listOpts{args: []any{}, sortBy: sortBy, limit: limit, needle: strings.ToLower(strings.TrimSpace(v.Get("q")))}
+	o := listOpts{scan: scanOf(dim), sortBy: sortBy, limit: limit,
+		needle: strings.ToLower(strings.TrimSpace(v.Get("q")))}
 	within := v.Get("within")
 	if within != "" {
 		if dim != "pages" && dim != "entry" {
 			apix.Error(w, http.StatusBadRequest, "within is for pages and entry")
 			return
 		}
-		// The raw paths inside one template.
+		// The raw paths inside one template: no aggregate keeps paths, so raw only.
 		o.extra, o.args = " AND template = ?", []any{within}
-		d.key = "path"
+		o.key, o.dim = "path", ""
 	}
+	// A name used both as a custom event and an automatic kind is one aggregate row: its larger sub takes it.
 	switch sub := v.Get("sub"); {
 	case sub == "":
 	case dim != "events" || (sub != "auto" && sub != "custom"):
 		apix.Error(w, http.StatusBadRequest, "sub is auto or custom, for dim=events")
 		return
 	case sub == "custom":
-		o.extra += " AND kind = 'custom'"
+		o.extra, o.scan.sub = o.extra+" AND kind = 'custom'", sub
 	default:
-		o.extra += " AND kind != 'custom'"
+		o.extra, o.scan.sub = o.extra+" AND kind != 'custom'", sub
 	}
-	resp, err := s.list(r.Context(), q, dim, d, o)
+	resp, err := s.list(r.Context(), q, dim, o)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -252,42 +423,60 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request, q *query) {
 
 // listOpts are a list request's choices beyond the dimension.
 type listOpts struct {
-	extra  string
-	args   []any
+	scan
 	sortBy string
 	limit  int
 	needle string // lower-case substring of key or label, applied before the top-N
 }
 
-// list computes a top-N list: the whole range's figures, the change on closed buckets against the comparison's.
-func (s *Server) list(ctx context.Context, q *query, dim string, d dimSpec, o listOpts) (listResp, error) {
-	cur, closed := aggMap{}, aggMap{}
-	if err := s.scanDim(ctx, q, d, o.extra, o.args, q.p.win, cur, closed); err != nil {
+// figure is a key's value in a list.
+func (d dimSpec) figure(g *keySums) int64 { return d.value(g.a, g.b, g.d.count()) }
+
+// list computes a top-N list: the whole range's figures, the change on the closed part against the comparison's.
+//
+// From the aggregates, a key collapsed into a day's Other row (past the day's top-K) is a lower bound, and Other holds
+// the rest: its count is the hidden rows plus the collapsed keys no row shows, its value the hidden rows' plus the
+// Other rows' (exact for counted figures, an upper bound for distinct ones). A key that may sit in an Other row of
+// the closed part or of the comparison has an unknown change (null), never "new". The paths inside a template are
+// raw only: with the comparison's raw not all there, none has a change.
+func (s *Server) list(ctx context.Context, q *query, dim string, o listOpts) (listResp, error) {
+	d := o.dimSpec
+	cur, closed := newSums(), newSums()
+	if err := s.scanDim(ctx, q, o.scan, q.p.win, !q.p.agg, cur, closed); err != nil {
 		return listResp{}, err
 	}
-	prevClosed := aggMap{}
-	if q.p.prevWin != nil {
-		if err := s.scanDim(ctx, q, d, o.extra, o.args, *q.p.prevWin, prevClosed); err != nil {
+	prevClosed := newSums()
+	cmpOn := q.p.prevWin != nil
+	if cmpOn {
+		if err := s.scanDim(ctx, q, o.scan, *q.p.prevWin, !q.p.prevAgg, prevClosed); err != nil {
 			return listResp{}, err
 		}
+		if o.dim == "" {
+			pl, err := s.planOf(ctx, q)
+			if err != nil {
+				return listResp{}, err
+			}
+			if cmpOn, err = pl.rawCovers(ctx, q.p.prevWin.From, q.p.prevWin.Closed); err != nil {
+				return listResp{}, err
+			}
+		}
 	}
-	cmpOn := q.p.prevWin != nil
-	rows := make([]listRow, 0, len(cur))
+	rows := make([]listRow, 0, len(cur.m))
 	var sum int64
-	for k, g := range cur {
-		row := listRow{Key: k, Label: k, Sub: g.sub, Value: d.value(g.a, g.b, int64(len(g.d))),
-			Second: d.second(g.a, g.b, int64(len(g.d)))}
+	for k, g := range cur.m {
+		row := listRow{Key: k, Label: k, Sub: g.sub, Value: d.figure(g), Second: d.second(g.a, g.b, g.d.count())}
 		if row.Value == 0 { // an address with requests but no refusals is no row of "refused"
 			continue
 		}
 		var c, p float64
-		if cg, ok := closed[k]; ok {
-			c = float64(d.value(cg.a, cg.b, int64(len(cg.d))))
+		if cg, ok := closed.m[k]; ok {
+			c = float64(d.figure(cg))
 		}
-		if pg, ok := prevClosed[k]; ok {
-			p = float64(d.value(pg.a, pg.b, int64(len(pg.d))))
+		pg, seen := prevClosed.m[k]
+		if seen {
+			p = float64(d.figure(pg))
 		}
-		row.Change = sumChange(c, p, cmpOn)
+		row.Change = sumChange(c, p, cmpOn && !prevClosed.other.hides(k) && !closed.other.hides(k))
 		row.Verdict = verdict(row.Change, d.upBad)
 		sum += row.Value
 		rows = append(rows, row)
@@ -310,6 +499,27 @@ func (s *Server) list(ctx context.Context, q *query, dim string, d dimSpec, o li
 		return cmp.Compare(a.Key, b.Key)
 	})
 	resp := listResp{Rows: []listRow{}, Total: len(rows)}
+	// The keys only the aggregates' Other rows hold: part of every share's base, as raw's unmatched rows are, but no
+	// search can match them. Their count is the listed hashes no row shows; with a day's Other past the listing
+	// bound, a lower bound: the larger of that and the most keys one such day held less every row shown (a key can
+	// sit in several days' Others, so the days do not add up).
+	if co := &cur.other; !co.empty() {
+		sum += d.value(co.a, co.b, co.n)
+	}
+	if co := &cur.other; !co.empty() && o.needle == "" {
+		hidden := int64(len(co.hashes))
+		for _, r := range rows {
+			if _, ok := co.hashes[agg.Hash(r.Key)]; ok {
+				hidden--
+			}
+		}
+		if co.partial {
+			hidden = max(hidden, co.unlisted-int64(len(rows)))
+		}
+		resp.Other.Count += int(hidden)
+		resp.Total += int(hidden)
+		resp.Other.Value += d.value(co.a, co.b, co.n)
+	}
 	for i, row := range rows {
 		if i >= o.limit {
 			resp.Other.Count++
@@ -321,7 +531,7 @@ func (s *Server) list(ctx context.Context, q *query, dim string, d dimSpec, o li
 		}
 		resp.Rows = append(resp.Rows, row)
 	}
-	if err := s.richLabels(ctx, q, dim, d, o, resp.Rows); err != nil {
+	if err := s.richLabels(ctx, q, dim, o, resp.Rows); err != nil {
 		return resp, err
 	}
 	return resp, nil
@@ -363,7 +573,7 @@ func changeRank(c change) float64 {
 
 // richLabels fills what the returned rows alone need: the network of a refused address, the model's probe labels,
 // the entry share of a page, the map shade of a country.
-func (s *Server) richLabels(ctx context.Context, q *query, dim string, d dimSpec, o listOpts, rows []listRow) error {
+func (s *Server) richLabels(ctx context.Context, q *query, dim string, o listOpts, rows []listRow) error {
 	switch dim {
 	case "countries":
 		var top int64
@@ -387,24 +597,32 @@ func (s *Server) richLabels(ctx context.Context, q *query, dim string, d dimSpec
 			rows[i].Sub, _ = s.networkName(asns[rows[i].Key])
 		}
 	case "pages", "entry":
-		// Entry: the share of all visits (session starts) that began on this page or template.
-		starts := aggMap{}
-		sd := dimSpec{where: "kind = 'session_start'", key: d.key, a: "COUNT(*)", b: "0"}
-		if err := s.scanDim(ctx, q, sd, o.extra, o.args, q.p.win, starts); err != nil {
+		// Entry: the share of all visits (session starts) that began on this page or template. The aggregates'
+		// entry list counts them per template, Other included.
+		starts := newSums()
+		sd := scan{dimSpec: dimSpec{where: "kind = 'session_start'", key: o.key, a: "COUNT(*)", b: "0"}, dim: o.dim,
+			extra: o.extra, args: o.args}
+		if o.dim != "" {
+			sd.dim = "entry"
+		}
+		if err := s.scanDim(ctx, q, sd, q.p.win, !q.p.agg, starts); err != nil {
 			return err
 		}
-		var visits int64
-		all := aggMap{}
-		if err := s.scanDim(ctx, q, dimSpec{where: "kind = 'session_start'", key: "''", a: "COUNT(*)", b: "0"}, "", nil,
-			q.p.win, all); err != nil {
-			return err
+		all := starts
+		if o.dim == "" { // the paths inside one template: every visit is still the whole, raw as the paths are
+			all = newSums()
+			if err := s.scanDim(ctx, q, scan{dimSpec: dimSpec{where: "kind = 'session_start'", key: "template",
+				a: "COUNT(*)", b: "0"}}, q.p.win, !q.p.agg, all); err != nil {
+				return err
+			}
 		}
-		for _, g := range all {
+		visits := all.other.a
+		for _, g := range all.m {
 			visits += g.a
 		}
 		for i := range rows {
 			e := 0.0
-			if g, ok := starts[rows[i].Key]; ok && visits > 0 {
+			if g, ok := starts.m[rows[i].Key]; ok && visits > 0 {
 				e = round1(pct(float64(g.a), float64(visits)))
 			}
 			rows[i].Entry = &e
@@ -461,19 +679,19 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, q *query) 
 	if serverOnly(w, q) {
 		return
 	}
-	d := dimSpec{where: "source = 'server' AND status > 0", key: "CAST(status / 100 AS TEXT) || 'xx'", a: "COUNT(*)",
-		b: "0", value: countA, second: zeroSecond}
-	all := aggMap{}
-	if err := s.scanDim(r.Context(), q, d, "", nil, q.p.win, all); err != nil {
+	sc := scan{dimSpec: dimSpec{where: "source = 'server' AND status > 0", key: "CAST(status / 100 AS TEXT) || 'xx'",
+		a: "COUNT(*)", b: "0", value: countA, second: zeroSecond}, dim: "status"}
+	all := newSums()
+	if err := s.scanDim(r.Context(), q, sc, q.p.win, !q.p.agg, all); err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	var total int64
-	for _, g := range all {
+	for _, g := range all.m {
 		total += g.a
 	}
 	rows := []statusRow{}
-	for k, g := range all {
+	for k, g := range all.m {
 		rows = append(rows, statusRow{Class: k, Value: g.a, Share: round1(pct(float64(g.a), float64(total)))})
 	}
 	slices.SortFunc(rows, func(a, b statusRow) int { return cmp.Compare(a.Class, b.Class) })
@@ -577,37 +795,15 @@ func (s *Server) latestClient(ctx context.Context, q *query) (map[string]map[str
 // everyClient counts, per value, the visitors that used it (30d and longer): the latest client over a month does
 // not add up from days, so a visitor on two browsers counts under both and the shares are of the sum.
 func (s *Server) everyClient(ctx context.Context, q *query) (map[string]map[string]int64, error) {
-	id, where := clientID(q.aud)
-	ids := map[string]map[string]map[string]struct{}{}
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	ids := clientIDs{}
 	for _, pc := range pieces(q.p.win.From, q.p.win.End) {
-		rows, err := s.query(ctx, `SELECT DISTINCT `+id+`, ua, instr(ip, ':') > 0 FROM event
-			WHERE site_id = ? AND ts >= ? AND ts < ? AND `+where+` AND `+audWhere(q.aud),
-			q.site.ID, ms(pc[0]), ms(pc[1]))
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var k, ua string
-			var v6 bool
-			if err := rows.Scan(&k, &ua, &v6); err != nil {
-				_ = rows.Close()
-				return nil, err
-			}
-			if k == "" { // a browser row without an id is nobody's
-				continue
-			}
-			for facet, v := range clientOf(ua, v6) {
-				if ids[facet] == nil {
-					ids[facet] = map[string]map[string]struct{}{}
-				}
-				if ids[facet][v] == nil {
-					ids[facet][v] = map[string]struct{}{}
-				}
-				ids[facet][v][k] = struct{}{}
-			}
-		}
-		_ = rows.Close()
-		if err := rows.Err(); err != nil {
+		if err := pl.read(ctx, pc[0], pc[1], readSpan, false,
+			func() (bool, error) { return s.clientDay(ctx, q, ms(pc[0])/dayMS, ids) },
+			func() error { return s.clientPiece(ctx, q, pc[0], pc[1], ids) }); err != nil {
 			return nil, err
 		}
 	}
@@ -615,10 +811,93 @@ func (s *Server) everyClient(ctx context.Context, q *query) (map[string]map[stri
 	for facet, m := range ids {
 		counts[facet] = map[string]int64{}
 		for v, u := range m {
-			counts[facet][v] = int64(len(u))
+			counts[facet][v] = u.count()
 		}
 	}
 	return counts, nil
+}
+
+// clientIDs are the ids that used each value, by facet.
+type clientIDs map[string]map[string]*uniq
+
+func (c clientIDs) get(facet, v string) *uniq {
+	if c[facet] == nil {
+		c[facet] = map[string]*uniq{}
+	}
+	if c[facet][v] == nil {
+		c[facet][v] = &uniq{}
+	}
+	return c[facet][v]
+}
+
+// clientPiece adds one raw piece's visitors per client value.
+func (s *Server) clientPiece(ctx context.Context, q *query, from, to time.Time, ids clientIDs) error {
+	id, where := clientID(q.aud)
+	rows, err := s.query(ctx, `SELECT DISTINCT `+id+`, ua, instr(ip, ':') > 0 FROM event
+		WHERE site_id = ? AND ts >= ? AND ts < ? AND `+where+` AND `+audWhere(q.aud), q.site.ID, ms(from), ms(to))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var k, ua string
+		var v6 bool
+		if err := rows.Scan(&k, &ua, &v6); err != nil {
+			return err
+		}
+		if k == "" { // a browser row without an id is nobody's
+			continue
+		}
+		for facet, v := range clientOf(ua, v6) {
+			ids.get(facet, v).add(k)
+		}
+	}
+	return rows.Err()
+}
+
+// clientDay adds one day's clients list (parent: the facet), false when the day is not clean in the statement's
+// snapshot.
+func (s *Server) clientDay(ctx context.Context, q *query, day int64, ids clientIDs) (bool, error) {
+	rows, err := s.query(ctx, `SELECT d.ok, t.parent, t.key, t.ids, t.addrs`+
+		aggFrom("agg_list", "t.dim = 'clients' AND t.day = ?2"+partCond(q.aud)), q.site.ID, day)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	add := clientIDs{}
+	ok := false
+	for rows.Next() {
+		var facet, v sql.NullString
+		var vids, addrs []byte
+		if err := rows.Scan(&ok, &facet, &v, &vids, &addrs); err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+		if !facet.Valid {
+			continue
+		}
+		sk := vids
+		if q.aud == "bots" {
+			sk = addrs
+		}
+		if len(sk) == 0 { // an automated server row's entry: no visitor id
+			continue
+		}
+		if err := add.get(facet.String, v.String).addSketch(sk); err != nil {
+			return false, err
+		}
+	}
+	if err := rows.Err(); err != nil || !ok {
+		return false, err
+	}
+	for facet, m := range add {
+		for v, u := range m {
+			ids.get(facet, v).merge(u)
+		}
+	}
+	return true, nil
 }
 
 // topShares is the n largest rows plus Other, shares in percent of total.
