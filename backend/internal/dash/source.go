@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // Source is where the dashboard reads the figures the aggregate tables can serve.
@@ -125,22 +127,48 @@ func (pl *plan) rawFrom(from time.Time) time.Time {
 	return from
 }
 
-// detailSince is the API's detail_since, what a raw-only read of [from, …) says about its start: the oldest raw
-// event when its UTC day is after from's (the reads' own day bounds, not the viewer's dates) and the figures reach
-// further back (an hour of aggregates before it); null otherwise, nothing missing: raw covers the span, or the
-// site's figures begin where its raw does (a site younger than the range).
+// detailSince is the API's detail_since, what a raw-only read of [from, …) says about its start: where raw begins
+// (the oldest event; now when none is left) when its UTC day is after from's (the reads' own day bounds, not the
+// viewer's dates) and the figures reach further back (an hour of aggregates before it); null otherwise, nothing
+// missing: raw covers the span, or the site's figures begin where its raw does (a site younger than the range).
 func (pl *plan) detailSince(ctx context.Context, from time.Time) (any, error) {
-	if !pl.hasRaw || pl.oldest <= ms(from)/dayMS {
+	start := pl.oldestTS
+	if !pl.hasRaw {
+		start = ms(pl.now)
+	}
+	if start/dayMS <= ms(from)/dayMS {
 		return nil, nil
 	}
-	var first sql.NullInt64
-	if err := pl.s.row(ctx, `SELECT MIN(hour) FROM agg_hour WHERE site_id = ?`, pl.site).Scan(&first); err != nil {
+	first, ok, err := pl.s.firstFigure(ctx, pl.site)
+	if err != nil || !ok || first >= start/hourMS {
 		return nil, err
 	}
-	if !first.Valid || first.Int64 >= pl.oldestTS/hourMS {
-		return nil, nil
+	return iso(time.UnixMilli(start)), nil
+}
+
+// firstFigure is the oldest hour of a site's aggregates on a day they can be read for (ok false: none). A day the
+// size cap cut (AggWriting) has none: its hours left are skipped, every cut day's agg_day row walked once, in key
+// order.
+func (s *Server) firstFigure(ctx context.Context, site int64) (int64, bool, error) {
+	for from := int64(0); ; {
+		var hour sql.NullInt64
+		if err := s.row(ctx, `SELECT MIN(hour) FROM agg_hour WHERE site_id = ? AND hour >= ?`, site, from*24).
+			Scan(&hour); err != nil || !hour.Valid {
+			return 0, false, err
+		}
+		day := hour.Int64 / 24
+		var dirty int
+		if err := s.row(ctx, `SELECT COALESCE(MAX(dirty), 0) FROM agg_day WHERE site_id = ? AND day = ?`, site, day).
+			Scan(&dirty); err != nil || dirty != store.AggWriting {
+			return hour.Int64, err == nil, err
+		}
+		var next sql.NullInt64
+		if err := s.row(ctx, `SELECT (SELECT day FROM agg_day WHERE site_id = ? AND day > ? AND dirty != ? ORDER BY day
+			LIMIT 1)`, site, day, store.AggWriting).Scan(&next); err != nil || !next.Valid {
+			return 0, false, err
+		}
+		from = next.Int64
 	}
-	return iso(time.UnixMilli(pl.oldestTS)), nil
 }
 
 // rawOK: the day's raw is all there. Retention marks a day it deleted from (raw = 0); before the oldest event

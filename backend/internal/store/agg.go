@@ -18,7 +18,7 @@ const (
 	AggClean      = 0
 	AggRawChanged = 1 // raw changed since the rows were written: complete, but stale
 	AggRequeued   = 2 // the day before changed the sessions this day carries: complete
-	AggWriting    = 3 // a write under way or cut short: the rows may be partial
+	AggWriting    = 3 // a write under way or cut short, or the size cap cut the rows (frozen 0): the rows may be partial
 )
 
 // Queryer is a pool or a transaction: a build reads a day and its state in one read transaction's snapshot.
@@ -240,7 +240,9 @@ func (s *Store) WriteAggDay(ctx context.Context, b AggBuild) (bool, error) {
 	if _, err := c.room(); err != nil {
 		return false, err
 	}
-	res, err := c.tx.ExecContext(ctx, `UPDATE agg_day SET dirty = 3 WHERE site_id = ? AND day = ?`, b.Site, b.Day)
+	// frozen = 1 from here: the cap marks a day it cuts frozen = 0, so finishAggDay sees a cut during the write.
+	res, err := c.tx.ExecContext(ctx, `UPDATE agg_day SET dirty = 3, frozen = 1 WHERE site_id = ? AND day = ?`, b.Site,
+		b.Day)
 	if err != nil {
 		return false, err
 	}
@@ -291,21 +293,25 @@ func (s *Store) WriteAggDay(ctx context.Context, b AggBuild) (bool, error) {
 	return clean, c.commit()
 }
 
-// finishAggDay freezes a written day in the write's last transaction. RequeueNext takes the next day, when frozen
-// and clean, out of reading for a rebuild: its carried sessions were counted against this day's raw, which changed.
+// finishAggDay freezes a written day in the write's last transaction, unless the size cap cut rows of it meanwhile
+// (frozen 0): those stay partial, out of reading. RequeueNext takes the next day, when frozen and clean, out of
+// reading for a rebuild: its carried sessions were counted against this day's raw, which changed.
 func finishAggDay(ctx context.Context, tx *sql.Tx, b AggBuild) (bool, error) {
 	var version int64
-	var raw bool
-	if err := tx.QueryRowContext(ctx, `SELECT version, raw FROM agg_day WHERE site_id = ? AND day = ?`, b.Site,
-		b.Day).Scan(&version, &raw); err != nil {
+	var raw, frozen bool
+	if err := tx.QueryRowContext(ctx, `SELECT version, raw, frozen FROM agg_day WHERE site_id = ? AND day = ?`, b.Site,
+		b.Day).Scan(&version, &raw, &frozen); err != nil {
 		return false, err
+	}
+	if !frozen {
+		return false, nil
 	}
 	clean := version == b.Version && raw
 	dirty := AggClean
 	if !clean {
 		dirty = AggRawChanged
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE agg_day SET frozen = 1, dirty = ?, builder = ?, events = ?, built_at = ?
+	if _, err := tx.ExecContext(ctx, `UPDATE agg_day SET dirty = ?, builder = ?, events = ?, built_at = ?
 		WHERE site_id = ? AND day = ?`, dirty, b.Builder, b.Events, time.Now().UnixMilli(), b.Site, b.Day); err != nil {
 		return false, err
 	}

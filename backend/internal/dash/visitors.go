@@ -31,7 +31,9 @@ import (
 // distinct sessions over the whole range: a session crossing a piece boundary is one visit. Raw pieces count (key,
 // session) pairs, never per piece; an aggregate day counts its sessions less those carried from the day before
 // (when that day is in the range). A raw day after an aggregate one first learns the day before's pairs, uncounted;
-// with that raw gone, it counts its sessions less the carried ones its own stored rows hold (carriedOn).
+// with that raw gone, it counts its sessions less the carried ones its own stored rows hold (carriedOn). An aggregate
+// day without rows in the audience's parts counted no session: age retention takes a day's per-address rows with
+// its raw, its other rows stay.
 func (s *Server) actors(ctx context.Context, q *query, from, to time.Time) (map[string]*actor, error) {
 	pl, err := s.planOf(ctx, q)
 	if err != nil {
@@ -43,7 +45,7 @@ func (s *Server) actors(ctx context.Context, q *query, from, to time.Time) (map[
 	var counted time.Time // where the last piece read ends
 	prevAgg := false      // that piece was an aggregate day
 	for i, pc := range pieces(from, to) {
-		wasAgg, wasRaw := false, false
+		wasAgg, wasRaw, held := false, false, false
 		raw := func() error {
 			wasRaw = true
 			if !prevAgg || !counted.Equal(pc[0]) {
@@ -73,15 +75,15 @@ func (s *Server) actors(ctx context.Context, q *query, from, to time.Time) (map[
 			err = raw()
 		} else {
 			err = pl.read(ctx, pc[0], pc[1], readSpan, !q.p.agg, func() (bool, error) {
-				ok, err := s.actorDay(ctx, q, ms(pc[0])/dayMS, stitch(counted, pc[0]), out)
-				wasAgg = ok
+				ok, n, err := s.actorDay(ctx, q, ms(pc[0])/dayMS, stitch(counted, pc[0]), out)
+				wasAgg, held = ok, n
 				return ok, err
 			}, raw)
 		}
 		if err != nil {
 			return nil, err
 		}
-		if wasAgg || wasRaw {
+		if wasAgg && held || wasRaw {
 			counted, prevAgg = pc[1], wasAgg
 		}
 	}
@@ -240,36 +242,36 @@ func dayActor(parts []addrRow, stitch bool) *actor {
 	return &a
 }
 
-// actorDay adds one day's agg_addr rows (the audience's parts) to out, false when the day is not clean in the
-// statement's snapshot.
-func (s *Server) actorDay(ctx context.Context, q *query, day int64, stitch bool, out map[string]*actor) (bool, error) {
+// actorDay adds one day's agg_addr rows (the audience's parts) to out, ok false when the day is not clean in the
+// statement's snapshot; held is whether it had any.
+func (s *Server) actorDay(ctx context.Context, q *query, day int64, stitch bool,
+	out map[string]*actor) (ok, held bool, err error) {
 	rows, err := s.query(ctx, `SELECT d.ok, `+addrCols+aggFrom("agg_addr", "t.day = ?2"+partCond(q.aud)),
 		q.site.ID, day)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	defer func() { _ = rows.Close() }()
 	byKey := map[string][]addrRow{}
-	ok := false
 	for rows.Next() {
 		r, has, err := scanAddr(rows, &ok)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		if !ok {
-			return false, nil
+			return false, false, nil
 		}
 		if has {
 			byKey[r.key] = append(byKey[r.key], r)
 		}
 	}
 	if err := rows.Err(); err != nil || !ok {
-		return false, err
+		return false, false, err
 	}
 	for key, parts := range byKey {
 		actorOf(out, key).add(dayActor(parts, stitch))
 	}
-	return true, nil
+	return true, len(byKey) > 0, nil
 }
 
 func actorOf(m map[string]*actor, key string) *actor {
@@ -1529,8 +1531,10 @@ func (s *Server) actorIn(ctx context.Context, q *query, key string, from, to tim
 	seen := map[string]bool{}
 	var rawLast int64 // the latest raw event's time, when the latest event is raw
 	for i, pt := range parts {
-		var counted time.Time // where the part before ends: parts are the pieces read
-		if i > 0 {
+		// Where the part before ends: parts are the pieces read. An aggregate day without the key's rows counted none
+		// of its sessions (age retention takes per-address rows with the raw).
+		var counted time.Time
+		if i > 0 && (!parts[i-1].agg || len(days[parts[i-1].day]) > 0) {
 			counted = parts[i-1].hi
 		}
 		if pt.agg {

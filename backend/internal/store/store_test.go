@@ -5,10 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -174,7 +176,7 @@ func TestPrune_Cap(t *testing.T) {
 	}
 	a, b := sites["a.example.com"].ID, sites["b.example.com"].ID
 	const n = 12000
-	base := time.Now().Add(-time.Hour).UnixMilli()
+	base := time.Now().Add(-10 * 24 * time.Hour).UnixMilli() // before the days the cap never cuts
 	// Written newest first: a higher id is an older event. The sites alternate.
 	var evs []Event
 	for i := range n {
@@ -218,8 +220,9 @@ func TestRunRetention_Cap(t *testing.T) {
 	st := open(t)
 	id := seed(t, st)
 	var evs []Event
+	old := time.Now().AddDate(0, 0, -10).UnixMilli() // before the days the cap never cuts
 	for i := range 6000 {
-		evs = append(evs, Event{SiteID: id, TS: time.Now().UnixMilli() - int64(i), Source: "browser",
+		evs = append(evs, Event{SiteID: id, TS: old - int64(i), Source: "browser",
 			Kind: "page_view", IP: "192.0.2.1", IPKey: "192.0.2.1", Props: `{"pad":"` + strings.Repeat("x", 200) + `"}`})
 	}
 	if err := st.InsertEvents(t.Context(), evs); err != nil {
@@ -254,8 +257,9 @@ func TestVacuum_WrongModeAndStall(t *testing.T) {
 	st := open(t)
 	id := seed(t, st)
 	var evs []Event
+	old := time.Now().AddDate(0, 0, -10).UnixMilli() // before the days the cap never cuts
 	for i := range 6000 {
-		evs = append(evs, Event{SiteID: id, TS: time.Now().UnixMilli() - int64(i), Source: "browser",
+		evs = append(evs, Event{SiteID: id, TS: old - int64(i), Source: "browser",
 			Kind: "page_view", IP: "192.0.2.1", IPKey: "192.0.2.1", Props: `{"pad":"` + strings.Repeat("x", 200) + `"}`})
 	}
 	if err := st.InsertEvents(t.Context(), evs); err != nil {
@@ -504,7 +508,8 @@ func TestPrune_DayCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	used, _ := st.UsedBytes(t.Context())
-	if n, err := st.EnforceCap(t.Context(), used*95/100); err != nil || n == 0 || n >= 5000 {
+	if n, err := st.EnforceCap(t.Context(), used*95/100, time.Now(), slog.Default()); err != nil || n == 0 ||
+		n >= 5000 {
 		t.Fatalf("capped %d, %v", n, err)
 	}
 	days, _ = st.AggDays(t.Context(), id, day, day+3)
@@ -553,5 +558,170 @@ func TestPrune(t *testing.T) {
 	var ts int
 	if err := st.DB.QueryRow(`PRAGMA temp_store`).Scan(&ts); err != nil || ts != 2 {
 		t.Errorf("temp_store = %d, %v; want 2 (memory)", ts, err)
+	}
+}
+
+// capFloor stays below what the tail's raw and the actor classes take: a store holding only them uses more than
+// the bound says (the gap is where the cap still deletes aggregates in vain).
+func TestCapFloor(t *testing.T) {
+	st := open(t)
+	id := seed(t, st)
+	empty, _ := st.UsedBytes(t.Context())
+	now := time.Now()
+	today := now.UnixMilli() / dayMS
+	var evs []Event
+	for i := range 6000 {
+		ip := fmt.Sprintf("198.51.100.%d", i%200)
+		evs = append(evs, Event{SiteID: id, TS: (today-int64(i%3))*dayMS + int64(i)*1000, Source: "browser",
+			Kind: "page_view", Visitor: fmt.Sprint("v", i%500), SID: fmt.Sprint("s", i%900), IP: ip, IPKey: ip,
+			UA:   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Safari/605.1",
+			Path: fmt.Sprint("/p/", i%40), Template: "/p/:id", URL: fmt.Sprint("https://example.com/p/", i%40),
+			Country: "CH", Props: `{"w":1440}`})
+	}
+	if err := st.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 200 {
+		if err := st.SetActorClass(t.Context(), ActorClass{SiteID: id, IPKey: fmt.Sprintf("198.51.100.%d", i),
+			Day: today - int64(i%40), Class: "human"}, map[string]string{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sites, _ := st.Sites(t.Context())
+	floor, err := st.capFloor(t.Context(), sites, today-(capTail-1), today)
+	used, _ := st.UsedBytes(t.Context())
+	if err != nil || floor <= 0 || floor > used-empty {
+		t.Fatalf("floor %d of %d bytes, %v", floor, used-empty, err)
+	}
+	t.Logf("floor %d of %d bytes (%.0f %%)", floor, used-empty, float64(floor)/float64(used-empty)*100)
+}
+
+// The cap's order: raw before the last three UTC days first, then the per-address rows, the lists, the hours, each
+// oldest day first, each step warned once; a day it cut aggregates of is marked unbuilt and partial, the others stay
+// clean. No aggregate goes while the last three days' raw alone exceeds the cap; every agg_day row survives. Age
+// retention takes the per-address rows with the events and leaves the other aggregates.
+func TestEnforceCap_Order(t *testing.T) {
+	st := open(t)
+	id := seed(t, st)
+	now := time.Now()
+	today := now.UnixMilli() / dayMS
+	pad := strings.Repeat("x", 1000)
+	// Ten built days, 20 to 11 days ago, with a few small raw events each and many large per-address rows; raw
+	// events on each of the last three days.
+	var evs []Event
+	for d := today - 20; d <= today; d++ {
+		if d > today-11 && d < today-2 {
+			continue
+		}
+		for i := range 20 {
+			evs = append(evs, Event{SiteID: id, TS: d*dayMS + int64(i)*1000, Source: "server", Kind: "request",
+				IP: "192.0.2.1", IPKey: "192.0.2.1"})
+		}
+	}
+	if err := st.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	for d := today - 20; d <= today-11; d++ {
+		addrs := aggAddrs(id, d, 300)
+		for i := range addrs {
+			addrs[i].UA = pad
+		}
+		write(t, st, AggBuild{Site: id, Day: d, Dims: []string{"pages"}, Hours: []AggHour{{Hour: d * 24, Cls: 1}},
+			Lists: []AggList{{Dim: "pages", Part: 1, Key: "/"}}, Addrs: slices.Values(addrs)})
+	}
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	count := func(q string, args ...any) int { t.Helper(); return countRows(t, st, q, args...) }
+
+	// Half the size: the old raw and the oldest per-address days go; lists and hours stay.
+	used, _ := st.UsedBytes(t.Context())
+	if _, err := st.EnforceCap(t.Context(), used/2, now, log); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(`SELECT COUNT(*) FROM event WHERE ts < ?`, (today-2)*dayMS); n != 0 {
+		t.Errorf("old raw left: %d", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM agg_addr WHERE day = ?`, today-20); n != 0 {
+		t.Errorf("the oldest per-address day kept: %d rows", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM agg_addr WHERE day = ?`, today-11); n != 300 {
+		t.Errorf("the newest per-address day cut before older ones: %d rows", n)
+	}
+	if l, h := count(`SELECT COUNT(*) FROM agg_list`), count(`SELECT COUNT(*) FROM agg_hour`); l != 10 || h != 10 {
+		t.Errorf("lists %d, hours %d cut before the per-address rows were", l, h)
+	}
+	first := logs.String()
+	if !strings.Contains(first, "raw events") || !strings.Contains(first, "per-address") ||
+		strings.Contains(first, "list aggregates") || strings.Count(first, "per-address") != 1 {
+		t.Errorf("warnings:\n%s", first)
+	}
+	if i, j := strings.Index(first, "raw events"), strings.Index(first, "per-address"); i > j {
+		t.Errorf("per-address rows cut before the raw:\n%s", first)
+	}
+	// Cut days read as none: unbuilt, rows partial; the newest built day untouched and clean.
+	cut, clean := count(`SELECT COUNT(*) FROM agg_day WHERE frozen = 0 AND dirty = ? AND day < ?`, AggWriting,
+		today-11), count(`SELECT COUNT(*) FROM agg_day WHERE frozen = 1 AND dirty = 0`)
+	if cut == 0 || cut+clean != 10 || count(`SELECT COUNT(*) FROM agg_day WHERE day = ? AND frozen = 1 AND dirty = 0`,
+		today-11) != 1 {
+		t.Errorf("after the cut: %d days marked, %d clean", cut, clean)
+	}
+	if n := count(`SELECT COUNT(*) FROM agg_addr a JOIN agg_day d ON d.site_id = a.site_id AND d.day = a.day
+		WHERE d.frozen = 1 AND d.dirty = 0`); n != clean*300 {
+		t.Errorf("clean days hold %d per-address rows, want %d", n, clean*300)
+	}
+
+	// One byte: the last three days' raw alone exceeds it, so no aggregate goes; the tail's raw and agg_day stay.
+	logs.Reset()
+	rows := func() [3]int {
+		return [3]int{count(`SELECT COUNT(*) FROM agg_addr`), count(`SELECT COUNT(*) FROM agg_list`),
+			count(`SELECT COUNT(*) FROM agg_hour`)}
+	}
+	kept := rows()
+	if _, err := st.EnforceCap(t.Context(), 1, now, log); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(`SELECT COUNT(*) FROM event WHERE ts >= ?`, (today-2)*dayMS); n != 60 {
+		t.Errorf("the last three days' raw: %d events, want 60", n)
+	}
+	if got := rows(); got != kept || kept[0] == 0 {
+		t.Errorf("aggregate rows %v, before %v: deleted in vain", got, kept)
+	}
+	if second := logs.String(); !strings.Contains(second, "the aggregates stay") || strings.Contains(second, "deleting") {
+		t.Errorf("warnings:\n%s", second)
+	}
+
+	// Nothing in the tail: one byte takes every aggregate row before it, lists before hours, every day marked.
+	if _, err := st.DB.Exec(`DELETE FROM event`); err != nil {
+		t.Fatal(err)
+	}
+	logs.Reset()
+	if _, err := st.EnforceCap(t.Context(), 1, now, log); err != nil {
+		t.Fatal(err)
+	}
+	if got := rows(); got != [3]int{} {
+		t.Errorf("rows left: %v", got)
+	}
+	if n := count(`SELECT COUNT(*) FROM agg_day WHERE frozen = 0 AND dirty = ?`, AggWriting); n != 10 {
+		t.Errorf("days marked: %d of 10", n)
+	}
+	third := logs.String()
+	if i, j := strings.Index(third, "list aggregates"), strings.Index(third, "hourly"); i < 0 || j < i ||
+		!strings.Contains(third, "alone exceed") {
+		t.Errorf("warnings:\n%s", third)
+	}
+
+	// Age retention: the per-address rows before the cutoff go, lists and hours stay.
+	st2 := open(t)
+	id2 := seed(t, st2)
+	for _, d := range []int64{today - 40, today - 30} {
+		write(t, st2, AggBuild{Site: id2, Day: d, Dims: []string{"pages"}, Hours: []AggHour{{Hour: d * 24, Cls: 1}},
+			Lists: []AggList{{Dim: "pages", Part: 1, Key: "/"}}, Addrs: slices.Values(aggAddrs(id2, d, 2500))})
+	}
+	if n, err := st2.PruneAge(t.Context(), time.UnixMilli((today-35)*dayMS)); err != nil || n != 2500 {
+		t.Fatalf("pruned %d, %v", n, err)
+	}
+	if a, l, h := countRows(t, st2, `SELECT COUNT(*) FROM agg_addr`), countRows(t, st2, `SELECT COUNT(*) FROM agg_list`),
+		countRows(t, st2, `SELECT COUNT(*) FROM agg_hour`); a != 2500 || l != 2 || h != 2 {
+		t.Errorf("after age retention: %d addr, %d list, %d hour rows", a, l, h)
 	}
 }
