@@ -366,9 +366,15 @@ var capSteps = []capStep{
 		}},
 }
 
-// capStalled is the cap's raw step at a day it may not delete: not built, and Cover did not build it (no Cover, not
-// due yet, or a write raced the build).
-type capStalled struct{ site, day int64 }
+// ErrNotDue is Cover's answer for a day the aggregate job does not build yet but will: the cap waits for it.
+var ErrNotDue = errors.New("day not due for building yet")
+
+// capStalled is the cap's raw step at a day it may not delete: not built, and Cover did not build it. wait: Cover
+// answered ErrNotDue for it or the day after; else no Cover, or a write raced the build.
+type capStalled struct {
+	site, day int64
+	wait      bool
+}
 
 func (e capStalled) Error() string {
 	return fmt.Sprintf("site %d, %s not built", e.site, time.UnixMilli(e.day*dayMS).UTC().Format(time.DateOnly))
@@ -377,7 +383,8 @@ func (e capStalled) Error() string {
 // capRaw deletes a chunk of a site-day's raw for the cap. A day before the age floor is age retention's, never built:
 // it goes as it would within a day. A later day goes once dayCoverage passes (a cut day always); else Cover builds
 // it and the day after, and it goes if it passes then. A day that still does not is capStalled: the site's raw step
-// ends there for this round (from 00:00 to 02:00 UTC the day after the oldest one the cap may cut is not due yet).
+// ends there for this round. From 00:00 to 02:00 UTC the day after the oldest one the cap may cut is the tail's
+// first, not due yet (ErrNotDue): a wait that ends by itself, as the job or the next round's Cover builds it then.
 func capRaw(ctx context.Context, s *Store, c *capRun, site, day int64, _ string) (int64, error) {
 	if day < c.floor {
 		return s.deleteEvents(ctx, dayEvents, site, day*dayMS, (day+1)*dayMS)
@@ -386,9 +393,12 @@ func capRaw(ctx context.Context, s *Store, c *capRun, site, day int64, _ string)
 	if err != nil || cv == covered {
 		return n, err
 	}
+	wait := false
 	if c.o.Cover != nil {
 		for _, d := range []int64{day, day + 1} {
-			if err := c.o.Cover(ctx, site, d); err != nil {
+			if err := c.o.Cover(ctx, site, d); errors.Is(err, ErrNotDue) {
+				wait = true
+			} else if err != nil {
 				return 0, err
 			}
 		}
@@ -396,7 +406,7 @@ func capRaw(ctx context.Context, s *Store, c *capRun, site, day int64, _ string)
 			return n, err
 		}
 	}
-	return 0, capStalled{site, day}
+	return 0, capStalled{site, day, wait}
 }
 
 // cutAddrs deletes a site-day's per-address rows, all of them in one transaction with the day's mark (addrs_cut):
@@ -538,9 +548,12 @@ func oldestList(ctx context.Context, s *Store, site, tail int64) (int64, int64, 
 // only from days whose figures stand without it (capRaw builds them first); an aggregate step starts only while
 // deleting aggregates can still reach the target (capFloor): figures deleted in vain are lost for good. A site whose
 // raw step stops at a day it may not delete (capStalled) keeps its raw from there on for this round, and no aggregate
-// of its from that day on goes (the job builds those days); the other sites and the aggregate steps go on. agg_day
-// stays: it says which days were built, and which the cap cut. Each step warns once when it starts, a stalled site
-// once per day it stalls at (o.capStalls across rounds); it returns the events and rows deleted.
+// of its from that day on goes (the job builds those days); the other sites and the aggregate steps go on, unless a
+// site's day only waits to fall due (capStalled.wait): then the round deletes no aggregate, since within two hours
+// that day's raw can go instead (whether it is enough is not checked), and the database stays over the cap
+// meanwhile. agg_day stays: it says which days were built, and
+// which the cap cut. Each step warns once when it first deletes, a stalled or waiting site once per day it stops at
+// (o.capStalls across rounds); it returns the events and rows deleted.
 func (s *Store) EnforceCap(ctx context.Context, o RetentionOptions, now time.Time) (int64, error) {
 	maxBytes, log := o.MaxBytes, o.Log
 	if log == nil {
@@ -570,12 +583,16 @@ func (s *Store) EnforceCap(ctx context.Context, o RetentionOptions, now time.Tim
 		rawFrom[st.ID] = tail
 	}
 	var total int64
+	waiting := false
 	for i, step := range capSteps {
 		if i == 1 {
 			for _, st := range sites {
 				if _, ok := stalls[st.ID]; ok && rawFrom[st.ID] == tail {
 					delete(stalls, st.ID) // not stalled this round
 				}
+			}
+			if waiting && used > target {
+				return total, nil
 			}
 		}
 		if i > 0 && used > target {
@@ -610,26 +627,37 @@ func (s *Store) EnforceCap(ctx context.Context, o RetentionOptions, now time.Tim
 			if !found {
 				break
 			}
-			if !warned {
-				warned = true
-				log.Warn("Size cap reached: deleting the oldest "+step.what, "from",
-					time.UnixMilli(day*dayMS).UTC().Format(time.DateOnly), "max_mb", maxBytes>>20)
-			}
 			n, err := step.del(ctx, s, c, site, day, dim)
 			total += n
 			var stalled capStalled
 			if errors.As(err, &stalled) {
 				rawFrom[stalled.site] = stalled.day
-				if last, ok := stalls[stalled.site]; !ok || last != stalled.day {
-					stalls[stalled.site] = stalled.day
-					log.Warn("Size cap reached: the site's oldest raw day's figures are not built, its raw from there "+
-						"stays until they are", "site", stalled.site, "day",
+				waiting = waiting || stalled.wait
+				// Once per site, day and reason: a day that waited and then stalls says so too.
+				seen := stalled.day
+				if stalled.wait {
+					seen = ^stalled.day
+				}
+				if last, ok := stalls[stalled.site]; !ok || last != seen {
+					stalls[stalled.site] = seen
+					msg := "Size cap reached: the site's oldest raw day's figures are not built, its raw from there " +
+						"stays until they are"
+					if stalled.wait {
+						msg = "Size cap waits: the day after the site's oldest raw day is not due for building yet, no " +
+							"aggregate goes and the database stays over the cap until it is"
+					}
+					log.Warn(msg, "site", stalled.site, "day",
 						time.UnixMilli(stalled.day*dayMS).UTC().Format(time.DateOnly), "max_mb", maxBytes>>20)
 				}
 				continue
 			}
 			if err != nil {
 				return total, err
+			}
+			if !warned {
+				warned = true
+				log.Warn("Size cap reached: deleting the oldest "+step.what, "from",
+					time.UnixMilli(day*dayMS).UTC().Format(time.DateOnly), "max_mb", maxBytes>>20)
 			}
 			if !run.Sleep(ctx, retentionYield) {
 				return total, ctx.Err()
@@ -786,17 +814,19 @@ type RetentionOptions struct {
 	// Builder is the aggregate build code's version (agg.Version): only a day built clean by it lets its raw go.
 	Builder int64
 	// Cover builds a site-day's aggregates when the aggregate job would (due, not before its age floor), so the cap
-	// can delete its raw; store does not import agg. nil: the cap deletes no raw it finds unbuilt.
+	// can delete its raw; store does not import agg. A day not due yet: ErrNotDue, and the cap waits for it. nil: the
+	// cap deletes no raw it finds unbuilt.
 	Cover func(ctx context.Context, site, day int64) error
 	// MaxBytes caps what the rows take (0: no cap).
 	MaxBytes int64
 	// CapEvery is how often the cap is checked (UsedBytes is three pragmas): five minutes by default, so the disk
-	// bound is the cap plus minutes of intake, not a day of it. Age retention runs on the first check and daily.
+	// bound is the cap plus minutes of intake, not a day of it (two hours of it from 00:00 to 02:00 UTC, while a
+	// round waits). Age retention runs on the first check and daily.
 	CapEvery time.Duration
 	Now      func() time.Time
 	Log      *slog.Logger
-	// capStalls is, per site, the day the cap's raw step last stopped at (RunRetention keeps it across rounds): its
-	// warning once, not every few minutes from 00:00 to 02:00 UTC.
+	// capStalls is, per site, the day the cap's raw step last stopped at, complemented while it only waits
+	// (RunRetention keeps it across rounds): its warning once per reason, not every few minutes.
 	capStalls map[int64]int64
 }
 

@@ -47,7 +47,10 @@ func ageFloor(now time.Time, months int) int64 { return store.AgeFloor(now, mont
 
 // Cover is the size cap's way to build a day before it deletes the day's raw (store.RetentionOptions.Cover): it
 // builds a site-day the job would build now (due, not before the age floor) unless it is built clean already, under
-// the job's lock. A day the job would not build is left as it is: the cap then deletes none of its raw.
+// the job's lock. A day the job would not build is left as it is: the cap then deletes none of its raw. One not due
+// yet is store.ErrNotDue, and the cap waits for it. The wait is bounded: the cap asks for days before its tail and
+// the day after each, and lastDue is at least the day before the tail at any time and the tail's first from 02:00
+// UTC on, so only the tail's first day is ever not due, and only from 00:00 to 02:00 (TestCover_WaitBounded).
 func Cover(st *store.Store, o Options) func(ctx context.Context, site, day int64) error {
 	now := o.Now
 	if now == nil {
@@ -55,7 +58,11 @@ func Cover(st *store.Store, o Options) func(ctx context.Context, site, day int64
 	}
 	b := &Builder{Store: st, K: o.K}
 	return func(ctx context.Context, site, day int64) error {
-		if t := now(); day > lastDue(t) || day < ageFloor(t, o.Months) {
+		t := now()
+		if day > lastDue(t) {
+			return store.ErrNotDue
+		}
+		if day < ageFloor(t, o.Months) {
 			return nil
 		}
 		_, err := b.buildIfNeeded(ctx, site, day)
