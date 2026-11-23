@@ -2,6 +2,7 @@ package dash
 
 import (
 	"context"
+	"database/sql"
 	"math"
 	"net/http"
 	"net/netip"
@@ -176,7 +177,7 @@ type cursorRow struct {
 
 // logRows reads up to limit log rows matching cond, newest first.
 func (s *Server) logRows(ctx context.Context, cond string, args []any, limit int) ([]cursorRow, error) {
-	rows, err := s.query(ctx, `SELECT id, ts, ip, cls, source, kind, name, template, status, ua
+	rows, err := s.query(ctx, `SELECT id, ts, ip, cls, source, kind, name, template, status, ua, `+vitalValue+`
 		FROM event WHERE `+cond+` ORDER BY ts DESC, id DESC LIMIT `+strconv.Itoa(limit), args...)
 	if err != nil {
 		return nil, err
@@ -187,10 +188,12 @@ func (s *Server) logRows(ctx context.Context, cond string, args []any, limit int
 		var id, ts int64
 		var ip, source, kind, name, tmpl, ua string
 		var cls, status int
-		if err := rows.Scan(&id, &ts, &ip, &cls, &source, &kind, &name, &tmpl, &status, &ua); err != nil {
+		var value sql.NullFloat64
+		if err := rows.Scan(&id, &ts, &ip, &cls, &source, &kind, &name, &tmpl, &status, &ua, &value); err != nil {
 			return nil, err
 		}
 		what, k := describe(source, kind, name, tmpl, status)
+		what = withValue(what, name, value)
 		out = append(out, cursorRow{row: logRow{T: iso(time.UnixMilli(ts)), Addr: ip, Class: classOf(cls), Kind: k,
 			What: what, Client: classify.Client(ua), Source: source}, at: cursor{ts, id}})
 	}

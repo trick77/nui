@@ -505,7 +505,7 @@ func (s *Server) readRows(ctx context.Context, q *query, span visitorCursor, row
 		if rows[i].values, err = s.variety(ctx, q.site.ID, rows[i].Key, from, to, counts, tmpls); err != nil {
 			continue
 		}
-		tr, err := s.trail(ctx, q.site.ID, rows[i].Key, from, to, cursor{}, 1)
+		tr, err := s.trail(ctx, q.site.ID, rows[i].Key, from, to, cursor{})
 		if err != nil {
 			continue
 		}
@@ -800,6 +800,10 @@ type trailLine struct {
 
 	fromMS, toMS int64
 	gaps         []float64
+	// base is the line without a vital's value: what runs join on and what the model reads (a reading is shared by
+	// every actor with the signature, so one actor's figures must not shape it). value is the line with it, shown
+	// only for a single event: a run of one vital holds several.
+	base, value string
 }
 
 type trailResult struct {
@@ -816,7 +820,7 @@ const (
 
 // trail reads an actor's events newest first from before (a keyset cursor, zero for the newest) and collapses
 // runs. Ordered by (ts, id): the actor index holds both, so the read is an index walk, never a sort.
-func (s *Server) trail(ctx context.Context, site int64, key string, from, to time.Time, before cursor, pages int) (trailResult, error) {
+func (s *Server) trail(ctx context.Context, site int64, key string, from, to time.Time, before cursor) (trailResult, error) {
 	tr := trailResult{lines: []trailLine{}}
 	args := []any{site, key, ms(from), ms(to)}
 	cond := ""
@@ -824,8 +828,8 @@ func (s *Server) trail(ctx context.Context, site int64, key string, from, to tim
 		cond, args = " AND (ts < ? OR (ts = ? AND id < ?))", append(args, before.ts, before.ts, before.id)
 	}
 	// One event past the bound: whether more follow, and whether the last run goes on into them.
-	limit := maxTrailEvents * pages
-	rows, err := s.query(ctx, `SELECT id, ts, source, kind, name, template, status FROM event
+	limit := maxTrailEvents
+	rows, err := s.query(ctx, `SELECT id, ts, source, kind, name, template, status, `+vitalValue+` FROM event
 		WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?`+cond+` ORDER BY ts DESC, id DESC LIMIT `+
 		strconv.Itoa(limit+1), args...)
 	if err != nil {
@@ -840,12 +844,13 @@ func (s *Server) trail(ctx context.Context, site int64, key string, from, to tim
 		var id, ts int64
 		var source, kind, name, tmpl string
 		var status int
-		if err := rows.Scan(&id, &ts, &source, &kind, &name, &tmpl, &status); err != nil {
+		var value sql.NullFloat64
+		if err := rows.Scan(&id, &ts, &source, &kind, &name, &tmpl, &status, &value); err != nil {
 			return tr, err
 		}
 		what, k := describe(source, kind, name, tmpl, status)
 		if read > limit {
-			if n := len(tr.lines); n > 0 && tr.lines[n-1].What == what {
+			if n := len(tr.lines); n > 0 && tr.lines[n-1].base == what {
 				tr.lines[n-1].Continues = true
 			}
 			tr.next = last.String()
@@ -855,7 +860,7 @@ func (s *Server) trail(ctx context.Context, site int64, key string, from, to tim
 			tr.gaps = append(tr.gaps, float64(prevTS-ts)/1000)
 		}
 		prevTS = ts
-		if n := len(tr.lines); n > 0 && tr.lines[n-1].What == what {
+		if n := len(tr.lines); n > 0 && tr.lines[n-1].base == what {
 			l := &tr.lines[n-1]
 			l.Count++
 			l.gaps = append(l.gaps, float64(l.fromMS-ts)/1000)
@@ -869,7 +874,8 @@ func (s *Server) trail(ctx context.Context, site int64, key string, from, to tim
 			break
 		}
 		t := iso(time.UnixMilli(ts))
-		tr.lines = append(tr.lines, trailLine{T: t, Kind: k, What: what, Count: 1, From: t, To: t, fromMS: ts, toMS: ts})
+		tr.lines = append(tr.lines, trailLine{T: t, Kind: k, What: what, Count: 1, From: t, To: t, fromMS: ts, toMS: ts,
+			base: what, value: withValue(what, name, value)})
 		last = cursor{ts, id}
 	}
 	if err := rows.Err(); err != nil {
@@ -885,9 +891,16 @@ func (s *Server) trail(ctx context.Context, site int64, key string, from, to tim
 		switch {
 		case err == nil:
 			what, _ := describe(source, kind, name, tmpl, status)
-			tr.lines[0].Continued = what == tr.lines[0].What
+			tr.lines[0].Continued = what == tr.lines[0].base
 		case !errors.Is(err, sql.ErrNoRows):
 			return tr, err
+		}
+	}
+	// A single event shows its value; a run, even one a page bound split, shows none (the UI joins split parts by
+	// their line).
+	for i := range tr.lines {
+		if l := &tr.lines[i]; l.Count == 1 && !l.Continues && !l.Continued {
+			l.What = l.value
 		}
 	}
 	return tr, nil
@@ -930,6 +943,35 @@ func describe(source, kind, name, tmpl string, status int) (what, k string) {
 	return kind, kind
 }
 
+// vitalValue is a web vital's measured value as SQL, NULL for any other event and for a value that is no number:
+// the sender writes it, and a string there must not fail the page.
+const vitalValue = `CASE WHEN kind = 'vital' AND json_type(props, '$.p.value') IN ('integer', 'real')
+	THEN json_extract(props, '$.p.value') END`
+
+// withValue appends a vital's value to its line: "vital LCP 2.1 s", "vital CLS 0.042". Only the log and a single
+// trail event show it, never the model or actions: those group by the line, where a value would make every vital
+// an action of its own. A name the tracker never sends or a value no browser measures shows none. CLS keeps the
+// tracker's three decimals: with two, a recorded 0.004 read as no shift.
+func withValue(what, name string, v sql.NullFloat64) string {
+	if !v.Valid || v.Float64 < 0 {
+		return what
+	}
+	switch name {
+	case "CLS":
+		if v.Float64 <= 100 {
+			return what + " " + strconv.FormatFloat(v.Float64, 'f', 3, 64)
+		}
+	case "LCP", "FCP", "INP", "TTFB": // milliseconds
+		switch {
+		case v.Float64 < 999.5:
+			return fmt.Sprintf("%s %d ms", what, int(math.Round(v.Float64)))
+		case v.Float64 <= 3_600_000:
+			return fmt.Sprintf("%s %.1f s", what, v.Float64/1000)
+		}
+	}
+	return what
+}
+
 // readingInput is what the model reads about one actor, and the actor's own statements by evidence id (what the
 // dashboard shows for a cited id). The ids name what a statement says, not its figures (requests:refused-most,
 // pace:fast), so a reading cached under the behaviour's signature resolves against each actor's own statements.
@@ -938,9 +980,9 @@ func (s *Server) readingInput(site int64, row visitorRow, counts map[string]int6
 	in := insight.ReadingInput{SiteID: site, Key: row.Key, Class: row.Class, Client: row.Client,
 		NetworkKind: row.NetworkKind, Signals: row.Signals}
 	for _, l := range tr.lines {
-		line := l.What
+		line := l.base
 		if l.Count > 1 {
-			line = fmt.Sprintf("%s ×%d, %.1f s apart", l.What, l.Count, l.IntervalS)
+			line = fmt.Sprintf("%s ×%d, %.1f s apart", l.base, l.Count, l.IntervalS)
 		}
 		in.Trail = append(in.Trail, line)
 	}
@@ -1106,7 +1148,7 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		return
 	}
 	row := s.visitorRow(q, a, ci)
-	tr, err := s.trail(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()], before, 1)
+	tr, err := s.trail(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()], before)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -1134,7 +1176,7 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		// The reading reads the newest trail page, whatever page the user is on.
 		latest := tr
 		if before.ts > 0 {
-			if latest, err = s.trail(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()], cursor{}, 1); err != nil {
+			if latest, err = s.trail(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()], cursor{}); err != nil {
 				s.fail(w, r, err)
 				return
 			}

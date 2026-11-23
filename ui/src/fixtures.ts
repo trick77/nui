@@ -1007,7 +1007,7 @@ const single = (t: string, kind: string, what: string): TrailItem => ({
 // the first page's last line continues, the second's first continued.
 const PERSON_TRAIL: TrailItem[][] = [
   [
-    single("2026-11-22T13:12:09Z", "vital", "vital CLS"),
+    single("2026-11-22T13:12:09Z", "vital", "vital CLS 0.042"),
     single(
       "2026-11-22T13:12:08Z",
       "outbound_click",
@@ -1061,7 +1061,7 @@ const LOG_CLIENTS: [string, ClassKey, string, string, LogRow["source"]][] = [
     "outbound_click github.com",
     "browser",
   ],
-  ["203.0.113.42", "human", "vital", "vital LCP", "browser"],
+  ["203.0.113.42", "human", "vital", "vital LCP 2.1 s", "browser"],
   ["203.0.113.42", "human", "page_view", "view /AS:n", "browser"],
   [
     "2001:db8:4f2:1a00::7c",

@@ -851,6 +851,66 @@ func TestTrailRunAcrossPages(t *testing.T) {
 	}
 }
 
+// A vital's line carries its value in the trail and the log; a value that is no number, or one no browser measures,
+// shows none and fails nothing.
+func TestVitalValues(t *testing.T) {
+	r := newRig(t, 0, 0, nil)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	const key = "192.0.2.9"
+	vitals := []struct{ name, value, want string }{
+		{"LCP", `2134`, "vital LCP 2.1 s"},
+		{"LCP", `1876`, "vital LCP 1.9 s"},
+		{"INP", `183.6`, "vital INP 184 ms"},
+		{"CLS", `0.004`, "vital CLS 0.004"},
+		{"TTFB", `"fast"`, "vital TTFB"},
+		{"FCP", `-5`, "vital FCP"},
+		{"LCP", `1e300`, "vital LCP"},
+		{"constructor", `7`, "vital constructor"},
+	}
+	evs := make([]store.Event, len(vitals))
+	for i, v := range vitals {
+		evs[i] = store.Event{SiteID: site.ID, TS: r.end.UnixMilli() - int64(i)*1000, Source: "browser",
+			Kind: "vital", Name: v.name, IP: key, IPKey: key, Path: "/",
+			Props: `{"p":{"name":"` + v.name + `","value":` + v.value + `}}`}
+	}
+	if err := r.s.DB.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	_, d := r.get(t, "visitor", p(feedSite, "key", key, "range", "24h"))
+	var trail []string
+	for _, l := range d["trail"].([]any) {
+		m := l.(map[string]any)
+		trail = append(trail, fmt.Sprintf("%s ×%v", m["what"], m["count"]))
+	}
+	// The two LCPs are one run, which shows no value: it holds two.
+	want := []string{"vital LCP ×2", "vital INP 184 ms ×1", "vital CLS 0.004 ×1", "vital TTFB ×1",
+		"vital FCP ×1", "vital LCP ×1", "vital constructor ×1"}
+	if !slices.Equal(trail, want) {
+		t.Errorf("trail %q, want %q", trail, want)
+	}
+	// The model reads the lines without values: its reading is shared by every actor with the signature.
+	tr, err := r.s.trail(t.Context(), site.ID, key, r.end.Add(-24*time.Hour), r.end.Add(time.Minute), cursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, _ := r.s.readingInput(site.ID, visitorRow{Key: key}, map[string]int64{}, tr)
+	wantIn := []string{"vital LCP ×2, 1.0 s apart", "vital INP", "vital CLS", "vital TTFB", "vital FCP", "vital LCP",
+		"vital constructor"}
+	if !slices.Equal(in.Trail, wantIn) {
+		t.Errorf("model trail %q, want %q", in.Trail, wantIn)
+	}
+	code, body := r.get(t, "log", p(feedSite, "range", "24h", "addr", key))
+	rows := listRows(body)
+	if code != 200 || len(rows) != len(vitals) {
+		t.Fatalf("log %d, %d rows", code, len(rows))
+	}
+	for i, row := range rows {
+		if row["what"] != vitals[i].want {
+			t.Errorf("log row %d: %q, want %q", i, row["what"], vitals[i].want)
+		}
+	}
+}
+
 // Opening one visitor reads only its own class rows: never the site's whole range of them.
 func TestVisitorReadsOwnClass(t *testing.T) {
 	r := newRig(t, 3, 8, nil)
