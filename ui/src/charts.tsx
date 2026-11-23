@@ -422,11 +422,14 @@ export function MainChart({
 export function StackChart({
   labels,
   series,
+  classes = CLASSES,
   open,
   hourly = false,
 }: {
   labels: string[];
   series: Record<ClassKey, number[]>;
+  // Those the tooltip lists.
+  classes?: typeof CLASSES;
   open: boolean;
   hourly?: boolean;
 }) {
@@ -528,7 +531,7 @@ export function StackChart({
                   show(
                     e,
                     bucketName(lab, hourly, open && i === n - 1),
-                    CLASSES.map((c) => [c.label, num(series[c.key]?.[i] ?? 0)]),
+                    classes.map((c) => [c.label, num(series[c.key]?.[i] ?? 0)]),
                   )
                 }
                 onMouseLeave={hide}

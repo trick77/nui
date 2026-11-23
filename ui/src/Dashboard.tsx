@@ -33,7 +33,15 @@ import {
   type View,
 } from "./state";
 import { ErrorsPanel, Traffic, WhoIsAsking } from "./Traffic";
-import { DashContext, ErrorBox, Seg, Skeleton, useDash, type Dash } from "./ui";
+import {
+  DashContext,
+  ErrorBox,
+  Seg,
+  Skeleton,
+  showsApiClients,
+  useDash,
+  type Dash,
+} from "./ui";
 import { Visitors } from "./Visitors";
 
 const AUD_LABEL: Record<Audience, string> = {
@@ -181,6 +189,7 @@ export default function Dashboard({ me }: { me: Me }) {
           site,
           feed,
           both: feed && site.browser != null,
+          apiClients: showsApiClients(site, classes),
           openLog,
           goPanel,
           visitor: picked?.site === site.site ? picked.key : null,

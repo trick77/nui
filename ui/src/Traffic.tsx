@@ -14,13 +14,16 @@ import {
   Panel,
   SectionHead,
   Skeleton,
+  shownClasses,
   useDash,
 } from "./ui";
 
 // Who is asking: every class's share of all requests, whatever the
 // audience switch says (server only).
 export function WhoIsAsking({ classes }: { classes: Loaded<Classes> }) {
+  const { apiClients } = useDash();
   const c = classes.data;
+  const listed = c?.rows.filter((r) => r.class !== "api" || apiClients) ?? [];
   return (
     <Panel label="Who is asking" className="card" busy={classes.loading}>
       <CardHead title="Who is asking" sources={["server"]} />
@@ -34,7 +37,7 @@ export function WhoIsAsking({ classes }: { classes: Loaded<Classes> }) {
         <>
           <Strip
             label="Requests by class"
-            parts={c.rows.map((r) => ({
+            parts={listed.map((r) => ({
               key: r.class,
               label: CLASSES.find((x) => x.key === r.class)?.label ?? r.class,
               share: r.share,
@@ -55,7 +58,7 @@ export function WhoIsAsking({ classes }: { classes: Loaded<Classes> }) {
               </tr>
             </thead>
             <tbody>
-              {c.rows.map((r) => {
+              {listed.map((r) => {
                 const k = CLASSES.find((x) => x.key === r.class);
                 return (
                   <tr key={r.class}>
@@ -163,7 +166,8 @@ export function Traffic(props: { classes: Loaded<Classes> }) {
 }
 
 function TrafficPanels({ classes }: { classes: Loaded<Classes> }) {
-  const { scope, openLog } = useDash();
+  const { scope, openLog, apiClients } = useDash();
+  const shown = shownClasses(apiClients);
   const st = useApi<Status>(
     scopeKey("status", scope),
     (s) => api.status(scope, s),
@@ -175,7 +179,7 @@ function TrafficPanels({ classes }: { classes: Loaded<Classes> }) {
       <SectionHead
         id="traffic"
         title="Traffic"
-        lead="Who is asking: people, signed-in API clients, known bots from the ipverse list, uptime probes, and automation nobody announced."
+        lead={`Who is asking: people, ${apiClients ? "signed-in API clients, " : ""}known bots from the ipverse list, uptime probes, and automation nobody announced.`}
         sources={["server"]}
       />
       <div className="grid grid-cols-1 gap-3 min-[1000px]:grid-cols-2">
@@ -188,7 +192,7 @@ function TrafficPanels({ classes }: { classes: Loaded<Classes> }) {
             title="Requests by class"
             right={
               <div className="legend">
-                {CLASSES.map((k) => (
+                {shown.map((k) => (
                   <span key={k.key}>
                     <i className="sw" style={{ background: k.color }} />
                     {k.label}
@@ -205,6 +209,7 @@ function TrafficPanels({ classes }: { classes: Loaded<Classes> }) {
             <StackChart
               labels={c.labels}
               series={c.series}
+              classes={shown}
               open={c.last_bucket_open}
               hourly={c.bucket === "hour"}
             />

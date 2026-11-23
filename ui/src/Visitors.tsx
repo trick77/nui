@@ -53,7 +53,8 @@ const TOP = 7;
 const PAGE = 50;
 
 export function Visitors({ aud }: { aud: Audience }) {
-  const { scope, feed, visitor, selectVisitor, openLog } = useDash();
+  const { scope, feed, visitor, selectVisitor, openLog, apiClients } =
+    useDash();
   const sorts: { key: Sort; label: string }[] = feed
     ? [
         { key: "requests", label: "Most requests" },
@@ -85,6 +86,10 @@ export function Visitors({ aud }: { aud: Audience }) {
   // shown are the previous query's: no paging from them.
   const fresh = !page.loading;
   const next = more.next ?? page.data?.next ?? "";
+  // A picked class stays, or nothing would be pressed. A row of the class
+  // can have no request of it in the range: an address has one class a day.
+  const hasApi =
+    apiClients || clsPick === "api" || rows.some((v) => v.class === "api");
   // A pick from a finding or a related address may lie outside the table.
   const selected = visitor ?? rows[0]?.key ?? null;
   // A column keeps the mark's margin only when a row shown has the mark.
@@ -108,7 +113,7 @@ export function Visitors({ aud }: { aud: Audience }) {
             aud === "all" ? (
               <Seg
                 label="Class"
-                options={CLASS_FILTER}
+                options={CLASS_FILTER.filter((c) => c.key !== "api" || hasApi)}
                 value={clsPick}
                 onChange={setCls}
               />
