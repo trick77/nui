@@ -170,6 +170,12 @@ export function DomainFooter() {
                       "Figures",
                       `since ${date(x.storage.figures_since)}`,
                     ],
+                    // Each address's daily sums (the visitors table over
+                    // long ranges): they expire with raw's months.
+                    [
+                      "Addresses",
+                      `kept ${num(x.storage.retention_months)} months`,
+                    ],
                     ["Database, all sites", bytes(x.storage.bytes)],
                     ["Visitor identity", x.storage.identity],
                   ]}
