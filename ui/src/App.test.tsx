@@ -907,6 +907,10 @@ describe("dashboard on a domain with a server feed", () => {
       "since 20.10.2025",
     );
     expect(within(d).queryByText("First event")).toBeNull();
+    // The per-address sums expire with raw.
+    expect(within(d).getByText("Addresses").nextSibling).toHaveTextContent(
+      "kept 25 months",
+    );
     expect(within(d).getByText("41 of 200 calls today")).toBeInTheDocument();
   });
 

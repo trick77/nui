@@ -27,9 +27,11 @@ type Config struct {
 
 	// SitesFile declares the sites, their feed key hashes and path rules (docs/sites.example.json).
 	SitesFile string
-	// RetentionMonths is how long raw events are kept: 25, so a 12-month view still has its comparison year.
+	// RetentionMonths is how long raw events and the per-address aggregates are kept; the other figures stay, unless
+	// the size cap takes them.
 	RetentionMonths int
-	// MaxDBMB caps what the rows may take; past it the oldest events go first. 0 is no cap.
+	// MaxDBMB caps what the rows may take; past it the oldest raw events go first, then aggregates
+	// (store.EnforceCap). 0 is no cap.
 	MaxDBMB int
 
 	// SessionSecret keys the session cookie's signature (with the admin token, sessionKey), 32+ characters; empty

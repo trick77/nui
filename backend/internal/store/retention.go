@@ -432,7 +432,7 @@ func (s *Store) deleteEvents(ctx context.Context, where string, args ...any) (in
 
 // RetentionOptions configures RunRetention.
 type RetentionOptions struct {
-	// Months is how long events are kept.
+	// Months is how long events and the per-address aggregates are kept.
 	Months int
 	// MaxBytes caps what the rows take (0: no cap).
 	MaxBytes int64
