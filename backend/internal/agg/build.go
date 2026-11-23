@@ -64,6 +64,15 @@ type Builder struct {
 	// beforeWrite sees the build about to be written.
 	beforeRead, afterRead func(site, day int64)
 	beforeWrite           func(w *store.AggBuild)
+	// version replaces Version (tests: a release with a new builder).
+	version int64
+}
+
+func (b *Builder) builder() int64 {
+	if b.version != 0 {
+		return b.version
+	}
+	return Version
 }
 
 // BuildDay builds one site-day from its raw events and freezes it. It returns whether the day came out clean: false
@@ -93,7 +102,7 @@ func (b *Builder) BuildDay(ctx context.Context, site, day int64) (bool, error) {
 		k = TopK
 	}
 	w := d.rows(k)
-	w.Version, w.Builder, w.Events = pre.Version, Version, d.events
+	w.Version, w.Builder, w.Events = pre.Version, b.builder(), d.events
 	// A first build, or one for a raw write (or after a write cut short), may change the next day's carried
 	// sessions; a rebuild for a new builder or for the day before does not change this day's raw.
 	w.RequeueNext = !pre.Frozen || pre.Dirty == store.AggRawChanged || pre.Dirty == store.AggWriting

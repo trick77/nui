@@ -1,5 +1,5 @@
-// Command server runs Stakeout: the collector, the background work (classification, reference data, retention, the
-// model) and the dashboard.
+// Command server runs Stakeout: the collector, the background work (classification, reference data, aggregates,
+// retention, the model) and the dashboard.
 package main
 
 import (
@@ -25,6 +25,7 @@ import (
 	"github.com/trick77/ship/kit/version"
 	"github.com/trick77/toolkit/llmwire"
 
+	"github.com/trick77/stakeout/backend/internal/agg"
 	"github.com/trick77/stakeout/backend/internal/app"
 	"github.com/trick77/stakeout/backend/internal/classify"
 	"github.com/trick77/stakeout/backend/internal/dash"
@@ -259,6 +260,15 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 		select {
 		case <-refCached:
 			cls.Run(c)
+		case <-c.Done():
+		}
+	})
+	// The aggregate job backfills every day with raw after an upgrade, then builds each day as it falls due. It waits
+	// for the reference data as the classifier does: the start's own reads first.
+	start(func(c context.Context) {
+		select {
+		case <-refCached:
+			agg.Run(c, st, agg.Options{Months: cfg.RetentionMonths})
 		case <-c.Done():
 		}
 	})
