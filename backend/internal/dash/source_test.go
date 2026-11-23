@@ -501,7 +501,8 @@ func TestSources_RawSpan(t *testing.T) {
 	}
 	addrs := addrRows()
 	used, _ := r.s.DB.UsedBytes(t.Context())
-	if _, err := r.s.DB.EnforceCap(t.Context(), used*95/100, r.end, slog.New(slog.DiscardHandler)); err != nil {
+	if _, err := r.s.DB.EnforceCap(t.Context(), store.RetentionOptions{MaxBytes: used * 95 / 100, Builder: agg.Version,
+		Log: slog.New(slog.DiscardHandler)}, r.end); err != nil {
 		t.Fatal(err)
 	}
 	if addrRows() != addrs {

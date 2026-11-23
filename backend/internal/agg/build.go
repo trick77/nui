@@ -5,10 +5,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"log/slog"
 	"maps"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/trick77/stakeout/backend/internal/classify"
 	"github.com/trick77/stakeout/backend/internal/store"
@@ -76,10 +79,41 @@ func (b *Builder) builder() int64 {
 	return Version
 }
 
+// buildLocks holds one mutex per store: the job and the size cap's Cover never build at once, so neither writes a
+// day the other is writing.
+var buildLocks sync.Map // *store.Store -> *sync.Mutex
+
+func (b *Builder) lock() func() {
+	m, _ := buildLocks.LoadOrStore(b.Store, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 // BuildDay builds one site-day from its raw events and freezes it. It returns whether the day came out clean: false
 // when raw changed after the build's read (a write, or retention cutting the day), which leaves it dirty for the next
 // pass, or when a write cut short left rows nothing can rebuild. A day whose raw is gone is not rebuilt.
 func (b *Builder) BuildDay(ctx context.Context, site, day int64) (bool, error) {
+	defer b.lock()()
+	return b.buildDay(ctx, site, day)
+}
+
+// buildIfNeeded builds a site-day unless it is built already (store.AggDay.BuiltBy), checked under the lock: a list
+// of days made before (the job's pass) goes stale while Cover builds. It returns whether it built.
+func (b *Builder) buildIfNeeded(ctx context.Context, site, day int64) (bool, error) {
+	defer b.lock()()
+	days, err := b.Store.AggDays(ctx, site, day, day)
+	if err != nil {
+		return false, err
+	}
+	if d, ok := days[day]; ok && d.BuiltBy(b.builder()) {
+		return false, nil
+	}
+	_, err = b.buildDay(ctx, site, day)
+	return err == nil, err
+}
+
+func (b *Builder) buildDay(ctx context.Context, site, day int64) (bool, error) {
 	st := b.Store
 	if err := st.BeginAggDay(ctx, site, day); err != nil {
 		return false, err
@@ -104,6 +138,7 @@ func (b *Builder) BuildDay(ctx context.Context, site, day int64) (bool, error) {
 	}
 	w := d.rows(k)
 	w.Version, w.Builder, w.Events = pre.Version, b.builder(), d.events
+	w.Carried, w.CarriedSaved = d.keep, d.keepSaved
 	// A first build, or one for a raw write (or after a write cut short), may change the next day's carried
 	// sessions; a rebuild for a new builder or for the day before does not change this day's raw.
 	w.RequeueNext = !pre.Frozen || pre.Dirty == store.AggRawChanged || pre.Dirty == store.AggWriting
@@ -131,7 +166,7 @@ func (d *dayBuild) load(ctx context.Context, st *store.Store) (store.AggDay, err
 		return pre, nil
 	}
 	prev, ok := days[d.day-1]
-	if err := d.prevSessions(ctx, tx, ok && !prev.Raw); err != nil {
+	if err := d.prevSessions(ctx, tx, ok && !prev.Raw, pre.Dirty == store.AggWriting); err != nil {
 		return store.AggDay{}, err
 	}
 	return pre, d.read(ctx, tx)
@@ -221,10 +256,12 @@ type dayBuild struct {
 	hours     map[hourKey]*hourAcc
 	lists     map[listKey]*entry
 	addrs     map[store.AggAddrKey]*addrAcc
-	// prev are the day before's (key, part, sid) hashes; keep, when set, the stored carried counts instead.
-	prev    set
-	keep    map[store.AggAddrKey]int64
-	clients map[string][3]string
+	// prev are the day before's (key, part, sid) hashes; keep, when set, the stored carried counts instead, from the
+	// copy a cut-short rewrite saved when keepSaved.
+	prev      set
+	keep      map[store.AggAddrKey]int64
+	keepSaved bool
+	clients   map[string][3]string
 }
 
 func newDayBuild(site, day int64) *dayBuild {
@@ -244,8 +281,26 @@ func partOf(cls int) int {
 }
 
 // prevSessions loads the day before's sessions per key and part, which carried compares with: from its raw, one
-// statement over that day; or, when its raw is gone (noRaw), the day's stored carried counts stand.
-func (d *dayBuild) prevSessions(ctx context.Context, q store.Queryer, noRaw bool) error {
+// statement over that day; or, when its raw is gone (noRaw), the day's stored carried counts stand. A day left
+// mid-write (writing) holds part of its rows: its counts come from the copy the cut-short rewrite saved first
+// (store.AggBuild.Carried). Without one (a write cut short before its day before lost its raw) nothing tells which
+// sessions were carried: each counts as new, a session over the midnight on both days, and the build says so.
+func (d *dayBuild) prevSessions(ctx context.Context, q store.Queryer, noRaw, writing bool) error {
+	if noRaw && writing {
+		keep, whole, err := store.AggSavedCarriedIn(ctx, q, d.site, d.day)
+		if err != nil {
+			return err
+		}
+		if whole {
+			d.keep, d.keepSaved = keep, true
+			return nil
+		}
+		slog.Warn("Aggregates: a day left mid-write whose day before has no raw is rebuilt without its carried "+
+			"sessions: visits over its midnight count on both days", "site", d.site,
+			"day", time.UnixMilli(d.day*dayMS).UTC().Format(time.DateOnly))
+		d.keep = map[store.AggAddrKey]int64{}
+		return nil
+	}
 	if noRaw {
 		var err error
 		d.keep, err = store.AggCarriedIn(ctx, q, d.site, d.day)

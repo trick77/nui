@@ -22,7 +22,7 @@ func TestLoadConfig_Defaults(t *testing.T) {
 		t.Errorf("trusted hops default %d, want 1 (the compose file's Traefik)", cfg.TrustedHops)
 	}
 	if cfg.Addr != ":8080" || cfg.DataDir != "/data" || cfg.SitesFile != "/data/sites.json" || cfg.RetentionMonths != 25 ||
-		cfg.MaxDBMB != 20480 || cfg.LLMModel != "mimo-v2.6-flash" || cfg.LLMDailyCalls != 200 || cfg.OIDCConfigured() ||
+		cfg.RawRetentionDays != 90 || cfg.MaxDBMB != 20480 || cfg.LLMModel != "mimo-v2.6-flash" || cfg.LLMDailyCalls != 200 || cfg.OIDCConfigured() ||
 		cfg.Secure() || cfg.AuthDisabled {
 		t.Errorf("cfg = %+v", cfg)
 	}
@@ -40,13 +40,15 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 		"BACKEND_OIDC_ADMIN_GROUP":   "stakeout-admins",
 		"BACKEND_SESSION_SECRET":     strings.Repeat("x", 32),
 		"BACKEND_RETENTION_MONTHS":   "13",
+		"BACKEND_RAW_RETENTION_DAYS": "15",
 		"BACKEND_TRUSTED_HOPS":       "0",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.OIDCRedirectURL != "https://stakeout.example.com/api/auth/callback" || !cfg.Secure() || !cfg.OIDCConfigured() ||
-		cfg.SitesFile != "/var/lib/stakeout/sites.json" || cfg.RetentionMonths != 13 || cfg.TrustedHops != 0 {
+		cfg.SitesFile != "/var/lib/stakeout/sites.json" || cfg.RetentionMonths != 13 || cfg.RawRetentionDays != 15 ||
+		cfg.TrustedHops != 0 {
 		t.Errorf("cfg = %+v", cfg)
 	}
 }
@@ -55,6 +57,9 @@ func TestLoadConfig_Faults(t *testing.T) {
 	for name, vars := range map[string]map[string]string{
 		"level":       {"BACKEND_LOG_LEVEL": "loud"},
 		"retention":   {"BACKEND_RETENTION_MONTHS": "0"},
+		"raw days":    {"BACKEND_RAW_RETENTION_DAYS": "14"},
+		"raw days 0":  {"BACKEND_RAW_RETENTION_DAYS": "0"},
+		"raw words":   {"BACKEND_RAW_RETENTION_DAYS": "ninety"},
 		"negative":    {"BACKEND_MAX_DB_MB": "-1"},
 		"secret":      {"BACKEND_SESSION_SECRET": "short"},
 		"half oidc":   {"BACKEND_OIDC_ISSUER": "https://auth.example.com"},

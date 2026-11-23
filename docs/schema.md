@@ -2,7 +2,7 @@
 
 # Database schema
 
-12 tables; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.
+14 tables; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.
 
 ## actor_class
 
@@ -74,6 +74,24 @@ Checks:
 
 - `CHECK (part IN (1, 2))`
 
+## agg_carried
+
+Go types:
+
+- `store.AggCarried` (internal/store): AggCarried is one key's carried sessions a rebuild saved before rewriting a day whose day before has no raw (IPKey "" and Part 0: the copy is whole).
+
+| Column | Type | Null | Default | PK |
+| --- | --- | --- | --- | --- |
+| `site_id` | INTEGER | no |  | 1 |
+| `day` | INTEGER | no |  | 2 |
+| `ip_key` | TEXT | no |  | 3 |
+| `part` | INTEGER | no |  | 4 |
+| `carried` | INTEGER | no |  |  |
+
+Foreign keys:
+
+- `site_id` → `site` (`id`)
+
 ## agg_day
 
 Go types:
@@ -92,6 +110,7 @@ Go types:
 | `raw` | INTEGER | no | `1` |  |
 | `events` | INTEGER | no | `0` |  |
 | `built_at` | INTEGER | no | `0` |  |
+| `addrs_cut` | INTEGER | no | `0` |  |
 
 Foreign keys:
 
@@ -159,6 +178,17 @@ Foreign keys:
 Checks:
 
 - `CHECK (part IN (1, 2))`
+
+## agg_meta
+
+Go types:
+
+- `store.AggMeta` (internal/store): AggMeta is one marker of the background jobs: raw_purge_armed_at, the first start of the release that purges raw.
+
+| Column | Type | Null | Default | PK |
+| --- | --- | --- | --- | --- |
+| `key` | TEXT | no |  | 1 |
+| `value` | TEXT | no |  |  |
 
 ## event
 
@@ -369,6 +399,13 @@ erDiagram
         TEXT country
         INTEGER cls
     }
+    agg_carried {
+        INTEGER site_id PK, FK
+        INTEGER day PK
+        TEXT ip_key PK
+        INTEGER part PK
+        INTEGER carried
+    }
     agg_day {
         INTEGER site_id PK, FK
         INTEGER day PK
@@ -379,6 +416,7 @@ erDiagram
         INTEGER raw
         INTEGER events
         INTEGER built_at
+        INTEGER addrs_cut
     }
     agg_hour {
         INTEGER site_id PK, FK
@@ -412,6 +450,10 @@ erDiagram
         BLOB addrs
         INTEGER entries
         BLOB keys
+    }
+    agg_meta {
+        TEXT key PK
+        TEXT value
     }
     event {
         INTEGER id PK
@@ -487,6 +529,7 @@ erDiagram
     }
     actor_class }o--|| site : "site_id"
     agg_addr }o--|| site : "site_id"
+    agg_carried }o--|| site : "site_id"
     agg_day }o--|| site : "site_id"
     agg_hour }o--|| site : "site_id"
     agg_list }o--|| site : "site_id"

@@ -32,8 +32,10 @@ type Server struct {
 	Counters        *ingest.Counters
 	Model           insight.Model
 	RetentionMonths int
-	Build           string
-	Now             func() time.Time
+	// RawDays is how long raw events are kept (BACKEND_RAW_RETENTION_DAYS); 0 keeps them RetentionMonths.
+	RawDays int
+	Build   string
+	Now     func() time.Time
 	// Source is where the figures the aggregates can serve come from: SourceAuto but in tests.
 	Source Source
 

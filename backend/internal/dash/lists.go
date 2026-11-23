@@ -497,6 +497,11 @@ func (d dimSpec) figure(g *keySums) int64 { return d.value(g.a, g.b, g.d.count()
 // raw only: with the comparison's raw not all there, none has a change.
 func (s *Server) list(ctx context.Context, q *query, dim string, o listOpts) (listResp, error) {
 	d := o.dimSpec
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		return listResp{}, err
+	}
+	gaps := pl.gaps
 	cur, closed := newSums(), newSums()
 	if err := s.scanDim(ctx, q, o.scan, q.p.win, !q.p.agg, cur, closed); err != nil {
 		return listResp{}, err
@@ -508,15 +513,13 @@ func (s *Server) list(ctx context.Context, q *query, dim string, o listOpts) (li
 			return listResp{}, err
 		}
 		if o.dim == "" {
-			pl, err := s.planOf(ctx, q)
-			if err != nil {
-				return listResp{}, err
-			}
 			if cmpOn, err = pl.rawCovers(ctx, q.p.prevWin.From, q.p.prevWin.Closed); err != nil {
 				return listResp{}, err
 			}
 		}
 	}
+	// A gap on either side (plan.gaps): no change is known.
+	cmpOn = cmpOn && pl.gaps == gaps
 	rows := make([]listRow, 0, len(cur.m))
 	var sum int64
 	for k, g := range cur.m {
@@ -1027,6 +1030,7 @@ func (s *Server) handleClasses(w http.ResponseWriter, r *http.Request, q *query)
 		return
 	}
 	n := q.p.n()
+	gaps := pl.gaps
 	series := map[string][]float64{}
 	cur, closed, prev := classSums{}, classSums{}, classSums{}
 	for _, c := range classOrder {
@@ -1067,7 +1071,7 @@ func (s *Server) handleClasses(w http.ResponseWriter, r *http.Request, q *query)
 		if p := prev[c]; p != nil {
 			was = p.requests
 		}
-		row.Change = sumChange(float64(closed[c].requests), float64(was), q.p.Prev != nil)
+		row.Change = sumChange(float64(closed[c].requests), float64(was), q.p.Prev != nil && pl.gaps == gaps)
 		row.Verdict = classVerdict(c, row.Change)
 		rows = append(rows, row)
 	}
