@@ -682,12 +682,12 @@ func TestBuild_Plans(t *testing.T) {
 	st := historyOrEmpty(t)
 	var mu sync.Mutex
 	seen := map[string][]any{}
-	traceSQL = func(q string, args []any) {
+	TraceSQL = func(q string, args []any) {
 		mu.Lock()
 		defer mu.Unlock()
 		seen[q] = append([]any(nil), args...)
 	}
-	t.Cleanup(func() { traceSQL = nil })
+	t.Cleanup(func() { TraceSQL = nil })
 	buildAll(t, st, TopK)
 	if len(seen) < 2 {
 		t.Fatalf("%d statements traced", len(seen))
