@@ -898,7 +898,7 @@ describe("dashboard on a domain with a server feed", () => {
     expect(
       within(d).getByText(
         new RegExp(
-          `^1['’]284['’]551 stored${SEP}since 3\\.9\\.2026${SEP}kept 761 days$`,
+          `^1['’]284['’]551 stored${SEP}since 3\\.9\\.2026${SEP}kept 90 days$`,
         ),
         asIs,
       ),
@@ -912,6 +912,40 @@ describe("dashboard on a domain with a server feed", () => {
       "kept 25 months",
     );
     expect(within(d).getByText("41 of 200 calls today")).toBeInTheDocument();
+    // No purge pending: nothing about older raw.
+    expect(d.textContent).not.toMatch(/is deleted from/);
+  });
+
+  it("says from when older raw is deleted during the purge's grace", async () => {
+    window.history.replaceState(null, "", "/dashboard/");
+    const fx = fixtureFetch();
+    setFetcher(async (u, i) => {
+      const res = await fx(u, i);
+      if (!u.startsWith("/api/dash/domain?")) return res;
+      const d = await res.json();
+      // An upgraded install: raw still reaches back two years.
+      return new Response(
+        JSON.stringify({
+          ...d,
+          storage: {
+            ...d.storage,
+            oldest: "2024-10-30T00:00:00Z",
+            purge_from: "2026-11-29T13:00:00Z",
+          },
+        }),
+      );
+    });
+    render(<App />);
+    const d = await screen.findByRole("region", { name: "This domain" });
+    expect(
+      await within(d).findByText(
+        new RegExp(`since 30\\.10\\.2024${SEP}kept 90 days$`),
+        asIs,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(d).getByText("raw older than 90 days is deleted from 29.11.2026"),
+    ).toBeInTheDocument();
   });
 
   it("shows no figures row for a domain without data", async () => {
