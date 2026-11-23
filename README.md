@@ -222,6 +222,20 @@ Send only these fields, never raw request headers: they can carry credentials. A
 can be sent again; 400, 401 and 413 will be refused again. Events an accepted batch dropped are counted as
 rejected once; a batch refused for the rate is not counted until it is taken.
 
+### Storage
+
+Raw events, every request with its address, user agent and path, are kept `BACKEND_RAW_RETENTION_DAYS` (90, at
+least 15: 7d and its prior period are read raw): the log, a visitor's trail and what an address does reach back that
+far. The figures (tiles, lists, hours, the year before) are built per UTC day two days after it ended and kept; a
+day's raw is deleted only once its figures are built from it. Each address's daily sums, the actor classes and the
+model's usage are kept `BACKEND_RETENTION_MONTHS` (25). `BACKEND_MAX_DB_MB` caps the whole
+([`.env.example`](.env.example)).
+
+A release that first deletes raw by days deletes nothing for 7 days after its first start, a restart included; the
+footer says from when. Then raw from the day holding the months' cutoff back goes at once, the rest down to the raw
+days a day at a time in short steps, and the database file shrinks a MiB at a time (incremental vacuum, the mode
+Stakeout creates its database in), at most 30 s per retention round, without locking the collector out.
+
 ### Dashboard API
 
 `/api/dash/*` is the dashboard's own API (a session required). For links into it: the log's `addr` filter takes an

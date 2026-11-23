@@ -21,6 +21,9 @@ under `/dashboard`. `backend/`: Go on ship's kit, embeds `ui/` (React, Vite, Tai
   transaction, or figures drift unseen. Permanent once raw is gone: the sketch format and the dimension
   definitions; change either only with a builder version bump. The last 3 days are unbuilt: raw lost there is lost
   for good. Known: aud=all visits count a session with rows in both parts twice; a classified day has none.
+- Raw purge: a day loses raw only once its aggregate rows are complete (days up to the months' cutoff excepted),
+  else its figures read empty for good. 7 days' grace from a purging release's first start: figures checked against
+  whole raw. Raw days ≥ 15: 7d and its prior period read raw from local midnight, any zone.
 - A statement over a site's events or aggregates spans at most a day: a read held for seconds keeps the WAL from
   restarting while the collector writes (ipverse-core's lesson; a month's actor GROUP BY took 0.8 s on 24 M events,
   a day 0.02 s). A 12-month page took ~60 s raw at that size.
