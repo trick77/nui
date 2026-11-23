@@ -23,11 +23,7 @@ export function WhoIsAsking({ classes }: { classes: Loaded<Classes> }) {
   const c = classes.data;
   return (
     <Panel label="Who is asking" className="card" busy={classes.loading}>
-      <CardHead
-        title="Who is asking"
-        sources={["server"]}
-        right="all requests, every class"
-      />
+      <CardHead title="Who is asking" sources={["server"]} />
       {classes.error ? (
         <ErrorBox error={classes.error} />
       ) : !c ? (
