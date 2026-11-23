@@ -109,7 +109,7 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 	}
 	cond := strings.Join(where, " AND ") + " AND ts >= ? AND ts < ?"
 	ctx := r.Context()
-	from, to := ms(q.p.From()), ms(q.p.Bounds[q.p.n()])
+	from, to := ms(q.p.win.From), ms(q.p.win.End)
 	// The total and the page are read a window at a time: a filter the indexes cannot answer (a path substring)
 	// otherwise reads the whole range in one statement, seconds long on a year of events.
 	var total int64

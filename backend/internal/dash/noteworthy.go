@@ -209,15 +209,6 @@ func factsHash(facts []insight.Fact) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// closedQuery restricts q to its closed buckets and its comparison's: the bounds a finding is computed on.
-func closedQuery(q *query) *query {
-	c := *q
-	n := q.p.n()
-	c.p.Bounds = q.p.Bounds[:n]
-	c.p.Prev = q.p.Prev[:n]
-	return &c
-}
-
 // findings computes Noteworthy's facts. Stable ids: the finding's type and key.
 func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insight.Fact, error) {
 	var facts []insight.Fact
@@ -251,27 +242,27 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insigh
 			}
 		}
 	}
-	cq := closedQuery(q)
-	if err := s.newKeys(ctx, cq, "referrers", minReferrerVisitors, func(k string, v int64) {
+	// The lists' findings: the closed part of the daily span against the comparison's.
+	if err := s.newKeys(ctx, q, "referrers", minReferrerVisitors, func(k string, v int64) {
 		add(insight.Fact{ID: "ref:" + k, Kind: "people", Figure: num(float64(v)), Unit: "visitors from",
 			Text: "New referrer: " + k, Score: 150 + float64(v), Target: insight.Target{Panel: "referrers"}})
 	}); err != nil {
 		return nil, err
 	}
-	if err := s.newKeys(ctx, cq, "errors", 1, func(k string, v int64) {
+	if err := s.newKeys(ctx, q, "errors", 1, func(k string, v int64) {
 		add(insight.Fact{ID: "err:" + k, Kind: "problem", Figure: num(float64(v)), Unit: "times",
 			Text: "New error: " + truncate(k, 120), Score: 1000 + float64(v), Target: insight.Target{Panel: "errors"}})
 	}); err != nil {
 		return nil, err
 	}
 	if q.site.HasFeed {
-		if err := s.newKeys(ctx, cq, "probed", minProbes, func(k string, v int64) {
+		if err := s.newKeys(ctx, q, "probed", minProbes, func(k string, v int64) {
 			add(insight.Fact{ID: "probe:" + k, Kind: "automation", Figure: num(float64(v)), Unit: "probes of",
 				Text: "New probed path: " + k, Score: 500 + float64(v), Target: insight.Target{Panel: "probed"}})
 		}); err != nil {
 			return nil, err
 		}
-		if err := s.spikes(ctx, cq, add); err != nil {
+		if err := s.spikes(ctx, q, add); err != nil {
 			return nil, err
 		}
 	}
@@ -299,14 +290,18 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insigh
 	return facts, nil
 }
 
-// newKeys reports the keys of a list dimension that have at least min now and nothing in the comparison.
+// closedPart is a window's closed part.
+func closedPart(w window) window { return closedWin(w.From, w.Closed) }
+
+// newKeys reports the keys of a list dimension that have at least min in the closed part and nothing in the
+// comparison.
 func (s *Server) newKeys(ctx context.Context, q *query, dim string, minValue int64, fn func(string, int64)) error {
 	d := dims[dim]
 	cur, prev := aggMap{}, aggMap{}
-	if err := s.scanDim(ctx, q, d, "", nil, q.p.Bounds, cur); err != nil {
+	if err := s.scanDim(ctx, q, d, "", nil, closedPart(q.p.win), cur); err != nil {
 		return err
 	}
-	if err := s.scanDim(ctx, q, d, "", nil, q.p.Prev, prev); err != nil {
+	if err := s.scanDim(ctx, q, d, "", nil, *q.p.prevWin, prev); err != nil {
 		return err
 	}
 	type kv struct {
@@ -341,10 +336,10 @@ func (s *Server) spikes(ctx context.Context, q *query, add func(insight.Fact)) e
 	}{{"ip_key", "spike:addr:", minSpikeRequests, spikeShare}, {"CAST(asn AS TEXT)", "spike:net:", minNetworkRequests, networkShare}} {
 		d := dimSpec{where: "source = 'server'", key: sp.key, a: "COUNT(*)", b: "0", value: countA, second: zeroSecond}
 		cur, prev := aggMap{}, aggMap{}
-		if err := s.scanDim(ctx, q, d, "", nil, q.p.Bounds, cur); err != nil {
+		if err := s.scanDim(ctx, q, d, "", nil, closedPart(q.p.win), cur); err != nil {
 			return err
 		}
-		if err := s.scanDim(ctx, q, d, "", nil, q.p.Prev, prev); err != nil {
+		if err := s.scanDim(ctx, q, d, "", nil, *q.p.prevWin, prev); err != nil {
 			return err
 		}
 		var total int64

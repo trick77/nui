@@ -122,6 +122,10 @@ func (s *Server) parse(r *http.Request) (*query, error) {
 
 // period is a range's buckets in the viewer's zone. Bounds holds n+1 instants for n buckets, the last bucket the
 // open one (it ends in the future). Prev holds the comparison's, nil when cmp is off.
+//
+// An aggregate period (30d, 90d, 12mo, and every yoy comparison) is one the daily and hourly tables can serve: its
+// bucket bounds are floored to the UTC hour (a zone on a half hour moves 30 min earlier), and its daily figures read
+// whole UTC days by the viewer's calendar date (win). 24h and 7d and their prior period keep the exact local bounds.
 type period struct {
 	Bucket string
 	Bounds []time.Time
@@ -129,6 +133,23 @@ type period struct {
 	Now    time.Time
 	labels []string
 	prevL  string
+	// agg and prevAgg say whether the range, and its comparison, is an aggregate period.
+	agg, prevAgg bool
+	// win is the span of the daily figures (lists, status, clients, the visitors table, a visitor, the log);
+	// prevWin the comparison's closed part, nil when lists compare nothing (cmp off, and 24h against last year,
+	// which whole days cannot match).
+	win     window
+	prevWin *window
+}
+
+// window is a daily figure's span: [From, Closed) the closed part a change compares, [Closed, End) the open one. On
+// an aggregate period every edge is a UTC midnight, End the one after now's day.
+type window struct{ From, Closed, End time.Time }
+
+// utcDay is the UTC midnight of t's calendar date in its own zone: a local day read as a whole UTC day.
+func utcDay(t time.Time) time.Time {
+	y, m, d := t.Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 
 func newPeriod(rng, cmp string, now time.Time, loc *time.Location) period {
@@ -136,7 +157,8 @@ func newPeriod(rng, cmp string, now time.Time, loc *time.Location) period {
 	var n int
 	var step func(time.Time, int) time.Time
 	var start time.Time
-	p := period{Now: now}
+	p := period{Now: now, agg: rng != "24h" && rng != "7d"}
+	p.prevAgg = p.agg || cmp == "yoy"
 	switch rng {
 	case "24h":
 		n, p.Bucket = 24, "hour"
@@ -175,6 +197,46 @@ func newPeriod(rng, cmp string, now time.Time, loc *time.Location) period {
 		}
 		p.prevL = "last year"
 	}
+
+	// The daily figures' spans. Whole UTC days: from the start's date to today's, never past the UTC day now is in
+	// (east of UTC after local midnight, today's date has not begun in UTC).
+	today := utcDay(now.UTC())
+	snapped := window{From: utcDay(p.Bounds[0]), Closed: utcDay(p.Bounds[n-1]), End: today.AddDate(0, 0, 1)}
+	if snapped.Closed.After(today) {
+		snapped.Closed = today
+	}
+	p.win = window{From: p.Bounds[0], Closed: p.Bounds[n-1], End: p.Bounds[n]}
+	closedDays := n - 1 // 7d: local days, whatever UTC's clamp
+	if p.agg {
+		p.win = snapped
+		closedDays = int(snapped.Closed.Sub(snapped.From) / (24 * time.Hour))
+	}
+	switch {
+	// 12mo's prior period is last year: both comparisons the same months back, as its month buckets are.
+	case cmp == "prev" && p.agg, cmp == "yoy" && rng == "12mo":
+		p.prevWin = &window{From: step(snapped.From, -n), Closed: step(snapped.Closed, -n)}
+	case cmp == "prev":
+		p.prevWin = &window{From: p.Prev[0], Closed: p.Prev[n-1]}
+	case cmp == "yoy" && rng != "24h":
+		// As many whole days as the current closed part, a leap day or a clamp to UTC's today included.
+		from := snapped.From.AddDate(-1, 0, 0)
+		p.prevWin = &window{From: from, Closed: from.AddDate(0, 0, closedDays)}
+	}
+	if p.prevWin != nil {
+		p.prevWin.End = p.prevWin.Closed
+	}
+	// The buckets of an aggregate period on whole UTC hours.
+	floor := func(bs []time.Time) {
+		for i := range bs {
+			bs[i] = bs[i].Truncate(time.Hour)
+		}
+	}
+	if p.agg {
+		floor(p.Bounds)
+	}
+	if p.prevAgg {
+		floor(p.Prev)
+	}
 	return p
 }
 
@@ -193,11 +255,14 @@ func label(t time.Time, bucket string) string {
 // row, and the WAL cannot restart past an open read while the collector writes. Sums and sets merge exactly.
 const readSpan = 24 * time.Hour
 
-// pieces cuts [from, to) into spans of at most readSpan, oldest first.
+// pieces cuts [from, to) at every UTC midnight, oldest first: a piece is at most a day, and never spans two of the
+// daily tables' days, so each piece is read from one source.
 func pieces(from, to time.Time) [][2]time.Time {
 	var out [][2]time.Time
-	for lo := from; lo.Before(to); lo = lo.Add(readSpan) {
-		out = append(out, [2]time.Time{lo, minTime(lo.Add(readSpan), to)})
+	for lo := from; lo.Before(to); {
+		hi := minTime(utcDay(lo.UTC()).Add(readSpan), to)
+		out = append(out, [2]time.Time{lo, hi})
+		lo = hi
 	}
 	return out
 }

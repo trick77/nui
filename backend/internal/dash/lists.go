@@ -97,8 +97,11 @@ func (m aggMap) get(k string) *agg {
 	return g
 }
 
-// scanDim reads a dimension over bounds' buckets into cur (open bucket included) and closed (without it).
-func (s *Server) scanDim(ctx context.Context, q *query, d dimSpec, extra string, args []any, bounds []time.Time,
+// closedWin is [from, to) as a window without an open part.
+func closedWin(from, to time.Time) window { return window{From: from, Closed: to, End: to} }
+
+// scanDim reads a dimension over w into into[0] (the whole window) and into[1] (its closed part only).
+func (s *Server) scanDim(ctx context.Context, q *query, d dimSpec, extra string, args []any, w window,
 	into ...aggMap) error {
 	sub := "''"
 	if d.sub != "" {
@@ -112,12 +115,13 @@ func (s *Server) scanDim(ctx context.Context, q *query, d dimSpec, extra string,
 	stmt := `SELECT ` + d.key + `, ` + sub + `, ` + d.a + `, ` + d.b + `, ` + dist + ` FROM event
 		WHERE site_id = ? AND ts >= ? AND ts < ? AND ` + d.where + ` AND ` + audWhere(q.aud) + extra +
 		` GROUP BY ` + group
-	n := len(bounds) - 1
-	for i := 0; i < n; i++ {
-		for _, pc := range pieces(bounds[i], bounds[i+1]) {
+	for _, part := range []struct {
+		lo, hi time.Time
+		open   bool
+	}{{w.From, w.Closed, false}, {w.Closed, w.End, true}} {
+		for _, pc := range pieces(part.lo, part.hi) {
 			a := append([]any{q.site.ID, ms(pc[0]), ms(pc[1])}, args...)
-			// into[0] takes every bucket, into[1] only the closed ones.
-			if err := s.scanPiece(ctx, stmt, a, i == n-1, into); err != nil {
+			if err := s.scanPiece(ctx, stmt, a, part.open, into); err != nil {
 				return err
 			}
 		}
@@ -257,16 +261,16 @@ type listOpts struct {
 // list computes a top-N list: the whole range's figures, the change on closed buckets against the comparison's.
 func (s *Server) list(ctx context.Context, q *query, dim string, d dimSpec, o listOpts) (listResp, error) {
 	cur, closed := aggMap{}, aggMap{}
-	if err := s.scanDim(ctx, q, d, o.extra, o.args, q.p.Bounds, cur, closed); err != nil {
+	if err := s.scanDim(ctx, q, d, o.extra, o.args, q.p.win, cur, closed); err != nil {
 		return listResp{}, err
 	}
 	prevClosed := aggMap{}
-	if q.p.Prev != nil {
-		if err := s.scanDim(ctx, q, d, o.extra, o.args, q.p.Prev[:q.p.n()], prevClosed); err != nil {
+	if q.p.prevWin != nil {
+		if err := s.scanDim(ctx, q, d, o.extra, o.args, *q.p.prevWin, prevClosed); err != nil {
 			return listResp{}, err
 		}
 	}
-	cmpOn := q.p.Prev != nil
+	cmpOn := q.p.prevWin != nil
 	rows := make([]listRow, 0, len(cur))
 	var sum int64
 	for k, g := range cur {
@@ -385,13 +389,13 @@ func (s *Server) richLabels(ctx context.Context, q *query, dim string, d dimSpec
 		// Entry: the share of all visits (session starts) that began on this page or template.
 		starts := aggMap{}
 		sd := dimSpec{where: "kind = 'session_start'", key: d.key, a: "COUNT(*)", b: "0"}
-		if err := s.scanDim(ctx, q, sd, o.extra, o.args, q.p.Bounds, starts); err != nil {
+		if err := s.scanDim(ctx, q, sd, o.extra, o.args, q.p.win, starts); err != nil {
 			return err
 		}
 		var visits int64
 		all := aggMap{}
 		if err := s.scanDim(ctx, q, dimSpec{where: "kind = 'session_start'", key: "''", a: "COUNT(*)", b: "0"}, "", nil,
-			q.p.Bounds, all); err != nil {
+			q.p.win, all); err != nil {
 			return err
 		}
 		for _, g := range all {
@@ -459,7 +463,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, q *query) 
 	d := dimSpec{where: "source = 'server' AND status > 0", key: "CAST(status / 100 AS TEXT) || 'xx'", a: "COUNT(*)",
 		b: "0", value: countA, second: zeroSecond}
 	all := aggMap{}
-	if err := s.scanDim(r.Context(), q, d, "", nil, q.p.Bounds, all); err != nil {
+	if err := s.scanDim(r.Context(), q, d, "", nil, q.p.win, all); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -481,54 +485,139 @@ type shareRow struct {
 	Share int64  `json:"share"`
 }
 
+// clientFacets are the clients split's lists, each a client's property.
+var clientFacets = []string{"browsers", "os", "devices", "ip_version"}
+
 func (s *Server) handleClients(w http.ResponseWriter, r *http.Request, q *query) {
-	// One user agent and address per visitor, its latest event's, each visitor counted once per list.
-	id, where := "visitor", "source = 'browser'"
-	if q.aud == "bots" {
-		id, where = "ip_key", "1"
+	var counts map[string]map[string]int64
+	var err error
+	if q.p.agg {
+		counts, err = s.everyClient(r.Context(), q)
+	} else {
+		counts, err = s.latestClient(r.Context(), q)
 	}
-	type client struct{ ua, ip string }
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	out := map[string][]shareRow{}
+	for _, name := range clientFacets {
+		var total int64
+		for _, v := range counts[name] {
+			total += v
+		}
+		out[name] = topShares(counts[name], 4, total)
+	}
+	apix.JSON(w, http.StatusOK, out)
+}
+
+// clientID is who the clients split counts: a browser's own id, for the bots audience the address key.
+func clientID(aud string) (id, where string) {
+	if aud == "bots" {
+		return "ip_key", "1"
+	}
+	return "visitor", "source = 'browser'"
+}
+
+// clientOf is a user agent and address as the split's four values.
+func clientOf(ua string, v6 bool) map[string]string {
+	b, o, d := classify.ParseUA(ua)
+	v := "IPv4"
+	if v6 {
+		v = "IPv6"
+	}
+	return map[string]string{"browsers": b, "os": o, "devices": d, "ip_version": v}
+}
+
+// latestClient counts each visitor once per list, by its latest event's user agent and address (24h, 7d).
+func (s *Server) latestClient(ctx context.Context, q *query) (map[string]map[string]int64, error) {
+	id, where := clientID(q.aud)
+	type client struct {
+		ua string
+		v6 bool
+	}
 	seen := map[string]client{}
 	// Oldest piece first, so a later piece's client replaces an earlier one's. Within a piece the one MAX makes
 	// SQLite take ua and ip from the visitor's latest row.
-	for _, pc := range pieces(q.p.From(), q.p.Bounds[q.p.n()]) {
-		rows, err := s.query(r.Context(), `SELECT `+id+`, MAX(ts), ua, ip FROM event
+	for _, pc := range pieces(q.p.win.From, q.p.win.End) {
+		rows, err := s.query(ctx, `SELECT `+id+`, MAX(ts), ua, instr(ip, ':') > 0 FROM event
 			WHERE site_id = ? AND ts >= ? AND ts < ? AND `+where+` AND `+audWhere(q.aud)+` GROUP BY `+id,
 			q.site.ID, ms(pc[0]), ms(pc[1]))
 		if err != nil {
-			s.fail(w, r, err)
-			return
+			return nil, err
 		}
 		for rows.Next() {
 			var k string
 			var ts int64
 			var c client
-			if err := rows.Scan(&k, &ts, &c.ua, &c.ip); err != nil {
+			if err := rows.Scan(&k, &ts, &c.ua, &c.v6); err != nil {
 				_ = rows.Close()
-				s.fail(w, r, err)
-				return
+				return nil, err
 			}
 			seen[k] = c
 		}
 		_ = rows.Close()
-	}
-	counts := map[string]map[string]int64{"ip_version": {}, "browsers": {}, "os": {}, "devices": {}}
-	for _, c := range seen {
-		v := "IPv4"
-		if strings.Contains(c.ip, ":") {
-			v = "IPv6"
+		if err := rows.Err(); err != nil {
+			return nil, err
 		}
-		b, o, d := classify.ParseUA(c.ua)
-		counts["ip_version"][v]++
-		counts["browsers"][b]++
-		counts["os"][o]++
-		counts["devices"][d]++
 	}
-	out := map[string][]shareRow{}
-	for name, m := range counts {
-		out[name] = topShares(m, 4, int64(len(seen)))
+	counts := map[string]map[string]int64{}
+	for _, c := range seen {
+		for facet, v := range clientOf(c.ua, c.v6) {
+			if counts[facet] == nil {
+				counts[facet] = map[string]int64{}
+			}
+			counts[facet][v]++
+		}
 	}
-	apix.JSON(w, http.StatusOK, out)
+	return counts, nil
+}
+
+// everyClient counts, per value, the visitors that used it (30d and longer): the latest client over a month does
+// not add up from days, so a visitor on two browsers counts under both and the shares are of the sum.
+func (s *Server) everyClient(ctx context.Context, q *query) (map[string]map[string]int64, error) {
+	id, where := clientID(q.aud)
+	ids := map[string]map[string]map[string]struct{}{}
+	for _, pc := range pieces(q.p.win.From, q.p.win.End) {
+		rows, err := s.query(ctx, `SELECT DISTINCT `+id+`, ua, instr(ip, ':') > 0 FROM event
+			WHERE site_id = ? AND ts >= ? AND ts < ? AND `+where+` AND `+audWhere(q.aud),
+			q.site.ID, ms(pc[0]), ms(pc[1]))
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var k, ua string
+			var v6 bool
+			if err := rows.Scan(&k, &ua, &v6); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			if k == "" { // a browser row without an id is nobody's
+				continue
+			}
+			for facet, v := range clientOf(ua, v6) {
+				if ids[facet] == nil {
+					ids[facet] = map[string]map[string]struct{}{}
+				}
+				if ids[facet][v] == nil {
+					ids[facet][v] = map[string]struct{}{}
+				}
+				ids[facet][v][k] = struct{}{}
+			}
+		}
+		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	counts := map[string]map[string]int64{}
+	for facet, m := range ids {
+		counts[facet] = map[string]int64{}
+		for v, u := range m {
+			counts[facet][v] = int64(len(u))
+		}
+	}
+	return counts, nil
 }
 
 // topShares is the n largest rows plus Other, shares in percent of total.
@@ -603,7 +692,7 @@ func (s *Server) handleClasses(w http.ResponseWriter, r *http.Request, q *query)
 	cur, closed := aggMap{}, aggMap{}
 	for i := 0; i < q.p.n(); i++ {
 		b := aggMap{}
-		if err := s.scanDim(r.Context(), all, d, "", nil, q.p.Bounds[i:i+2], b); err != nil {
+		if err := s.scanDim(r.Context(), all, d, "", nil, closedWin(q.p.Bounds[i], q.p.Bounds[i+1]), b); err != nil {
 			s.fail(w, r, err)
 			return
 		}
@@ -620,7 +709,7 @@ func (s *Server) handleClasses(w http.ResponseWriter, r *http.Request, q *query)
 	prev := aggMap{}
 	if q.p.Prev != nil {
 		raw := aggMap{}
-		if err := s.scanDim(r.Context(), all, d, "", nil, q.p.Prev[:q.p.n()], raw); err != nil {
+		if err := s.scanDim(r.Context(), all, d, "", nil, closedWin(q.p.Prev[0], q.p.Prev[q.p.n()-1]), raw); err != nil {
 			s.fail(w, r, err)
 			return
 		}
