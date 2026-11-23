@@ -125,6 +125,88 @@ type Reading struct {
 	CreatedAt int64
 }
 
+// AggDay is one site-day's aggregate build state: the dashboard reads the day's aggregates only while it is frozen
+// and clean, raw otherwise.
+//
+// Table: agg_day
+type AggDay struct {
+	SiteID  int64
+	Day     int64 // unix day, UTC
+	Frozen  bool
+	Dirty   int   // AggClean, AggRawChanged, AggRequeued or AggWriting
+	Version int64 // raw changes counted, the build's handshake
+	Builder int64
+	Raw     bool
+	Events  int64
+	BuiltAt int64
+}
+
+// AggHour is one site's sums and sketches for one UTC hour and class.
+//
+// Table: agg_hour
+type AggHour struct {
+	SiteID      int64
+	Hour        int64 // unix hour
+	Cls         int   // 1-4, pending as 4
+	Events      int64
+	Views       int64
+	Actions     int64
+	Starts      int64
+	Requests    int64
+	Refused     int64
+	Errors      int64
+	BrowserIDs  []byte
+	Addrs       []byte
+	ServerAddrs []byte
+}
+
+// AggList is one list entry, or a part's Other row, for one site, dimension and UTC day.
+//
+// Table: agg_list
+type AggList struct {
+	SiteID  int64
+	Dim     string
+	Day     int64
+	Part    int // 1 people, 2 automated
+	Other   bool
+	Parent  string
+	Key     string
+	Sub     string
+	A       int64
+	B       int64
+	N       int64
+	AddrN   int64 // Other, part 2: its entries' address counts summed (the bots audience's N)
+	IDs     []byte
+	Addrs   []byte
+	Entries int64
+	Keys    []byte // Other: the collapsed keys' sorted 64-bit hashes, big-endian; nil past 50,000
+}
+
+// AggAddr is one address key's sums for one site, UTC day and part.
+//
+// Table: agg_addr
+type AggAddr struct {
+	SiteID   int64
+	Day      int64
+	IPKey    string
+	Part     int
+	Events   int64
+	Views    int64
+	Actions  int64
+	Requests int64
+	Refused  int64
+	Sessions int64
+	Carried  int64 // sessions the key also had the day before, in the same part
+	Browser  bool
+	Human    bool
+	FirstTS  int64
+	LastTS   int64
+	UA       string
+	ASN      int64
+	Country  string
+	Cls      int
+}
+
 // Usage is one site's model calls and tokens on one day.
 //
 // Table: llm_usage
