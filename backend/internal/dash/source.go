@@ -36,9 +36,6 @@ const (
 	readAgg
 )
 
-// dayState is one agg_day row as the dashboard needs it.
-type dayState struct{ frozen, clean, raw bool }
-
 // plan is one request's view of a site's coverage: which days are built and clean, where its raw begins. Every
 // aggregate read checks its day again in the same statement, so a day rebuilt meanwhile falls back to raw.
 type plan struct {
