@@ -164,10 +164,10 @@ func sharedHistory(t *testing.T) (*store.Store, *sim.World) {
 	h := &sharedStore
 	h.once.Do(func() {
 		ctx := context.Background() // outlives the test that builds it
-		if h.dir, h.err = os.MkdirTemp("", "nui-dash-test-"); h.err != nil {
+		if h.dir, h.err = os.MkdirTemp("", "stakeout-dash-test-"); h.err != nil {
 			return
 		}
-		if h.st, h.err = store.Open(ctx, filepath.Join(h.dir, "nui.db")); h.err != nil {
+		if h.st, h.err = store.Open(ctx, filepath.Join(h.dir, "stakeout.db")); h.err != nil {
 			return
 		}
 		h.world, h.err = fillRig(ctx, h.st, h.dir, 20, 12)
@@ -189,7 +189,7 @@ func sharedRig(t *testing.T, model insight.Model) *rig {
 func copyRig(t *testing.T, model insight.Model) *rig {
 	t.Helper()
 	src, w := sharedHistory(t)
-	path := filepath.Join(t.TempDir(), "nui.db")
+	path := filepath.Join(t.TempDir(), "stakeout.db")
 	if _, err := src.DB.ExecContext(t.Context(), `VACUUM INTO ?`, path); err != nil {
 		t.Fatal(err)
 	}
