@@ -29,7 +29,7 @@ export type View = {
   log: LogFilter;
 };
 
-const AUD_KEY = "stakeout.aud";
+const AUD_KEY = "app.aud";
 
 export function storedAudience(): Audience {
   try {

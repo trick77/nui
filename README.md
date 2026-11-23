@@ -48,7 +48,7 @@ BACKEND_DATA_DIR=./data BACKEND_AUTH_DISABLED=true BACKEND_REFDATA_DISABLED=true
 ```
 
 and open <http://localhost:8080/dashboard/>. `-demo 30` fills an empty database with 30 days of simulated traffic
-on the configured sites and marks the directory as the simulator's (`stakeout-sim.json`): a later `-demo` start serves
+on the configured sites and marks the directory as the simulator's (`sim.json`): a later `-demo` start serves
 it as it is, a database with events the simulator did not write is refused. `-demo` and `-sim` are development
 only: never together, never with `PUBLIC_FQDN` set.
 
@@ -82,7 +82,7 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
 - `scenarios` lists the scenarios, their windows and what the dashboard shows for each; `check` plays each on its
   own and checks exactly that.
 - `backfill -data ./data [-wipe]` writes a history, `sites.json` and the world's reference data (`ref/`) into an
-  empty or absent data directory, or one it wrote before (marked by `stakeout-sim.json`; a second history is refused,
+  empty or absent data directory, or one it wrote before (marked by `sim.json`; a second history is refused,
   `-wipe` empties the directory first). Anything else is refused untouched, and so is every run with `PUBLIC_FQDN`
   set. Serve it with `server -demo 1` and `BACKEND_REFDATA_DISABLED=true`. About 25,000 events a second.
   The largest run is scale 50: about 110,000 events a simulated day, some 5 s of backfill each, and with the default
@@ -104,7 +104,7 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
 Every address is a documentation address (RFC 5737, 2544, 3849). Real reference data knows none of them, so the
 simulator brings its own (made-up networks, their countries, three made-up bots) wherever it backfills; with a real
 bot list loaded, its crawlers and probe take a real service's ranges from it. Its reference data is marked
-(`ref/stakeout-sim-ref.json`) and only its modes (`-sim`, `-demo`) use it, without rDNS verification of the bots; a
+(`ref/sim-ref.json`) and only its modes (`-sim`, `-demo`) use it, without rDNS verification of the bots; a
 normal start discards it and fetches the real data, always verifies, warns loudly in a directory the simulator
 wrote and refuses one with `PUBLIC_FQDN` set. In a Go test, `sim.History(ctx, st, sim.HistoryOptions{...})`
 backfills a seeded history; its world's `Expectations()` are the scenarios' checks, which `simcli.Check` runs

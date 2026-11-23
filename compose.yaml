@@ -30,7 +30,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    # ./data holds stakeout.db, the reference data cache (ref/), sites.json, the sites Stakeout collects for (README),
+    # ./data holds app.db, the reference data cache (ref/), sites.json, the sites Stakeout collects for (README),
     # and session.secret when BACKEND_SESSION_SECRET is empty.
     volumes:
       - ./data:/data

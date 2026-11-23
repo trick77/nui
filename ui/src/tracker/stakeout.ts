@@ -77,10 +77,12 @@ export const LIMITS = {
   errorKindsPerDocument: 100,
 };
 
-const STORE_VID = "stakeout.vid";
-const STORE_SID = "stakeout.sid";
-const STORE_SEEN = "stakeout.seen";
-const STORE_GL = "stakeout.gl";
+// On the product's origin, so namespaced, but never by this product's name
+// (user): a rename would count every browser as new.
+const STORE_VID = "analytics.vid";
+const STORE_SID = "analytics.sid";
+const STORE_SEEN = "analytics.seen";
+const STORE_GL = "analytics.gl";
 // Globals an automation tool leaves in the page, by their exact names (a
 // page's own __pwa… or cdc_config is no tool's), one group per token sent.
 // ChromeDriver's is cdc_ or $cdc_ and 22 letters, then a kind.

@@ -7,14 +7,16 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // The simulator marks what it writes, so nothing it leaves behind passes for real data. OwnerFile in a data
 // directory: the simulator wrote its history (sim backfill, server -demo, server -sim). RefMarkerFile in a reference
 // directory: the reference data there is the world's made-up one, which a normal server discards.
 const (
-	OwnerFile     = "stakeout-sim.json"
-	RefMarkerFile = "stakeout-sim-ref.json"
+	OwnerFile     = "sim.json"
+	RefMarkerFile = "sim-ref.json"
 )
 
 // mark writes a marker file saying who wrote the directory and why it matters.
@@ -61,8 +63,8 @@ func Claim(dir string, wipe bool) error {
 			}
 		}
 	default:
-		if _, err := os.Stat(filepath.Join(dir, "stakeout.db")); err == nil {
-			return fmt.Errorf("%s holds a simulated history already (stakeout.db): another one would double it; -wipe "+
+		if _, err := os.Stat(filepath.Join(dir, store.FileName)); err == nil {
+			return fmt.Errorf("%s holds a simulated history already (app.db): another one would double it; -wipe "+
 				"empties the directory and writes it anew", dir)
 		}
 	}

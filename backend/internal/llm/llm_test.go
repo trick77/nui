@@ -29,7 +29,7 @@ func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)
 
 func newRig(t *testing.T, calls int64) *rig {
 	t.Helper()
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "app.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestFromEnv_NotConfigured(t *testing.T) {
 	if _, err := FromEnv("no-such-model", llmwire.Config{Registry: llmwiretest.Registry()}); err == nil {
 		t.Error("unknown model accepted")
 	}
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "app.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

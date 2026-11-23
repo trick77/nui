@@ -55,7 +55,7 @@ func Main(ctx context.Context, args []string, getenv func(string) string, stdout
 	days := fl.Int("days", k.Days, "days of history (STAKEOUT_SIM_DAYS)")
 	scenarios := fl.String("scenarios", k.Scenarios, "comma-separated scenarios, all for every one (STAKEOUT_SIM_SCENARIOS)")
 	classify := fl.Bool("classify", k.Classify, "run the classifier over the history (STAKEOUT_SIM_CLASSIFY)")
-	data := fl.String("data", "", "backfill: the data directory (stakeout.db, sites.json, ref/): empty, absent or one the simulator wrote")
+	data := fl.String("data", "", "backfill: the data directory (app.db, sites.json, ref/): empty, absent or one the simulator wrote")
 	wipe := fl.Bool("wipe", false, "backfill: empty a data directory the simulator wrote first, its history written anew")
 	out := fl.String("out", "", "export: the directory to write the answers to")
 	target := fl.String("target", "", "live: the collector's base URL, the server itself with one trusted hop (server -sim)")
@@ -168,7 +168,7 @@ func backfillCmd(ctx context.Context, k sim.Knobs, dir string, wipe bool, getenv
 	if err := sim.Claim(dir, wipe); err != nil {
 		return err
 	}
-	st, err := store.Open(ctx, filepath.Join(dir, "stakeout.db"))
+	st, err := store.Open(ctx, filepath.Join(dir, store.FileName))
 	if err != nil {
 		return err
 	}
@@ -297,7 +297,7 @@ func scratchHistory(ctx context.Context, k sim.Knobs, log *slog.Logger) (*store.
 	if err := ref.Stamp(w.Anchor); err != nil {
 		return fail(err)
 	}
-	st, err := store.Open(ctx, filepath.Join(tmp, "stakeout.db"))
+	st, err := store.Open(ctx, filepath.Join(tmp, store.FileName))
 	if err != nil {
 		return fail(err)
 	}

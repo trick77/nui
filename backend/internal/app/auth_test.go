@@ -273,7 +273,7 @@ func TestSessionSecretFile(t *testing.T) {
 		t.Errorf("a restart made another key: %v", err)
 	}
 	// Neither the token alone nor kit's derivation from it.
-	if bytes.Equal(k1, auth.DeriveKey(testToken, "stakeout-session")) {
+	if bytes.Equal(k1, auth.DeriveKey(testToken, "session")) {
 		t.Error("the key is the token's alone")
 	}
 	// A file others can read is restricted, not refused.

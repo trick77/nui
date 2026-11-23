@@ -43,7 +43,7 @@ func seededWorld(t testing.TB, seed uint64, scale float64, scenarios string) *Wo
 
 func testStore(t testing.TB, w *World) *store.Store {
 	t.Helper()
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "app.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

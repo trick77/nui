@@ -17,6 +17,10 @@ import (
 	_ "github.com/ncruces/go-sqlite3/driver"
 )
 
+// FileName is the database's file in the data directory. Never the product's name (user): a rename would start a
+// deployment on an empty database next to its data.
+const FileName = "app.db"
+
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 

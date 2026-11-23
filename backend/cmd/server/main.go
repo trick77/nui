@@ -180,7 +180,7 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	ctx, stop := run.Context(context.Background())
 	defer stop()
 
-	st, err := store.Open(ctx, filepath.Join(cfg.DataDir, "stakeout.db"))
+	st, err := store.Open(ctx, filepath.Join(cfg.DataDir, store.FileName))
 	if err != nil {
 		return err
 	}
