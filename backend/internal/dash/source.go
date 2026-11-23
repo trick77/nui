@@ -39,17 +39,17 @@ const (
 // plan is one request's view of a site's coverage: which days are built and clean, where its raw begins. Every
 // aggregate read checks its day again in the same statement, so a day rebuilt meanwhile falls back to raw.
 type plan struct {
-	s       *Server
-	src     Source
-	site    int64
-	now     time.Time
-	oldest  int64 // the oldest raw event's day
-	hasRaw  bool
+	s      *Server
+	src    Source
+	site   int64
+	now    time.Time
+	oldest int64 // the oldest raw event's day
+	hasRaw bool
 	// oldestTS is the oldest raw event's time (unix ms): the trail, the log and a reading reach back to it.
 	oldestTS int64
-	days    map[int64]dayState
-	lo, hi  int64 // the days loaded, inclusive
-	loaded  bool
+	days     map[int64]dayState
+	lo, hi   int64 // the days loaded, inclusive
+	loaded   bool
 }
 
 // planOf is the request's plan, made on first use for the whole of its period.
