@@ -451,6 +451,71 @@ func TestUpgrade_0002(t *testing.T) {
 	}
 }
 
+// Retention keeps an aggregate day honest: age deletes whole UTC days, and every day it or the cap deleted from is
+// marked without raw in the same transaction, a built day's row kept, a missing one made.
+func TestPrune_DayCoverage(t *testing.T) {
+	st := open(t)
+	id := seed(t, st)
+	day := time.Now().UnixMilli()/dayMS - 800
+	ev := func(d int64, hour int) Event {
+		return Event{SiteID: id, TS: d*dayMS + int64(hour)*3_600_000, Source: "server", Kind: "request",
+			IP: "192.0.2.1", IPKey: "192.0.2.1"}
+	}
+	var evs []Event
+	for _, d := range []int64{day, day + 1, day + 2, day + 3} {
+		evs = append(evs, ev(d, 2), ev(d, 20))
+	}
+	if err := st.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	// Day+1 was built before; day+2 and day+3 have no row.
+	write(t, st, AggBuild{Site: id, Day: day + 1, Builder: 1, Events: 2})
+	// A cutoff at noon of day+2: day and day+1 go, day+2 stays whole.
+	n, err := st.PruneAge(t.Context(), time.UnixMilli((day+2)*dayMS+12*3_600_000))
+	if err != nil || n != 4 {
+		t.Fatalf("pruned %d, %v", n, err)
+	}
+	days, err := st.AggDays(t.Context(), id, day, day+3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := days[day]; d.Raw || d.Frozen {
+		t.Errorf("pruned unbuilt day: %+v", d)
+	}
+	// A build that read it before the cut finds its version moved.
+	if d := days[day+1]; d.Raw || !d.Frozen || d.Events != 2 || d.Version != 1 {
+		t.Errorf("pruned built day: %+v", d)
+	}
+	if _, ok := days[day+2]; ok {
+		t.Errorf("a kept day marked: %+v", days[day+2])
+	}
+	// The cap takes the oldest chunks, here part of day+2 (a padded day of 5000 events): that day has no whole raw
+	// left either.
+	evs = nil
+	for _, d := range []int64{day + 2, day + 3} {
+		for i := range 5000 {
+			e := ev(d, 3)
+			e.TS += int64(i)
+			e.Props = `{"pad":"` + strings.Repeat("x", 200) + `"}`
+			evs = append(evs, e)
+		}
+	}
+	if err := st.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	used, _ := st.UsedBytes(t.Context())
+	if n, err := st.EnforceCap(t.Context(), used*95/100); err != nil || n == 0 || n >= 5000 {
+		t.Fatalf("capped %d, %v", n, err)
+	}
+	days, _ = st.AggDays(t.Context(), id, day, day+3)
+	if d, ok := days[day+2]; !ok || d.Raw {
+		t.Errorf("half-deleted day: %+v", d)
+	}
+	if _, ok := days[day+3]; ok {
+		t.Errorf("an untouched day marked: %+v", days[day+3])
+	}
+}
+
 func TestPrune(t *testing.T) {
 	st := open(t)
 	id := seed(t, st)

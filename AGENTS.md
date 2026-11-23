@@ -24,8 +24,10 @@ change to `/stakeout.js`, `/api/in`, `/api/feed` or `sites.json` updates it in t
 - Aggregates (owner): `internal/agg` builds them per site-day two days after the day ended (02:00 UTC); the
   dashboard does not read them yet, every figure is still raw. A day is read only while frozen and clean: an insert or
   restamp of a built day's raw marks it dirty in the same transaction (`InsertEvents`, `SetActorClass`), else
-  aggregates drift from raw unseen; retention's deletes do not mark yet. HLL hash and encoding are pinned by tests: permanent once raw is purged (a builder version
-  bump rebuilds only days with raw), a new encoding keeps reading the old.
+  aggregates drift from raw unseen. Retention marks every day it deleted from `raw = 0` in the same transaction (age
+  cuts whole UTC days, the cap does not): such a day is never built from half its raw. HLL hash and encoding are
+  pinned by tests: permanent once raw is purged (a builder version bump rebuilds only days with raw), a new encoding
+  keeps reading the old.
 - A statement over all of a site's events spans at most a day (`readSpan`: month buckets in day pieces, log and
   footer counts in windows; the builder reads a site-day per statement): a read held for seconds keeps the WAL from
   restarting while the collector writes (ipverse-core's lesson; a month's actor GROUP BY took 0.8 s native on 24 M

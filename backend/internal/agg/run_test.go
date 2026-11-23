@@ -155,6 +155,52 @@ func TestBuildThrough_RebuildsNextDay(t *testing.T) {
 	}
 }
 
+// A day retention deleted from (raw = 0) is never built or rebuilt from what is left of it, and the day after it
+// keeps the carried sessions counted against its whole raw.
+func TestBuildThrough_PartlyDeletedDay(t *testing.T) {
+	st := openStore(t)
+	id := site(t, st)
+	d := anchor.UnixMilli()/dayMS - 10
+	insert(t, st, view(id, "192.0.2.1", "s1", d*dayMS+3_600_000), view(id, "192.0.2.1", "s1", d*dayMS+72_000_000),
+		view(id, "192.0.2.2", "s9", d*dayMS+80_000_000), view(id, "192.0.2.1", "s1", (d+1)*dayMS+1000),
+		view(id, "192.0.2.3", "s5", (d+5)*dayMS+1000))
+	// Day d+5 lost part of its raw before its first build.
+	if _, err := st.DB.Exec(`INSERT INTO agg_day (site_id, day, raw) VALUES (?, ?, 0)`, id, d+5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BuildThrough(t.Context(), st, anchor, TopK); err != nil {
+		t.Fatal(err)
+	}
+	days, _ := st.AggDays(t.Context(), id, d, d+5)
+	var hours int
+	_ = st.DB.QueryRow(`SELECT COUNT(*) FROM agg_hour WHERE site_id = ? AND hour >= ? AND hour < ?`, id, (d+5)*24,
+		(d+6)*24).Scan(&hours)
+	if days[d+5].Frozen || hours != 0 {
+		t.Errorf("a day without its whole raw was built: %+v, %d hours", days[d+5], hours)
+	}
+	// Day d loses its s1 events, as a cap would delete them, after it was built.
+	if _, err := st.DB.Exec(`DELETE FROM event WHERE site_id = ? AND sid = 's1' AND ts < ?`, id, (d+1)*dayMS); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.Exec(`UPDATE agg_day SET raw = 0 WHERE site_id = ? AND day = ?`, id, d); err != nil {
+		t.Fatal(err)
+	}
+	// Writes to both days: d stays as built, d+1 is rebuilt (and d+2 after it) and keeps carrying s1.
+	insert(t, st, view(id, "192.0.2.4", "s7", d*dayMS+5000), view(id, "192.0.2.4", "s8", (d+1)*dayMS+5000))
+	if n, err := BuildThrough(t.Context(), st, anchor, TopK); err != nil || n != 2 {
+		t.Fatalf("rebuilt %d, %v", n, err)
+	}
+	days, _ = st.AggDays(t.Context(), id, d, d+1)
+	if days[d].Events != 3 || days[d].Dirty != 0 || days[d+1].Events != 2 {
+		t.Errorf("after the writes: %+v", days)
+	}
+	var carried int64
+	if err := st.DB.QueryRow(`SELECT carried FROM agg_addr WHERE site_id = ? AND day = ? AND ip_key = '192.0.2.1'`,
+		id, d+1).Scan(&carried); err != nil || carried != 1 {
+		t.Errorf("carried after the rebuild = %d, %v", carried, err)
+	}
+}
+
 // A raw write between a build's read and its last transaction leaves the day dirty; the next pass builds it with
 // the write.
 func TestBuildDay_RacingWrite(t *testing.T) {
