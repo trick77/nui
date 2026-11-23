@@ -21,19 +21,16 @@ change to `/stakeout.js`, `/api/in`, `/api/feed` or `sites.json` updates it in t
 - Schema: `docs/schema.md`, generated (`SCHEMADOC_UPDATE=1 go test ./... -run TestSchemaDoc` in `backend/`).
   0001 shipped in 0.1.0: never edit an applied migration, add the next number, DDL only; data steps are background
   jobs.
-- Aggregates (owner): `internal/agg` builds them per site-day two days after the day ended (02:00 UTC); the
-  dashboard does not read them yet, every figure is still raw. A day is read only while frozen and clean: an insert or
-  restamp of a built day's raw marks it dirty in the same transaction (`InsertEvents`, `SetActorClass`), else
-  aggregates drift from raw unseen. Retention marks every day it deleted from `raw = 0` in the same transaction (age
-  cuts whole UTC days, the cap does not): such a day is never built from half its raw. HLL hash and encoding are
-  pinned by tests: permanent once raw is purged (a builder version bump rebuilds only days with raw), a new encoding
-  keeps reading the old.
-- A statement over all of a site's events spans at most a day (`readSpan`: month buckets in day pieces, log and
-  footer counts in windows; the builder reads a site-day per statement): a read held for seconds keeps the WAL from
-  restarting while the collector writes (ipverse-core's lesson; a month's actor GROUP BY took 0.8 s native on 24 M
-  events, a day 0.02 s). One address's reads (visitor detail) span the range on the actor index. `TestLargeTable` and
-  the builder's plan test fail any statement whose plan scans `event`. At 24 M events (25 months, ~31k/day) a
-  12-month page took ~60 s: many short reads, not one long one.
+- Aggregates (owner): per site and UTC day, built at 02:00 two days on; 24h, 7d and their prior period read raw,
+  the rest a frozen, clean day's aggregates, else raw. Every raw change (writes, restamps, retention's cuts) bumps
+  a built day's version in the same transaction, or figures drift unseen. Permanent once raw is gone: the sketch format
+  (pinned by tests) and the dimension definitions; change either only with a builder version bump. The size cap
+  never cuts the last 3 days: unbuilt, once lost for good. aud=all visits count a session with rows in both parts
+  twice; a classified day has none.
+- A statement over a site's events or aggregates spans at most a day (`readSpan`): a read held for seconds keeps
+  the WAL from restarting while the collector writes (ipverse-core's lesson; a month's actor GROUP BY took 0.8 s
+  on 24 M events, a day 0.02 s). `internal/plancheck` fails a plan walking a table or a whole site; `agg_addr_key`
+  is pinned (else the planner walks the day's every address). At 24 M events a 12-month page took ~60 s raw.
 - Feed: one event's content never refuses the batch, its fields are the product's public clients' (one crafted
   method would blind the feed). Clip to the README's limits, drop and count unusable events; `/api/in` stays strict.
 - Sites are declared in `<data>/sites.json` (`docs/sites.example.json`), never self-registering: a browser can name
