@@ -224,7 +224,7 @@ func TestSources_Hourly(t *testing.T) {
 func looseRows(dim string) func(string, any) bool {
 	d, ok := dims[dim]
 	distinct := ok && d.distinct != ""
-	return func(path string, v any) bool {
+	return func(path string, _ any) bool {
 		return distinct && (strings.HasPrefix(path, ".rows[") || path == ".other")
 	}
 }
@@ -265,7 +265,7 @@ func TestSources_Lists(t *testing.T) {
 					ask(t, "list", where+" "+dim, params, looseRows(dim))
 				}
 				ask(t, "status", where, base, nil)
-				ask(t, "clients", where, base, func(path string, _ any) bool { return c.rng != "7d" })
+				ask(t, "clients", where, base, func(string, any) bool { return c.rng != "7d" })
 				if aud == "all" {
 					ask(t, "noteworthy", where, p(feedSite, "range", c.rng, "cmp", c.cmp, "tz", c.tz, "findings", "all"), nil)
 				}
