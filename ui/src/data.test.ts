@@ -13,6 +13,7 @@ import {
   dayMonth,
   num,
   pct,
+  rawSince,
   SEP,
   seconds,
   value,
@@ -41,6 +42,16 @@ afterEach(() => {
 });
 
 describe("format", () => {
+  it("names where raw events begin when the server says they do", () => {
+    // The server decides (on its UTC days); the date is the viewer's.
+    expect(rawSince("2026-09-03T08:00:00Z", "Europe/Zurich")).toBe("3.9.2026");
+    expect(rawSince("2026-10-25T00:30:00Z", "America/New_York")).toBe(
+      "24.10.2026",
+    );
+    expect(rawSince(null, "Europe/Zurich")).toBe(null);
+    expect(rawSince(undefined)).toBe(null);
+  });
+
   it("writes numbers the Swiss way", () => {
     // ICU versions differ between ’ and ': both are the Swiss apostrophe.
     expect(num(1234567)).toMatch(/^1['’]234['’]567$/);

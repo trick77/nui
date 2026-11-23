@@ -894,10 +894,49 @@ describe("dashboard on a domain with a server feed", () => {
       within(d).getByText(`Unknown site or wrong key${SEP}all sites`, asIs),
     ).toBeInTheDocument();
     expect(within(d).getByText("412 MB")).toBeInTheDocument();
+    // Raw events and the figures, which reach further back.
     expect(
-      within(d).getByText("25 months, raw, including addresses"),
+      within(d).getByText(
+        new RegExp(
+          `^1['’]284['’]551 stored${SEP}since 3\\.9\\.2026${SEP}kept 761 days$`,
+        ),
+        asIs,
+      ),
     ).toBeInTheDocument();
+    expect(within(d).getByText("Figures").nextSibling).toHaveTextContent(
+      "since 20.10.2025",
+    );
+    expect(within(d).queryByText("First event")).toBeNull();
     expect(within(d).getByText("41 of 200 calls today")).toBeInTheDocument();
+  });
+
+  it("shows no figures row for a domain without data", async () => {
+    window.history.replaceState(null, "", "/dashboard/");
+    const fx = fixtureFetch();
+    setFetcher(async (u, i) => {
+      const res = await fx(u, i);
+      if (!u.startsWith("/api/dash/domain?")) return res;
+      const d = await res.json();
+      return new Response(
+        JSON.stringify({
+          ...d,
+          sources: { ...d.sources, first: null },
+          storage: {
+            ...d.storage,
+            events: 0,
+            oldest: null,
+            figures_since: null,
+          },
+        }),
+      );
+    });
+    render(<App />);
+    const d = await screen.findByRole("region", { name: "This domain" });
+    expect(
+      await within(d).findByText("Database, all sites"),
+    ).toBeInTheDocument();
+    expect(within(d).queryByText("Figures")).toBeNull();
+    expect(d.textContent).not.toMatch(/since –/);
   });
 
   it("shows a failing panel's error and keeps the rest", async () => {
@@ -924,6 +963,145 @@ describe("dashboard on a domain with a server feed", () => {
     await waitFor(() => expect(reload).toHaveBeenCalled());
     expect(calls).toContain("/api/auth/logout");
     vi.unstubAllGlobals();
+  });
+});
+
+// The fixtures' raw events reach back to 3.9.2026: 90 d and 12 mo start
+// before, 7 d and 30 d after.
+describe("where raw events end", () => {
+  const noted = /since 3\.9\.2026|back to 3\.9\.2026/;
+
+  it("says nothing when raw covers the range", async () => {
+    start("/dashboard/?range=30d");
+    const d = await screen.findByRole("region", { name: "Visitor" });
+    await within(d).findByText("Scraping attempt");
+    const pages = await screen.findByRole("region", { name: "Pages" });
+    fireEvent.click(
+      await within(pages).findByRole("button", { name: "Open /AS:n" }),
+    );
+    await within(pages).findByText("/AS15169");
+    const v = panel("Visitors by address");
+    await within(v).findByText(/Top 7 of 16 addresses/);
+    // The range's start is in (the overview's live count shows).
+    await screen.findByText(/humans/);
+    for (const p of [d, pages, v]) expect(p.textContent).not.toMatch(noted);
+  });
+
+  it("says where the trail, the hours, the reading and the table's sentences begin", async () => {
+    start("/dashboard/?range=12mo");
+    const d = await screen.findByRole("region", { name: "Visitor" });
+    await within(d).findByText("Scraping attempt");
+    // A trail without an earlier page ends with the note.
+    expect(
+      await within(d).findByText(
+        "The trail ends here: raw events reach back to 3.9.2026.",
+      ),
+    ).toBeInTheDocument();
+    const heads = [...d.querySelectorAll(".eyebrow")].map((e) => e.textContent);
+    expect(heads).toContain(`Reading${SEP}since 3.9.2026`);
+    expect(heads).toContain(
+      `Activity by hour${SEP}00 to 23${SEP}since 3.9.2026`,
+    );
+    // A narrow column breaks before the dot: it goes with "since …".
+    const tails = [...d.querySelectorAll(".eyebrow .whitespace-nowrap")];
+    expect(tails.map((e) => e.textContent)).toEqual([
+      `${SEP.trimStart()}since 3.9.2026`,
+      `${SEP.trimStart()}since 3.9.2026`,
+    ]);
+    // What it does, under its sentence.
+    expect(
+      within(d).getByText(/^Walks the IP lookup API/).parentElement,
+    ).toHaveTextContent(/scraping attempt\.since 3\.9\.2026$/);
+    const v = panel("Visitors by address");
+    expect(
+      within(v).getByText(
+        new RegExp(
+          `summed over the whole range${SEP}what it does since 3\\.9\\.2026$`,
+        ),
+        asIs,
+      ),
+    ).toBeInTheDocument();
+    // A trail with earlier pages: the note once the last is in.
+    fireEvent.click(within(v).getByText("203.0.113.42"));
+    await within(d).findByText("Person");
+    expect(within(d).queryByText(/The trail ends here/)).toBeNull();
+    fireEvent.click(within(d).getByRole("button", { name: "Load earlier →" }));
+    expect(
+      await within(d).findByText(/The trail ends here/),
+    ).toBeInTheDocument();
+    // A /64's addresses are counted from raw too.
+    fireEvent.click(within(v).getByText("2001:db8:4f2:1a00::/64"));
+    const n = await within(d).findByText(/in this \/64/);
+    expect(n.textContent).toBe(`3 in this /64${SEP}since 3.9.2026`);
+    expect(n.querySelector(".whitespace-nowrap")?.textContent).toBe(
+      `${SEP.trimStart()}since 3.9.2026`,
+    );
+  });
+
+  it("follows a range switched in place", async () => {
+    start("/dashboard/?range=12mo");
+    await screen.findByRole("region", { name: "Visitor" });
+    const v = panel("Visitors by address");
+    const said = /what it does since 3\.9\.2026$/;
+    expect(await within(v).findByText(said)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "30d" }));
+    await waitFor(() => expect(v.textContent).not.toMatch(noted));
+    await within(v).findByText(/Top 7 of 16 addresses/);
+    fireEvent.click(screen.getByRole("button", { name: "12mo" }));
+    expect(await within(v).findByText(said)).toBeInTheDocument();
+  });
+
+  it("says a visitor's raw events are gone, not that it has none", async () => {
+    window.history.replaceState(null, "", "/dashboard/?range=12mo");
+    const fx = fixtureFetch();
+    setFetcher(async (u, i) => {
+      const res = await fx(u, i);
+      if (!u.startsWith("/api/dash/visitor?")) return res;
+      const v = await res.json();
+      return new Response(
+        JSON.stringify({ ...v, trail: [], trail_next: "", reading: null }),
+      );
+    });
+    render(<App />);
+    const d = await screen.findByRole("region", { name: "Visitor" });
+    expect(
+      await within(d).findByText(
+        "No events since 3.9.2026: raw events reach back no further.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(d).queryByText("No events in this range.")).toBeNull();
+  });
+
+  it("says where a template's paths begin", async () => {
+    start("/dashboard/?range=12mo");
+    const pages = await screen.findByRole("region", { name: "Pages" });
+    fireEvent.click(
+      await within(pages).findByRole("button", { name: "Open /AS:n" }),
+    );
+    expect(
+      await within(pages).findByText(
+        `and 1 more${SEP}paths since 3.9.2026`,
+        asIs,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says where the log begins", async () => {
+    const first = start("/dashboard/log?site=lens.example.com&range=90d");
+    const log = await screen.findByRole("region", { name: "Log" });
+    expect(
+      await within(log).findByText(
+        `100 of 250 events in this range${SEP}the log reaches back to 3.9.2026`,
+        asIs,
+      ),
+    ).toBeInTheDocument();
+    first.unmount();
+    start("/dashboard/log?site=lens.example.com&range=30d");
+    const log30 = await screen.findByRole("region", { name: "Log" });
+    await within(log30).findByText("100 of 250 events in this range", asIs);
+    // The range's start is in (the overview's live count shows).
+    await screen.findByText(/humans/);
+    expect(log30.textContent).not.toMatch(noted);
   });
 });
 

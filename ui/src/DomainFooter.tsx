@@ -5,15 +5,18 @@ import { useApi } from "./hooks";
 import { scopeKey } from "./lists";
 import { ErrorBox, Panel, SectionHead, Skeleton, useDash } from "./ui";
 
-function Dl({ rows }: { rows: [string, ReactNode][] }) {
+// A term list; a false row is left out.
+function Dl({ rows }: { rows: ([string, ReactNode] | false)[] }) {
   return (
     <dl className="mt-2 mb-0 grid grid-cols-[auto_1fr] gap-x-3.5 gap-y-[5px] text-[13px]">
-      {rows.map(([k, v]) => (
-        <div key={k} className="contents">
-          <dt className="whitespace-nowrap text-muted">{k}</dt>
-          <dd className="m-0">{v}</dd>
-        </div>
-      ))}
+      {rows
+        .filter((r) => r !== false)
+        .map(([k, v]) => (
+          <div key={k} className="contents">
+            <dt className="whitespace-nowrap text-muted">{k}</dt>
+            <dd className="m-0">{v}</dd>
+          </div>
+        ))}
     </dl>
   );
 }
@@ -144,7 +147,6 @@ export function DomainFooter() {
                         {x.sources.build && `${SEP}build ${x.sources.build}`}
                       </>,
                     ],
-                    ["First event", date(x.sources.first)],
                   ]}
                 />
               </section>
@@ -152,13 +154,23 @@ export function DomainFooter() {
                 <div className="eyebrow">Storage</div>
                 <Dl
                   rows={[
-                    ["Stored events", num(x.storage.events)],
-                    ["Database, all sites", bytes(x.storage.bytes)],
+                    // Every request with its address, user agent and path:
+                    // the log, a visitor's trail and what it does.
                     [
-                      "Retention",
-                      `${num(x.storage.retention_months)} months, raw, including addresses`,
+                      "Raw events",
+                      joinSep([
+                        `${num(x.storage.events)} stored`,
+                        x.storage.oldest && `since ${date(x.storage.oldest)}`,
+                        `kept ${num(x.storage.raw_days)} days`,
+                      ]),
                     ],
-                    ["Oldest event", date(x.storage.oldest)],
+                    // The tiles, lists and sums, from the first event on:
+                    // they may reach further back than raw. None without data.
+                    x.storage.figures_since != null && [
+                      "Figures",
+                      `since ${date(x.storage.figures_since)}`,
+                    ],
+                    ["Database, all sites", bytes(x.storage.bytes)],
                     ["Visitor identity", x.storage.identity],
                   ]}
                 />

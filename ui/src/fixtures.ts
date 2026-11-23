@@ -70,6 +70,25 @@ const N: Record<string, number> = {
   "12mo": 12,
 };
 const NOW = new Date("2026-11-22T13:20:00Z");
+// Each range's start, midnight or the hour in Zurich.
+const FROM: Record<string, string> = {
+  "24h": "2026-11-21T14:00:00Z",
+  "7d": "2026-11-15T23:00:00Z",
+  "30d": "2026-10-23T22:00:00Z",
+  "90d": "2026-08-24T22:00:00Z",
+  "12mo": "2025-11-30T23:00:00Z",
+};
+// The oldest raw event: 90 d and 12 mo start before it, so what is read
+// from raw (a trail, the log, a template's paths) begins later than they
+// do. The figures go back further (FIGURES_SINCE).
+export const DETAIL_SINCE = "2026-09-03T08:00:00Z";
+const FIGURES_SINCE = "2025-10-20T07:00:00Z";
+// detail_since as the server sends it: only where the range starts before
+// raw does, null where raw covers it.
+const detailSince = (range: string | null) =>
+  Date.parse(FROM[range || "7d"] ?? FROM["7d"]) < Date.parse(DETAIL_SINCE)
+    ? DETAIL_SINCE
+    : null;
 const MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ");
 
 function rng(seed: number) {
@@ -219,7 +238,7 @@ function overview(
   const ls = labels(range);
   return {
     period: {
-      from: "2026-11-15T23:00:00Z",
+      from: FROM[range] ?? FROM["7d"],
       to: NOW.toISOString(),
       bucket: range === "24h" ? "hour" : range === "12mo" ? "month" : "day",
       labels: ls,
@@ -672,6 +691,8 @@ function list(q: URLSearchParams, feed: boolean): List | null {
     other: { count: rest.length, value: sum(rest.map((r) => r.value)) },
     total: rows.length,
     server: dim === "probed" || dim === "refused",
+    // A template's paths only, as the backend answers.
+    ...(within ? { detail_since: detailSince(q.get("range")) } : {}),
   };
 }
 
@@ -911,6 +932,7 @@ function visitors(q: URLSearchParams, feed: boolean): Visitors {
     rows: page,
     total: rows.length,
     next: from + limit < rows.length ? cursorOf(page[page.length - 1]) : "",
+    detail_since: detailSince(q.get("range")),
   };
 }
 
@@ -985,6 +1007,7 @@ function visitor(key: string, feed: boolean, cursor: string): Visitor | null {
       : PERSON_TRAIL[later ? 1 : 0],
     // The backend's keyset cursor, "<ms>.<row id>".
     trail_next: scrape || later ? "" : TRAIL_NEXT,
+    detail_since: DETAIL_SINCE,
   };
 }
 
@@ -1147,6 +1170,7 @@ function log(q: URLSearchParams, feed: boolean, script: boolean): Log | null {
       page.length === LOG_PAGE && from + LOG_PAGE < rows.length
         ? id(page[page.length - 1])
         : "",
+    detail_since: detailSince(q.get("range")),
   };
 }
 
@@ -1170,13 +1194,15 @@ function domain(site: string, feed: boolean, script: boolean): Domain {
       feed: FEEDS.includes(site),
       script: "/stakeout.js",
       build: "3f2a91c",
-      first: "2026-09-03T08:00:00Z",
+      first: FIGURES_SINCE,
     },
     storage: {
       events: feed ? 1284551 : 398211,
+      oldest: DETAIL_SINCE,
+      raw_days: 761,
+      figures_since: FIGURES_SINCE,
       bytes: feed ? 432013312 : 134217728,
       retention_months: 25,
-      oldest: "2026-09-03T08:00:00Z",
       identity: "address + user agent, plus browser id",
     },
     rules: {
@@ -1328,7 +1354,7 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
       case "/api/dash/visitor": {
         const v = visitor(q.get("key") || "", feed, q.get("cursor") || "");
         return v
-          ? json(v)
+          ? json({ ...v, detail_since: detailSince(range) })
           : json({ detail: "no events from this address in the range" }, 404);
       }
       case "/api/dash/log": {

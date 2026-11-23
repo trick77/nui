@@ -139,6 +139,9 @@ export type List = {
   other: { count: number; value: number };
   total: number;
   server: boolean;
+  // A template's paths (within) only: they are raw events, which reach
+  // back to here (null: raw covers the range).
+  detail_since?: string | null;
 };
 
 export type StatusRow = { class: string; value: number; share: number };
@@ -174,7 +177,16 @@ export type VisitorRow = {
   client_gen: string | null;
 };
 
-export type Visitors = { rows: VisitorRow[]; total: number; next: string };
+// detail_since, here and below: where raw events begin, the oldest one or
+// now when none is left (null: raw covers the range). Sums cover the
+// whole range; what is read from raw events (what it does, a trail, the
+// log) reaches back to it.
+export type Visitors = {
+  rows: VisitorRow[];
+  total: number;
+  next: string;
+  detail_since: string | null;
+};
 
 export type TrailItem = {
   t: string;
@@ -218,6 +230,7 @@ export type Visitor = {
   hours: number[];
   trail: TrailItem[];
   trail_next: string;
+  detail_since: string | null;
 };
 
 export type LogRow = {
@@ -230,7 +243,12 @@ export type LogRow = {
   source: "browser" | "server";
 };
 
-export type Log = { rows: LogRow[]; total: number; next: string };
+export type Log = {
+  rows: LogRow[];
+  total: number;
+  next: string;
+  detail_since: string | null;
+};
 
 export type SourceState = { state: "receiving" | "idle"; last: string };
 
@@ -250,13 +268,19 @@ export type Domain = {
     feed: boolean;
     script: string;
     build: string;
+    // The first figure: figures_since.
     first: string | null;
   };
   storage: {
+    // Raw events: how many, the oldest, how long they are kept.
     events: number;
+    oldest: string | null;
+    raw_days: number;
+    // The oldest figure, from the aggregates or raw: it may be older than
+    // the oldest raw event.
+    figures_since: string | null;
     bytes: number;
     retention_months: number;
-    oldest: string | null;
     identity: string;
   };
   rules: {

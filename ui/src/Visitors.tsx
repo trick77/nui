@@ -16,6 +16,7 @@ import {
   joinSep,
   num,
   pct,
+  rawSince,
   seconds,
   when,
 } from "./format";
@@ -31,6 +32,7 @@ import {
   RowButton,
   SectionHead,
   Seg,
+  SepTail,
   Skeleton,
   Tabs,
   useDash,
@@ -87,6 +89,8 @@ export function Visitors({ aud }: { aud: Audience }) {
   // A column keeps the mark's margin only when a row shown has the mark.
   const hangClient = rows.some((v) => v.client_gen);
   const hangDoes = rows.some((v) => v.does.gen);
+  // What it does is read from raw events, the sums from the whole range.
+  const since = rawSince(page.data?.detail_since);
 
   return (
     <>
@@ -216,7 +220,10 @@ export function Visitors({ aud }: { aud: Audience }) {
         <div className="mt-2.5 flex flex-wrap items-center gap-4 border-t border-border-soft px-2.5 pt-2.5 text-[12.5px] text-muted">
           <span className="mr-auto">
             {page.data
-              ? `${all ? "" : "Top "}${num(rows.length)} of ${num(page.data.total)} addresses in this range, each row summed over the whole range`
+              ? joinSep([
+                  `${all ? "" : "Top "}${num(rows.length)} of ${num(page.data.total)} addresses in this range, each row summed over the whole range`,
+                  since && `what it does since ${since}`,
+                ])
               : ""}
           </span>
           <input
@@ -350,6 +357,12 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
   // The previous visitor's trail and cursor while this one loads.
   const fresh = !d.loading;
   const next = more.next ?? v?.trail_next ?? "";
+  // The sums cover the range; the trail, the hours, the addresses, what it
+  // does and the reading are raw events, which may begin later.
+  const since = rawSince(v?.detail_since);
+  const sinceText = since && `since ${since}`;
+  // After a heading or a figure: a narrow column breaks before the dot.
+  const sinceTail = since && <SepTail>{sinceText}</SepTail>;
   return (
     <Panel
       id="visitor-detail"
@@ -384,6 +397,13 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
                 gen={v.does.gen}
                 text={v.does.text}
               />
+              {since && (
+                <span
+                  className={`block text-[12px] text-muted ${v.does.gen ? "pl-4" : ""}`}
+                >
+                  {sinceText}
+                </span>
+              )}
             </p>
             <dl className="mt-2.5 mb-0 grid grid-cols-[auto_1fr] gap-x-3.5 gap-y-[5px] text-[13px]">
               <dt className="text-muted">Class</dt>
@@ -413,11 +433,13 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
               {v.addresses > 1 && (
                 <>
                   <dt className="text-muted">Addresses</dt>
-                  <dd className="m-0">{num(v.addresses)} in this /64</dd>
+                  <dd className="m-0">
+                    {num(v.addresses)} in this /64{sinceTail}
+                  </dd>
                 </>
               )}
             </dl>
-            <div className="eyebrow mt-4">Reading</div>
+            <div className="eyebrow mt-4">Reading{sinceTail}</div>
             {v.reading ? (
               <>
                 <div className="mt-1.5">
@@ -460,7 +482,9 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
                 Stakeout measured.
               </p>
             )}
-            <div className="eyebrow mt-4">Activity by hour{SEP}00 to 23</div>
+            <div className="eyebrow mt-4">
+              Activity by hour{SEP}00 to 23{sinceTail}
+            </div>
             <Hours levels={v.hours} />
           </div>
           <div className="px-[18px] py-4">
@@ -471,7 +495,11 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
               </button>
             </div>
             {trail.length === 0 ? (
-              <Empty>No events in this range.</Empty>
+              <Empty>
+                {since
+                  ? `No events since ${since}: raw events reach back no further.`
+                  : "No events in this range."}
+              </Empty>
             ) : (
               <ol className="trail">
                 {trail.map((t, i) => (
@@ -513,6 +541,11 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
               >
                 {more.busy ? "Loading…" : "Load earlier →"}
               </button>
+            )}
+            {!next && since && trail.length > 0 && (
+              <p className="mt-3 mb-0 text-[12.5px] text-muted">
+                The trail ends here: raw events reach back to {since}.
+              </p>
             )}
             {more.error && <ErrorBox error={more.error} />}
           </div>
