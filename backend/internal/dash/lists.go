@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -163,10 +164,10 @@ type scan struct {
 	fromB bool   // a row's b is the figure (a network's server rows, spike:net)
 }
 
-// scanOf is a list dimension's scan; one agg_list does not hold is read raw.
+// scanOf is a list dimension's scan. refused is agg_addr's (every address of a day, no Other).
 func scanOf(dim string) scan {
 	sc := scan{dimSpec: dims[dim]}
-	if slices.Contains(agg.Dims, dim) {
+	if slices.Contains(agg.Dims, dim) || dim == "refused" {
 		sc.dim = dim
 	}
 	return sc
@@ -215,6 +216,9 @@ func (s *Server) scanDim(ctx context.Context, q *query, sc scan, w window, short
 				err = raw()
 			} else {
 				err = pl.read(ctx, pc[0], pc[1], readSpan, short, func() (bool, error) {
+					if sc.dim == "refused" {
+						return s.refusedDay(ctx, q, ms(pc[0])/dayMS, add)
+					}
 					return s.scanDay(ctx, q, sc, ms(pc[0])/dayMS, add)
 				}, raw)
 			}
@@ -253,6 +257,40 @@ func (s *Server) scanPiece(ctx context.Context, stmt string, args []any, into *l
 		}
 	}
 	return rows.Err()
+}
+
+// refusedDay adds one day's refusals and requests per address from agg_addr to into (the audience's parts), false
+// when the day is not clean in the statement's snapshot.
+func (s *Server) refusedDay(ctx context.Context, q *query, day int64, into *listSums) (bool, error) {
+	rows, err := s.query(ctx, `SELECT d.ok, t.ip_key, t.refused, t.requests`+
+		aggFrom("agg_addr", "t.day = ?2"+partCond(q.aud)), q.site.ID, day)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	add := newSums()
+	ok := false
+	for rows.Next() {
+		var key sql.NullString
+		var refused, requests sql.NullInt64
+		if err := rows.Scan(&ok, &key, &refused, &requests); err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+		if !key.Valid || requests.Int64 == 0 {
+			continue
+		}
+		g := add.get(key.String)
+		g.a += refused.Int64
+		g.b += requests.Int64
+	}
+	if err := rows.Err(); err != nil || !ok {
+		return false, err
+	}
+	into.merge(add)
+	return true, nil
 }
 
 // scanDay adds one day's agg_list rows to into, false (nothing added) when the day is not clean in the statement's
@@ -645,13 +683,19 @@ func (s *Server) richLabels(ctx context.Context, q *query, dim string, o listOpt
 	return nil
 }
 
-// asnOf is the latest ASN seen for each address key (a short indexed read per key).
+// asnOf is the latest ASN seen for each address key (a short indexed read per key): its latest raw event's, else,
+// its raw gone, the latest network its daily sums name.
 func (s *Server) asnOf(ctx context.Context, site int64, keys []string) map[string]int64 {
 	out := map[string]int64{}
 	for _, k := range keys {
 		var asn int64
-		if err := s.row(ctx, `SELECT asn FROM event WHERE site_id = ? AND ip_key = ?
-			ORDER BY ts DESC LIMIT 1`, site, k).Scan(&asn); err == nil {
+		err := s.row(ctx, `SELECT asn FROM event WHERE site_id = ? AND ip_key = ? ORDER BY ts DESC LIMIT 1`, site, k).
+			Scan(&asn)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = s.row(ctx, `SELECT asn FROM agg_addr INDEXED BY agg_addr_key WHERE site_id = ? AND ip_key = ?
+				AND asn != 0 ORDER BY day DESC LIMIT 1`, site, k).Scan(&asn)
+		}
+		if err == nil {
 			out[k] = asn
 		}
 	}

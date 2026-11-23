@@ -48,6 +48,8 @@ type plan struct {
 	now     time.Time
 	oldest  int64 // the oldest raw event's day
 	hasRaw  bool
+	// oldestTS is the oldest raw event's time (unix ms): the trail, the log and a reading reach back to it.
+	oldestTS int64
 	days    map[int64]dayState
 	lo, hi  int64 // the days loaded, inclusive
 	loaded  bool
@@ -67,7 +69,7 @@ func (s *Server) planOf(ctx context.Context, q *query) (*plan, error) {
 	if err := s.row(ctx, `SELECT MIN(ts) FROM event WHERE site_id = ?`, q.site.ID).Scan(&oldest); err != nil {
 		return nil, err
 	}
-	pl.oldest, pl.hasRaw = oldest.Int64/dayMS, oldest.Valid
+	pl.oldestTS, pl.oldest, pl.hasRaw = oldest.Int64, oldest.Int64/dayMS, oldest.Valid
 	first := minTime(q.p.Bounds[0], q.p.win.From)
 	if q.p.Prev != nil {
 		first = minTime(first, q.p.Prev[0])
@@ -120,6 +122,22 @@ func (pl *plan) ensure(ctx context.Context, first, last int64) error {
 	}
 	pl.lo, pl.hi = min(pl.lo, first), max(pl.hi, last)
 	return nil
+}
+
+// rawFrom is from, or the oldest raw event when that is later: where a raw-only figure of a span begins.
+func (pl *plan) rawFrom(from time.Time) time.Time {
+	if pl.hasRaw && pl.oldestTS > ms(from) {
+		return time.UnixMilli(pl.oldestTS)
+	}
+	return from
+}
+
+// detailSince is the API's detail_since: the oldest raw event, null without any.
+func (pl *plan) detailSince() any {
+	if !pl.hasRaw {
+		return nil
+	}
+	return iso(time.UnixMilli(pl.oldestTS))
 }
 
 // rawOK: the day's raw is all there. Retention marks a day it deleted from (raw = 0); before the oldest event

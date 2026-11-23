@@ -27,59 +27,178 @@ import (
 	"github.com/trick77/stakeout/backend/internal/store"
 )
 
-// actors sums every address key over the range, a piece (at most a day) at a time. Visits are distinct sessions
-// over the whole range: a session crossing a piece boundary is one visit, so they are counted from (key, session)
-// pairs, never summed per piece.
+// actors sums every address key over the range, a piece (a UTC day at most) at a time from its source. Visits are
+// distinct sessions over the whole range: a session crossing a piece boundary is one visit. Raw pieces count (key,
+// session) pairs, never per piece; an aggregate day counts its sessions less those carried from the day before
+// (when that day is in the range). A raw day after an aggregate one first learns the day before's pairs, uncounted.
 func (s *Server) actors(ctx context.Context, q *query, from, to time.Time) (map[string]*actor, error) {
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]*actor{}
 	// A hash per (key, session) seen: a few bytes each, not the strings.
 	sessions := map[uint64]struct{}{}
-	for _, pc := range pieces(from, to) {
-		if err := s.actorSessions(ctx, q, pc[0], pc[1], sessions, out); err != nil {
-			return nil, err
-		}
-		// One MAX only: SQLite then takes the bare columns (ua, asn, country, cls) from the row holding it, the
-		// key's latest event. A second MIN or MAX would make that row arbitrary.
-		rows, err := s.query(ctx, `SELECT ip_key,
-			SUM(kind = 'page_view'), SUM(source = 'server'), SUM(source = 'server' AND status >= 400),
-			SUM(source = 'browser' AND `+eventKinds+`), MAX(ts), ua, asn, country, cls,
-			SUM(source = 'browser') > 0, SUM(cls = 1) > 0
-			FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND `+audWhere(q.aud)+` GROUP BY ip_key`,
-			q.site.ID, ms(pc[0]), ms(pc[1]))
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var a actor
-			if err := rows.Scan(&a.key, &a.views, &a.requests, &a.refused, &a.events, &a.last, &a.ua,
-				&a.asn, &a.country, &a.cls, &a.browser, &a.human); err != nil {
-				_ = rows.Close()
-				return nil, err
-			}
-			g := actorOf(out, a.key)
-			g.views += a.views
-			g.requests += a.requests
-			g.refused += a.refused
-			g.events += a.events
-			g.browser = g.browser || a.browser
-			g.human = g.human || a.human
-			// The latest event's client, network and country, as the visitor detail shows them.
-			if a.last >= g.last {
-				g.last, g.ua, g.cls = a.last, a.ua, a.cls
-				if a.asn != 0 {
-					g.asn = a.asn
-				}
-				if a.country != "" {
-					g.country = a.country
+	prevAgg := false // the piece before was an aggregate day
+	for i, pc := range pieces(from, to) {
+		wasAgg := false
+		if err := pl.read(ctx, pc[0], pc[1], readSpan, !q.p.agg, func() (bool, error) {
+			ok, err := s.actorDay(ctx, q, ms(pc[0])/dayMS, i > 0, out)
+			wasAgg = ok
+			return ok, err
+		}, func() error {
+			if prevAgg {
+				if err := s.actorSessions(ctx, q, pc[0].Add(-readSpan), pc[0], sessions, nil); err != nil {
+					return err
 				}
 			}
-		}
-		_ = rows.Close()
-		if err := rows.Err(); err != nil {
+			return s.actorPiece(ctx, q, pc[0], pc[1], sessions, out)
+		}); err != nil {
 			return nil, err
 		}
+		prevAgg = wasAgg
 	}
 	return out, nil
+}
+
+// actorPiece adds one raw piece's sums per key to out.
+func (s *Server) actorPiece(ctx context.Context, q *query, from, to time.Time, sessions map[uint64]struct{},
+	out map[string]*actor) error {
+	if err := s.actorSessions(ctx, q, from, to, sessions, out); err != nil {
+		return err
+	}
+	// One MAX only: SQLite then takes the bare columns (ua, asn, country, cls) from the row holding it, the key's
+	// latest event. A second MIN or MAX would make that row arbitrary.
+	rows, err := s.query(ctx, `SELECT ip_key,
+		SUM(kind = 'page_view'), SUM(source = 'server'), SUM(source = 'server' AND status >= 400),
+		SUM(source = 'browser' AND `+eventKinds+`), MAX(ts), ua, asn, country, cls,
+		SUM(source = 'browser') > 0, SUM(cls = 1) > 0
+		FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND `+audWhere(q.aud)+` GROUP BY ip_key`,
+		q.site.ID, ms(from), ms(to))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var a actor
+		if err := rows.Scan(&a.key, &a.views, &a.requests, &a.refused, &a.events, &a.last, &a.ua,
+			&a.asn, &a.country, &a.cls, &a.browser, &a.human); err != nil {
+			return err
+		}
+		actorOf(out, a.key).add(&a)
+	}
+	return rows.Err()
+}
+
+// add adds one piece's sums of the key; the latest event's client, network and country win, as the visitor detail
+// shows them (a piece without a network or country keeps the earlier one's).
+func (g *actor) add(a *actor) {
+	g.views += a.views
+	g.requests += a.requests
+	g.refused += a.refused
+	g.events += a.events
+	g.visits += a.visits
+	g.browser = g.browser || a.browser
+	g.human = g.human || a.human
+	if g.first == 0 || (a.first != 0 && a.first < g.first) {
+		g.first = a.first
+	}
+	if a.last >= g.last {
+		g.last, g.ua, g.cls = a.last, a.ua, a.cls
+		if a.asn != 0 {
+			g.asn = a.asn
+		}
+		if a.country != "" {
+			g.country = a.country
+		}
+	}
+}
+
+// addrCols are the agg_addr columns an actor is read from (t), in scanAddr's order.
+const addrCols = `t.ip_key, t.views, t.requests, t.refused, t.actions, t.sessions, t.carried, t.browser, t.human,
+	t.first_ts, t.last_ts, t.ua, t.asn, t.country, t.cls`
+
+// addrRow is one agg_addr row as an actor's piece; carried apart, subtracted only when the day before is counted.
+type addrRow struct {
+	actor
+	carried int64
+}
+
+// scanAddr reads addrCols from a left join: ok false for the join's empty side.
+func scanAddr(rows *sql.Rows, lead ...any) (addrRow, bool, error) {
+	var key, ua, country sql.NullString
+	var views, requests, refused, actions, sessions, carried, first, last, asn, cls sql.NullInt64
+	var browser, human sql.NullBool
+	if err := rows.Scan(append(lead, &key, &views, &requests, &refused, &actions, &sessions, &carried, &browser,
+		&human, &first, &last, &ua, &asn, &country, &cls)...); err != nil {
+		return addrRow{}, false, err
+	}
+	return addrRow{actor: actor{key: key.String, views: views.Int64, requests: requests.Int64, refused: refused.Int64,
+		events: actions.Int64, visits: sessions.Int64, browser: browser.Bool, human: human.Bool, first: first.Int64,
+		last: last.Int64, ua: ua.String, asn: asn.Int64, country: country.String, cls: int(cls.Int64)},
+		carried: carried.Int64}, key.Valid, nil
+}
+
+// dayActor folds one day's rows of a key (a part each) into its piece: the sums added, the client and network of the
+// part holding the day's latest event, as a raw piece takes the day's latest row. stitch: the day before is counted,
+// so the sessions carried from it are not new.
+func dayActor(parts []addrRow, stitch bool) *actor {
+	var a actor
+	var latest *addrRow
+	for i := range parts {
+		r := &parts[i]
+		a.views += r.views
+		a.requests += r.requests
+		a.refused += r.refused
+		a.events += r.events
+		a.visits += r.visits
+		if stitch {
+			a.visits -= r.carried
+		}
+		a.browser = a.browser || r.browser
+		a.human = a.human || r.human
+		if a.first == 0 || r.first < a.first {
+			a.first = r.first
+		}
+		if latest == nil || r.last > latest.last {
+			latest = r
+		}
+	}
+	a.key, a.last, a.ua, a.asn, a.country, a.cls = latest.key, latest.last, latest.ua, latest.asn, latest.country,
+		latest.cls
+	return &a
+}
+
+// actorDay adds one day's agg_addr rows (the audience's parts) to out, false when the day is not clean in the
+// statement's snapshot.
+func (s *Server) actorDay(ctx context.Context, q *query, day int64, stitch bool, out map[string]*actor) (bool, error) {
+	rows, err := s.query(ctx, `SELECT d.ok, `+addrCols+aggFrom("agg_addr", "t.day = ?2"+partCond(q.aud)),
+		q.site.ID, day)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	byKey := map[string][]addrRow{}
+	ok := false
+	for rows.Next() {
+		r, has, err := scanAddr(rows, &ok)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+		if has {
+			byKey[r.key] = append(byKey[r.key], r)
+		}
+	}
+	if err := rows.Err(); err != nil || !ok {
+		return false, err
+	}
+	for key, parts := range byKey {
+		actorOf(out, key).add(dayActor(parts, stitch))
+	}
+	return true, nil
 }
 
 func actorOf(m map[string]*actor, key string) *actor {
@@ -91,7 +210,8 @@ func actorOf(m map[string]*actor, key string) *actor {
 	return g
 }
 
-// actorSessions counts the sessions of one bucket that no earlier bucket had, per key.
+// actorSessions counts the sessions of one bucket that no earlier bucket had, per key; with out nil it only learns
+// them.
 func (s *Server) actorSessions(ctx context.Context, q *query, from, to time.Time, seen map[uint64]struct{},
 	out map[string]*actor) error {
 	rows, err := s.query(ctx, `SELECT ip_key, sid FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND sid != ''
@@ -113,7 +233,9 @@ func (s *Server) actorSessions(ctx context.Context, q *query, from, to time.Time
 			continue
 		}
 		seen[h.Sum64()] = struct{}{}
-		actorOf(out, key).visits++
+		if out != nil {
+			actorOf(out, key).visits++
+		}
 	}
 	return rows.Err()
 }
@@ -242,7 +364,8 @@ func (s *Server) handleVisitors(w http.ResponseWriter, r *http.Request, q *query
 	}
 	ctx := r.Context()
 	needle := foldSpaces(strings.ToLower(v.Get("q")))
-	snapKey := fmt.Sprintf("%d|%s|%s|%s|%s|%d|%d", q.site.ID, q.aud, sortBy, class, needle, span.From, span.To)
+	snapKey := fmt.Sprintf("%d|%d|%s|%s|%s|%s|%d|%d", s.Source, q.site.ID, q.aud, sortBy, class, needle, span.From,
+		span.To)
 	rows, ok := s.snaps.get(snapKey, s.now())
 	if !ok {
 		if rows, err = s.visitorRows(ctx, q, span, sortBy, class, needle); err != nil {
@@ -271,6 +394,13 @@ func (s *Server) handleVisitors(w http.ResponseWriter, r *http.Request, q *query
 	}
 	s.readRows(ctx, q, span, page, readQueue(rows, page))
 	resp["rows"] = page
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	// What it does and the reading go back this far; the sums cover the whole span.
+	resp["detail_since"] = pl.detailSince()
 	apix.JSON(w, http.StatusOK, resp)
 }
 
@@ -507,22 +637,33 @@ func (s *Server) visitorRow(q *query, a *actor, ci classInfo) visitorRow {
 // queued only for the rows in queue.
 func (s *Server) readRows(ctx context.Context, q *query, span visitorCursor, rows []visitorRow, queue map[string]bool) {
 	from, to := time.UnixMilli(span.From), time.UnixMilli(span.To)
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		return
+	}
+	// What it does and the reading are raw events: the span from detail_since on.
+	since := pl.rawFrom(from)
 	ins := make([]insight.ReadingInput, 0, len(rows))
 	shown := map[string]map[string]string{}
 	for i := range rows {
-		counts, tmpls, err := s.actions(ctx, q.site.ID, rows[i].Key, from, to)
+		counts, tmpls, err := s.actions(ctx, q.site.ID, rows[i].Key, since, to)
 		if err != nil {
 			continue
 		}
 		rows[i].Does.Text = doesText(rows[i], counts)
-		if rows[i].values, err = s.variety(ctx, q.site.ID, rows[i].Key, from, to, counts, tmpls); err != nil {
+		if rows[i].values, err = s.variety(ctx, q.site.ID, rows[i].Key, since, to, counts, tmpls); err != nil {
 			continue
 		}
-		tr, err := s.trail(ctx, q.site.ID, rows[i].Key, from, to, cursor{})
+		tr, err := s.trail(ctx, q.site.ID, rows[i].Key, since, to, cursor{})
 		if err != nil {
 			continue
 		}
-		in, facts := s.readingInput(q.site.ID, rows[i], counts, tr)
+		rd, _, err := s.readingRow(ctx, q, rows[i], nil, classInfo{}, from, to, since)
+		if err != nil {
+			continue
+		}
+		rd.values = rows[i].values
+		in, facts := s.readingInput(q.site.ID, rd, counts, tr)
 		in.Queue = queue[rows[i].Key]
 		ins = append(ins, in)
 		shown[rows[i].Key] = facts
@@ -1169,17 +1310,25 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		return
 	}
 	row := s.visitorRow(q, a, ci)
-	tr, err := s.trail(ctx, q.site.ID, key, q.p.win.From, q.p.win.End, before)
+	// The sums cover the range; the trail, the hours, the addresses, the actions and the reading are raw events,
+	// which reach back to detail_since.
+	pl, err := s.planOf(ctx, q)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	hours, addrs, err := s.hours(ctx, q, key)
+	since := pl.rawFrom(q.p.win.From)
+	tr, err := s.trail(ctx, q.site.ID, key, since, q.p.win.End, before)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	counts, tmpls, err := s.actions(ctx, q.site.ID, key, q.p.win.From, q.p.win.End)
+	hours, addrs, err := s.hours(ctx, q, key, since, q.p.win.End)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	counts, tmpls, err := s.actions(ctx, q.site.ID, key, since, q.p.win.End)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -1189,7 +1338,7 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 	resp := map[string]any{"key": key, "class": row.Class, "network": row.Network, "network_kind": row.NetworkKind,
 		"country": row.Country, "client": row.Client, "signals": row.Signals, "requests": row.Requests,
 		"addresses": addrs, "hours": hours, "trail": tr.lines, "trail_next": tr.next, "reading": nil,
-		"client_gen": nil, "does": &row.Does}
+		"client_gen": nil, "does": &row.Does, "detail_since": pl.detailSince()}
 	if s.Model != nil && s.Model.Configured() {
 		one := []visitorRow{row}
 		s.labelClients(ctx, q.site.ID, one)
@@ -1197,16 +1346,24 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		// The reading reads the newest trail page, whatever page the user is on.
 		latest := tr
 		if before.ts > 0 {
-			if latest, err = s.trail(ctx, q.site.ID, key, q.p.win.From, q.p.win.End, cursor{}); err != nil {
+			if latest, err = s.trail(ctx, q.site.ID, key, since, q.p.win.End, cursor{}); err != nil {
 				s.fail(w, r, err)
 				return
 			}
 		}
-		if row.values, err = s.variety(ctx, q.site.ID, key, q.p.win.From, q.p.win.End, counts, tmpls); err != nil {
+		// Its figures are the raw span's too: evidence never mixes the range's sums with the raw span's counts.
+		rd, basis, err := s.readingRow(ctx, q, row, a, ci, q.p.win.From, q.p.win.End, since)
+		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
-		in, shown := s.readingInput(q.site.ID, row, counts, latest)
+		a = basis
+		if rd.values, err = s.variety(ctx, q.site.ID, key, since, q.p.win.End, counts, tmpls); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		row.values = rd.values
+		in, shown := s.readingInput(q.site.ID, rd, counts, latest)
 		in.Queue = true // the user opened this actor
 		if rd, ok := s.Model.Readings(ctx, []insight.ReadingInput{in}, true)[key]; ok {
 			// Shown only when every fact it cites exists for this actor, with this actor's figures and span.
@@ -1229,33 +1386,214 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 	apix.JSON(w, http.StatusOK, resp)
 }
 
-// actorOne sums one key over the range (nil when it has no events there).
-func (s *Server) actorOne(ctx context.Context, q *query, key string) (*actor, error) {
-	var a actor
-	var first, last *int64
-	err := s.row(ctx, `SELECT COUNT(DISTINCT CASE WHEN sid != '' THEN sid END),
-		COALESCE(SUM(kind = 'page_view'), 0), COALESCE(SUM(source = 'server'), 0),
-		COALESCE(SUM(source = 'server' AND status >= 400), 0), COALESCE(SUM(source = 'browser' AND `+eventKinds+`), 0),
-		MIN(ts), MAX(ts), COALESCE(SUM(source = 'browser'), 0) > 0, COALESCE(SUM(cls = 1), 0) > 0
-		FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?`,
-		q.site.ID, key, ms(q.p.win.From), ms(q.p.win.End)).Scan(&a.visits, &a.views, &a.requests, &a.refused,
-		&a.events, &first, &last, &a.browser, &a.human)
-	if err != nil || last == nil {
-		return nil, err
+// readingRow is the row the model reads about an actor, and the actor behind it: the table's, unless the span
+// [from, to) reaches before the raw events (since), then the raw span's own sums, as its evidence counts.
+func (s *Server) readingRow(ctx context.Context, q *query, row visitorRow, a *actor, ci classInfo, from, to,
+	since time.Time) (visitorRow, *actor, error) {
+	if !since.After(from) {
+		return row, a, nil
 	}
-	a.key, a.first, a.last = key, *first, *last
-	// The latest event's client, network, country and class, as the table's row shows them.
-	if err := s.row(ctx, `SELECT ua, asn, country, cls FROM event WHERE site_id = ? AND ip_key = ? AND ts <= ?
-		ORDER BY ts DESC LIMIT 1`, q.site.ID, key, a.last).Scan(&a.ua, &a.asn, &a.country, &a.cls); err != nil {
-		return nil, err
+	ra, err := s.actorIn(ctx, q, row.Key, since, to, true)
+	if err != nil || ra == nil {
+		return row, a, err
 	}
-	return &a, nil
+	rr := s.visitorRow(q, ra, ci)
+	rr.Class, rr.Signals = row.Class, row.Signals
+	return rr, ra, nil
 }
 
-// hours is the actor's activity per hour of the viewer's day, as levels 0-4, and its distinct addresses.
-func (s *Server) hours(ctx context.Context, q *query, key string) ([]int, int64, error) {
+// actorOne sums one key over the range (nil when it has no events there).
+func (s *Server) actorOne(ctx context.Context, q *query, key string) (*actor, error) {
+	return s.actorIn(ctx, q, key, q.p.win.From, q.p.win.End, false)
+}
+
+// actorPart is a run of days of one key's span read from one source.
+type actorPart struct {
+	lo, hi time.Time
+	day    int64 // an aggregate day's; the first day of a raw run
+	agg    bool
+}
+
+// actorIn sums one key over [from, to) (nil when it has no events there): the days the aggregates serve from
+// agg_addr on its key index, one statement for the whole span; every run of other days raw on the actor index, a
+// statement each. Visits are stitched as in actors. rawOnly reads every day raw (the reading's figures, which must
+// match its raw evidence).
+func (s *Server) actorIn(ctx context.Context, q *query, key string, from, to time.Time, rawOnly bool) (*actor, error) {
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	var parts []actorPart
+	for _, pc := range pieces(from, to) {
+		h := readRaw
+		if !rawOnly {
+			if h, err = pl.pick(ctx, pc[0], pc[1], readSpan, !q.p.agg); err != nil {
+				return nil, err
+			}
+			if h == readRaw && traceRead != nil && pl.src != SourceRaw {
+				traceRead(false, pc[0].Equal(pc[0].Truncate(readSpan)) && pc[1].Equal(pc[1].Truncate(readSpan)))
+			}
+		}
+		switch {
+		case h == readNone:
+		case h == readRaw && len(parts) > 0 && !parts[len(parts)-1].agg && parts[len(parts)-1].hi.Equal(pc[0]):
+			parts[len(parts)-1].hi = pc[1]
+		default:
+			parts = append(parts, actorPart{lo: pc[0], hi: pc[1], day: ms(pc[0]) / dayMS, agg: h == readAgg})
+		}
+	}
+	days, err := s.actorDays(ctx, q, key, parts)
+	if err != nil {
+		return nil, err
+	}
+	a := &actor{key: key}
+	seen := map[string]bool{}
+	var rawLast int64 // the latest raw event's time, when the latest event is raw
+	for i, pt := range parts {
+		if pt.agg {
+			if day, ok := days[pt.day]; ok {
+				stitch := i > 0 && parts[i-1].hi.Equal(pt.lo)
+				a.add(dayActor(day, stitch))
+			}
+			continue
+		}
+		if i > 0 && parts[i-1].agg && parts[i-1].hi.Equal(pt.lo) {
+			// The day before was counted from the aggregates: its sessions are not new here.
+			if err := s.actorSids(ctx, q.site.ID, key, pt.lo.Add(-readSpan), pt.lo, seen, nil); err != nil {
+				return nil, err
+			}
+		}
+		var r actor
+		var first, last *int64
+		if err := s.row(ctx, `SELECT COALESCE(SUM(kind = 'page_view'), 0), COALESCE(SUM(source = 'server'), 0),
+			COALESCE(SUM(source = 'server' AND status >= 400), 0), COALESCE(SUM(source = 'browser' AND `+eventKinds+`), 0),
+			MIN(ts), MAX(ts), COALESCE(SUM(source = 'browser'), 0) > 0, COALESCE(SUM(cls = 1), 0) > 0
+			FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?`, q.site.ID, key, ms(pt.lo), ms(pt.hi)).
+			Scan(&r.views, &r.requests, &r.refused, &r.events, &first, &last, &r.browser, &r.human); err != nil {
+			return nil, err
+		}
+		if last == nil {
+			continue
+		}
+		if err := s.actorSids(ctx, q.site.ID, key, pt.lo, pt.hi, seen, &r.visits); err != nil {
+			return nil, err
+		}
+		r.first, r.last = *first, *last
+		if r.last >= a.last {
+			rawLast = r.last
+		}
+		a.add(&r)
+	}
+	if a.last == 0 {
+		return nil, nil
+	}
+	if rawLast == a.last {
+		// The latest event's client, network, country and class, as the table's row shows them.
+		if err := s.row(ctx, `SELECT ua, asn, country, cls FROM event WHERE site_id = ? AND ip_key = ? AND ts <= ?
+			ORDER BY ts DESC LIMIT 1`, q.site.ID, key, a.last).Scan(&a.ua, &a.asn, &a.country, &a.cls); err != nil {
+			return nil, err
+		}
+	}
+	return a, nil
+}
+
+// actorSids adds the key's sessions in [from, to) to seen, counting the new ones into n (nil: only learn them).
+func (s *Server) actorSids(ctx context.Context, site int64, key string, from, to time.Time, seen map[string]bool,
+	n *int64) error {
+	rows, err := s.query(ctx, `SELECT DISTINCT sid FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?
+		AND sid != ''`, site, key, ms(from), ms(to))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			return err
+		}
+		if !seen[sid] && n != nil {
+			*n++
+		}
+		seen[sid] = true
+	}
+	return rows.Err()
+}
+
+// actorDays reads one key's agg_addr rows for the aggregate days among parts, by day: a statement on its key index
+// per month of days (spanDays), every day's state read with them, so a day rebuilt meanwhile is read raw (SourceAgg:
+// an error).
+func (s *Server) actorDays(ctx context.Context, q *query, key string, parts []actorPart) (map[int64][]addrRow, error) {
+	out := map[int64][]addrRow{}
+	clean := map[int64]bool{}
+	read := func(first, last int64) error {
+		rows, err := s.query(ctx, `SELECT d.day, d.frozen = 1 AND d.dirty = 0, `+addrCols+` FROM agg_day d
+			LEFT JOIN agg_addr t INDEXED BY agg_addr_key ON t.site_id = d.site_id AND t.ip_key = ? AND t.day = d.day
+			WHERE d.site_id = ? AND d.day >= ? AND d.day <= ?`, key, q.site.ID, first, last)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var day int64
+			var ok bool
+			r, has, err := scanAddr(rows, &day, &ok)
+			if err != nil {
+				return err
+			}
+			clean[day] = ok
+			if has && ok {
+				out[day] = append(out[day], r)
+			}
+		}
+		return rows.Err()
+	}
+	first, last := int64(-1), int64(-1)
+	for _, pt := range parts {
+		if !pt.agg {
+			continue
+		}
+		if first >= 0 && pt.day >= first+spanDays {
+			if err := read(first, last); err != nil {
+				return nil, err
+			}
+			first = -1
+		}
+		if first < 0 {
+			first = pt.day
+		}
+		last = pt.day
+	}
+	if first >= 0 {
+		if err := read(first, last); err != nil {
+			return nil, err
+		}
+	}
+	pl, _ := s.planOf(ctx, q)
+	for i := range parts {
+		pt := &parts[i]
+		if !pt.agg {
+			continue
+		}
+		switch {
+		case clean[pt.day]:
+			if traceRead != nil {
+				traceRead(true, true)
+			}
+		case pl.src == SourceAgg:
+			return nil, fmt.Errorf("%w: site %d, %s rebuilt while read", ErrNoAggregates, q.site.ID,
+				time.UnixMilli(pt.day*dayMS).UTC().Format(time.DateOnly))
+		default: // rebuilt since the plan: raw, which a rebuild never changes
+			pt.agg = false
+		}
+	}
+	return out, nil
+}
+
+// hours is the actor's activity per hour of the viewer's day over [from, to), as levels 0-4, and its distinct
+// addresses.
+func (s *Server) hours(ctx context.Context, q *query, key string, from, to time.Time) ([]int, int64, error) {
 	rows, err := s.query(ctx, `SELECT ts / 3600000, COUNT(*) FROM event
-		WHERE site_id = ? AND ip_key = ? AND ts >= ? GROUP BY 1`, q.site.ID, key, ms(q.p.win.From))
+		WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ? GROUP BY 1`, q.site.ID, key, ms(from), ms(to))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1278,7 +1616,7 @@ func (s *Server) hours(ctx context.Context, q *query, key string) ([]int, int64,
 	}
 	var addrs int64
 	err = s.row(ctx, `SELECT COUNT(DISTINCT ip) FROM event WHERE site_id = ? AND ip_key = ?
-		AND ts >= ?`, q.site.ID, key, ms(q.p.win.From)).Scan(&addrs)
+		AND ts >= ? AND ts < ?`, q.site.ID, key, ms(from), ms(to)).Scan(&addrs)
 	return levels, addrs, err
 }
 

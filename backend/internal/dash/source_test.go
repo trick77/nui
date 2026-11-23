@@ -172,7 +172,7 @@ func TestSources_Lists(t *testing.T) {
 			t.Fatalf("%s %s: %d, %d %v", ep, where, code, gotCode, got)
 		}
 		agree(t, ep+" "+where, raw, got, loose)
-		if n.raw != 0 || (n.agg == 0 && params["range"] != "7d" && params["within"] == "" && params["dim"] != "refused") {
+		if n.raw != 0 || (n.agg == 0 && params["range"] != "7d" && params["within"] == "") {
 			t.Errorf("%s %s: pieces %+v", ep, where, n)
 		}
 	}
@@ -207,6 +207,147 @@ func TestSources_Lists(t *testing.T) {
 		{"dim", "pages", "within", "/:cidr"}, {"dim", "entry", "limit", "3"}} {
 		params := p(feedSite, append([]string{"range", "30d", "tz", "UTC"}, kv...)...)
 		ask("list", fmt.Sprint(kv), params, looseRows(kv[1]))
+	}
+}
+
+// The visitors table and a visitor's sums read the same from agg_addr as from raw.
+func TestSources_Addresses(t *testing.T) {
+	r := newRig(t, 20, 12, &fakeModel{})
+	keys := map[string]bool{}
+	for _, tz := range []string{"UTC", "Europe/Zurich", "Asia/Kolkata", "America/New_York"} {
+		for _, rng := range []string{"7d", "30d", "90d", "12mo"} {
+			if rng == "12mo" && tz != "UTC" {
+				continue
+			}
+			for _, aud := range []string{"all", "humans", "bots"} {
+				for _, sortBy := range []string{"requests", "views"} {
+					params := p(feedSite, "range", rng, "aud", aud, "tz", tz, "sort", sortBy, "limit", "50")
+					_, raw := r.getFrom(t, SourceRaw, "visitors", params)
+					var got map[string]any
+					n := countPieces(t, func() { _, got = r.getFrom(t, SourceAgg, "visitors", params) })
+					agree(t, "visitors "+fmt.Sprint(params), raw, got, nil)
+					if n.raw != 0 || (n.agg == 0 && rng != "7d") {
+						t.Errorf("visitors %v: pieces %+v", params, n)
+					}
+					for _, row := range listRows(got)[:min(3, len(listRows(got)))] {
+						keys[row["key"].(string)] = true
+					}
+				}
+			}
+		}
+	}
+	for key := range keys {
+		for _, rng := range []string{"30d", "12mo"} {
+			params := p(feedSite, "range", rng, "tz", "UTC", "key", key)
+			_, raw := r.getFrom(t, SourceRaw, "visitor", params)
+			_, got := r.getFrom(t, SourceAgg, "visitor", params)
+			agree(t, "visitor "+fmt.Sprint(params), raw, got, nil)
+		}
+	}
+	for _, rng := range []string{"30d", "12mo"} {
+		params := p(feedSite, "range", rng, "tz", "UTC")
+		_, raw := r.getFrom(t, SourceRaw, "domain", params)
+		_, got := r.getFrom(t, SourceAgg, "domain", params)
+		agree(t, "domain "+rng, raw, got, nil)
+	}
+}
+
+// A session crossing midnight from an aggregate day into a raw one is one visit, in the table and the detail. One
+// session and one address-day with rows of both parts (people and automated) count once per part under aud=all from
+// the aggregates, once from raw: the aggregates keep the parts apart.
+func TestSources_Sessions(t *testing.T) {
+	r, insert := exactRig(t)
+	view := func(ts int64, sid string, src string, cls int) store.Event {
+		return store.Event{TS: ts, Source: src, Kind: "page_view", Visitor: "v1", SID: sid, IP: "192.0.2.40",
+			IPKey: "192.0.2.40", Template: "/", Cls: cls}
+	}
+	insert(view(at("2026-11-12T23:50:00Z"), "s1", "browser", store.ClsHuman),
+		view(at("2026-11-13T00:10:00Z"), "s1", "browser", store.ClsHuman),
+		view(at("2026-11-13T10:00:00Z"), "s2", "browser", store.ClsHuman),
+		view(at("2026-11-14T09:00:00Z"), "s3", "browser", store.ClsHuman),
+		view(at("2026-11-14T09:01:00Z"), "s3", "server", store.ClsUnknown))
+	r.build(t)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	// The 13th is raw again (unbuilt), the 12th stays built.
+	if _, err := r.s.DB.DB.Exec(`DELETE FROM agg_day WHERE site_id = ? AND day = ?`, site.ID,
+		at("2026-11-13T00:00:00Z")/dayMS); err != nil {
+		t.Fatal(err)
+	}
+	visits := func(src Source, aud string) (float64, float64) {
+		t.Helper()
+		_, v := r.getFrom(t, src, "visitors", p(feedSite, "range", "30d", "tz", "UTC", "aud", aud))
+		var table float64
+		for _, row := range listRows(v) {
+			if row["key"] == "192.0.2.40" {
+				table = num64(row["visits"])
+			}
+		}
+		_, d := r.getFrom(t, src, "visitor", p(feedSite, "range", "30d", "tz", "UTC", "key", "192.0.2.40"))
+		return table, num64(d["visits"])
+	}
+	var table float64
+	n := countPieces(t, func() { table, _ = visits(SourceAuto, "humans") })
+	if table != 3 || n.agg == 0 || n.raw == 0 {
+		t.Errorf("humans across the raw boundary: %v visits, pieces %+v", table, n)
+	}
+	if table, _ := visits(SourceRaw, "all"); table != 3 {
+		t.Errorf("raw, all: %v visits", table)
+	}
+	if table, _ := visits(SourceAuto, "all"); table != 4 {
+		t.Errorf("aggregates, all: %v visits, want s3 once per part", table)
+	}
+	a, err := r.s.actorIn(t.Context(), &query{site: site, aud: "all", p: newPeriod("30d", "off", r.end, time.UTC)},
+		"192.0.2.40", time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC), false)
+	if err != nil || a.visits != 2 || a.views != 3 {
+		t.Errorf("detail across the boundary: %+v, %v", a, err)
+	}
+}
+
+// Where raw is gone (retention cut it), the sums still come from the aggregates, while the trail, the log and a
+// reading reach back to detail_since only; the footer says since when figures go back.
+func TestSources_RawSpan(t *testing.T) {
+	r := newRig(t, 20, 12, &fakeModel{})
+	_, before := r.get(t, "visitors", p(feedSite, "range", "30d", "tz", "UTC", "limit", "500"))
+	cut := r.end.AddDate(0, 0, -5)
+	if _, err := r.s.DB.PruneAge(t.Context(), cut); err != nil {
+		t.Fatal(err)
+	}
+	since := cut.Truncate(24 * time.Hour)
+	_, after := r.get(t, "visitors", p(feedSite, "range", "30d", "tz", "UTC", "limit", "500"))
+	detailSince := after["detail_since"]
+	if d, _ := time.Parse(time.RFC3339, detailSince.(string)); d.Before(since) {
+		t.Errorf("detail_since %v before the cut %v", detailSince, since)
+	}
+	delete(before, "detail_since")
+	delete(after, "detail_since")
+	rows := func(b map[string]any) []map[string]any {
+		out := listRows(b)
+		for _, row := range out {
+			delete(row, "does") // what it does reads the raw span
+		}
+		return out
+	}
+	agree(t, "visitors after the cut", rows(before), rows(after), nil)
+	key := listRows(after)[0]["key"].(string)
+	_, d := r.get(t, "visitor", p(feedSite, "range", "30d", "tz", "UTC", "key", key))
+	for _, x := range d["trail"].([]any) {
+		if ts, _ := time.Parse(time.RFC3339, x.(map[string]any)["from"].(string)); ts.Before(since) {
+			t.Errorf("trail before detail_since: %v", x)
+		}
+	}
+	if d["detail_since"] != detailSince || d["requests"] != listRows(after)[0]["requests"] {
+		t.Errorf("detail %v %v", d["detail_since"], d["requests"])
+	}
+	_, l := r.get(t, "log", p(feedSite, "range", "30d", "tz", "UTC"))
+	if l["detail_since"] != detailSince {
+		t.Errorf("log detail_since %v", l["detail_since"])
+	}
+	_, dom := r.get(t, "domain", p(feedSite, "range", "30d", "tz", "UTC"))
+	st, src := dom["storage"].(map[string]any), dom["sources"].(map[string]any)
+	if st["oldest"] != detailSince || st["figures_since"] == nil ||
+		st["figures_since"].(string) >= st["oldest"].(string) || src["first"] != st["figures_since"] ||
+		num64(st["raw_days"]) < 750 {
+		t.Errorf("storage %v, first %v", st, src["first"])
 	}
 }
 
