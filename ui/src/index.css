@@ -701,10 +701,15 @@ table.t th button {
 .trail li {
   position: relative;
   display: grid;
-  grid-template-columns: 84px 120px 1fr;
+  /* The time column holds a date from another year and its time on one line
+     ("22.11.2025 22:20", 16 characters of 12px mono). */
+  grid-template-columns: 118px 120px 1fr;
   gap: 12px;
   align-items: baseline;
   padding-left: 20px;
+}
+.trail time {
+  white-space: nowrap;
 }
 .trail li::before {
   content: "";
