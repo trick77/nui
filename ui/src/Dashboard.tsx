@@ -228,6 +228,10 @@ export default function Dashboard({ me }: { me: Me }) {
         </nav>
         <span className="flex-1" />
         {ov.data && (
+          // Below 900 px "automated" says "bots", the audience switch's word
+          // for the same classes: with it the bar needed 790 px and pushed
+          // Sign out past a 768 px window (three-digit counts: up to 900 px).
+          // Words, not a tooltip: an iPad has no hover.
           <span className="flex items-center text-[13px] whitespace-nowrap text-muted">
             <i className="live-dot mr-[7px]" />
             <span>
@@ -239,7 +243,8 @@ export default function Dashboard({ me }: { me: Me }) {
               <b className="font-medium text-ink tabular-nums">
                 {num(ov.data.live.automated)}
               </b>{" "}
-              automated
+              <span className="max-[900px]:hidden">automated</span>
+              <span className="min-[900px]:hidden">bots</span>
             </span>
           </span>
         )}

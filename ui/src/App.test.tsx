@@ -274,6 +274,12 @@ describe("dashboard on a domain with a server feed", () => {
     expect(document.querySelector(".topbar")?.textContent).toContain(
       `7 humans online${SEP}3 automated`,
     );
+    // A narrow window says "bots" for "automated", shown in place of it.
+    const bar = document.querySelector<HTMLElement>(".topbar")!;
+    expect(within(bar).getByText("automated")).toHaveClass(
+      "max-[900px]:hidden",
+    );
+    expect(within(bar).getByText("bots")).toHaveClass("min-[900px]:hidden");
     expect(await screen.findByText("Who is asking")).toBeInTheDocument();
     await screen.findByText("Requests by class");
     // Every query carries the scope.
