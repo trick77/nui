@@ -77,6 +77,7 @@ func (s *Store) InsertEvents(ctx context.Context, events []Event) error {
 		return err
 	}
 	defer func() { _ = stmt.Close() }()
+	days := map[[2]int64]bool{}
 	for _, e := range events {
 		props := e.Props
 		if props == "" {
@@ -87,8 +88,24 @@ func (s *Store) InsertEvents(ctx context.Context, events []Event) error {
 			e.Country, e.Account, e.Cls, props); err != nil {
 			return err
 		}
+		days[[2]int64{e.SiteID, e.TS / dayMS}] = true
+	}
+	for d := range days {
+		if err := markAggDirty(ctx, tx, d[0], d[1]); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
+}
+
+// markAggDirty tells the aggregate job that a site-day's raw changed, in the transaction that changed it: a built
+// day goes dirty (read raw until rebuilt) and a build under way finds its version moved. A day mid-write keeps that
+// mark: its rows may be partial. The collector only writes today and yesterday, which have no row yet: a probe on
+// the primary key that finds nothing.
+func markAggDirty(ctx context.Context, tx *sql.Tx, siteID, day int64) error {
+	_, err := tx.ExecContext(ctx, `UPDATE agg_day SET version = version + 1,
+		dirty = CASE dirty WHEN 3 THEN 3 ELSE 1 END WHERE site_id = ? AND day = ? AND raw = 1`, siteID, day)
+	return err
 }
 
 // AddStats adds counters to their hour rows.
@@ -162,14 +179,32 @@ func (s *Store) SetActorClass(ctx context.Context, a ActorClass, byUA map[string
 		return err
 	}
 	from := a.Day * dayMS
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE event SET cls = ? WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ? AND cls != ?`,
-		ClassCode(a.Class), a.SiteID, a.IPKey, from, from+dayMS, ClassCode(a.Class)); err != nil {
+	// The actor's class skips the clients with one of their own: stamped and stamped back, they would count as a
+	// change on every pass.
+	args := []any{ClassCode(a.Class), a.SiteID, a.IPKey, from, from + dayMS, ClassCode(a.Class)}
+	for ua := range byUA {
+		args = append(args, ua)
+	}
+	//nolint:gosec // only placeholders are spliced in; values are bound
+	res, err := tx.ExecContext(ctx, `UPDATE event SET cls = ? WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?
+		AND cls != ? AND ua NOT IN (`+placeholders(len(byUA))+`)`, args...)
+	if err != nil {
 		return err
 	}
+	changed, _ := res.RowsAffected()
 	for ua, class := range byUA {
-		if _, err := tx.ExecContext(ctx, `UPDATE event SET cls = ? WHERE site_id = ? AND ip_key = ? AND ts >= ?
-			AND ts < ? AND ua = ?`, ClassCode(class), a.SiteID, a.IPKey, from, from+dayMS, ua); err != nil {
+		res, err := tx.ExecContext(ctx, `UPDATE event SET cls = ? WHERE site_id = ? AND ip_key = ? AND ts >= ?
+			AND ts < ? AND ua = ? AND cls != ?`, ClassCode(class), a.SiteID, a.IPKey, from, from+dayMS, ua,
+			ClassCode(class))
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		changed += n
+	}
+	// Most passes restamp nothing: the day's aggregates stand then.
+	if changed > 0 {
+		if err := markAggDirty(ctx, tx, a.SiteID, a.Day); err != nil {
 			return err
 		}
 	}

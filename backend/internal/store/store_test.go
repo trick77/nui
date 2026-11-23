@@ -321,6 +321,83 @@ func TestVacuum_WrongModeAndStall(t *testing.T) {
 	}
 }
 
+// Raw writes to a built day mark it dirty and bump its version, in their own transaction; a day without a row, a
+// day whose raw is gone and a class pass that restamps nothing leave agg_day alone.
+func TestRawWritesMarkAggDirty(t *testing.T) {
+	st := open(t)
+	id := seed(t, st)
+	day := int64(20_000)
+	for _, d := range []int64{day, day + 1, day + 2} {
+		write(t, st, AggBuild{Site: id, Day: d, Builder: 1})
+	}
+	if _, err := st.DB.Exec(`UPDATE agg_day SET raw = 0 WHERE site_id = ? AND day = ?`, id, day+2); err != nil {
+		t.Fatal(err)
+	}
+	state := func() map[int64]AggDay {
+		t.Helper()
+		days, err := st.AggDays(t.Context(), id, day-1, day+3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return days
+	}
+	ev := func(d int64, ua string, cls int) Event {
+		return Event{SiteID: id, TS: d*dayMS + 5000, Source: "server", Kind: "request", IP: "192.0.2.1",
+			IPKey: "192.0.2.1", UA: ua, Cls: cls}
+	}
+	// One batch over two built days, a day without a row and a purged one: each built day once.
+	if err := st.InsertEvents(t.Context(), []Event{ev(day, "a", 4), ev(day, "b", 4), ev(day+1, "a", 4),
+		ev(day-1, "a", 4), ev(day+2, "a", 4)}); err != nil {
+		t.Fatal(err)
+	}
+	s := state()
+	if s[day].Version != 1 || s[day].Dirty != 1 || s[day+1].Version != 1 || s[day+1].Dirty != 1 {
+		t.Errorf("built days after an insert: %+v, %+v", s[day], s[day+1])
+	}
+	if _, ok := s[day-1]; ok {
+		t.Errorf("a row appeared for an unbuilt day: %+v", s[day-1])
+	}
+	if s[day+2].Version != 0 || s[day+2].Dirty != 0 {
+		t.Errorf("purged day marked: %+v", s[day+2])
+	}
+
+	// A pass that changes nothing leaves the day alone; one that restamps, or restamps one client, marks it.
+	if _, err := st.DB.Exec(`UPDATE agg_day SET dirty = 0`); err != nil {
+		t.Fatal(err)
+	}
+	set := func(class string, byUA map[string]string) {
+		t.Helper()
+		if err := st.SetActorClass(t.Context(), ActorClass{SiteID: id, IPKey: "192.0.2.1", Day: day, Class: class},
+			byUA); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set("unknown", map[string]string{"b": "unknown"})
+	if s := state()[day]; s.Version != 1 || s.Dirty != 0 {
+		t.Errorf("no restamp: %+v", s)
+	}
+	set("unknown", map[string]string{"b": "bot"})
+	if s := state()[day]; s.Version != 2 || s.Dirty != 1 {
+		t.Errorf("one client restamped: %+v", s)
+	}
+	set("unknown", map[string]string{"b": "bot"}) // the same pass again: nothing moves
+	if s := state()[day]; s.Version != 2 {
+		t.Errorf("a repeated pass marked the day: %+v", s)
+	}
+	var bots int
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE ts >= ? AND ts < ? AND cls = 2`, day*dayMS,
+		(day+1)*dayMS).Scan(&bots); err != nil || bots != 1 {
+		t.Errorf("client's own class: %d rows, %v", bots, err)
+	}
+	set("bot", nil)
+	if s := state()[day]; s.Version != 3 {
+		t.Errorf("actor restamped: %+v", s)
+	}
+	if s := state()[day+1]; s.Version != 1 {
+		t.Errorf("another day marked by the class pass: %+v", s)
+	}
+}
+
 // TestUpgrade_0002 opens a database that 0.1 left (0001 only, with events): Open adds the aggregate tables, empty,
 // and every event stays.
 func TestUpgrade_0002(t *testing.T) {
