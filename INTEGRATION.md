@@ -10,7 +10,7 @@ The collector's limits are in the [README](README.md#browser-script); this page 
 ## On the Stakeout host (not in the product's repo)
 
 The product's repo cannot do this part. The integrating side hands the operator a `sites.json` entry and, for a
-feed, the name of the variable the product reads its key from.
+feed, a place for the key in the product's `.env` ([Settings](#settings)).
 
 - `domain`: the exact hostname the pages are served from, case-insensitive. `www.example.com` and `example.com` are
   two sites. A page on a host not listed gets 403 and its script switches itself off.
@@ -99,4 +99,19 @@ The emitter must never slow down or break the product:
 - 408, 429 and 5xx: send the same batch again after `Retry-After` (or a growing back-off without one). 400, 401 and
   413 will be refused again: drop the batch and log it.
 - Stakeout unreachable or the key unset (local development): the product runs as before, the feed is off.
-- The key from a `BACKEND_*` variable (`BACKEND_STAKEOUT_FEED_KEY`), the Stakeout URL beside it; neither in code.
+
+## Settings
+
+The same three variables in every product, under these names, no prefix of the product's own:
+
+| Variable | What |
+|---|---|
+| `ANALYTICS_URL` | Stakeout's origin. Alone it turns on the browser script: the tag and the two CSP entries. |
+| `ANALYTICS_FEED_KEY` | The site's feed key, a secret. Adds the server feed; needs the other two. |
+| `ANALYTICS_SITE` | The domain the key was issued for, the feed's `site`. |
+
+- All three come from `.env`: no value in code, none written into `compose.yaml`, no site derived from another
+  setting. `.env.example` lists them.
+- Compose passes `.env` on only for what `compose.yaml` names: list all three as `${ANALYTICS_URL:-}` and so on. A
+  deployment needs the new `compose.yaml` together with the image.
+- All unset: no tag, the CSP as before, no feed.
