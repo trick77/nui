@@ -299,6 +299,21 @@ describe("dashboard on a domain with a server feed", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
+  it("names the bucket the tiles leave out", async () => {
+    start();
+    const ov = await screen.findByRole("region", { name: "Overview" });
+    expect(
+      await screen.findByText(
+        "Humans and bots together. Tiles: today excluded.",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "24h" }));
+    await within(ov).findByText(`Unique visitors per hour${SEP}all`, asIs);
+    expect(
+      screen.getByText("Humans and bots together. Tiles: this hour excluded."),
+    ).toBeInTheDocument();
+  });
+
   it("draws no comparison with the comparison off", async () => {
     start("/dashboard/?cmp=off");
     const ov = await screen.findByRole("region", { name: "Overview" });
