@@ -21,10 +21,10 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/trick77/nui/backend/internal/apix"
-	"github.com/trick77/nui/backend/internal/classify"
-	"github.com/trick77/nui/backend/internal/insight"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/apix"
+	"github.com/trick77/stakeout/backend/internal/classify"
+	"github.com/trick77/stakeout/backend/internal/insight"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // actors sums every address key over the range, a piece (at most a day) at a time. Visits are distinct sessions

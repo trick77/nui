@@ -56,7 +56,7 @@ func TestTracker(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Built: the script; unbuilt: 404. Never the shell.
-	if w := get(h, "/nui.js"); w.Code != http.StatusOK && w.Code != http.StatusNotFound {
+	if w := get(h, "/stakeout.js"); w.Code != http.StatusOK && w.Code != http.StatusNotFound {
 		t.Fatalf("status=%d", w.Code)
 	}
 	if w := get(h, "/index.html"); w.Code != http.StatusNotFound {
@@ -88,10 +88,10 @@ func TestHandler_ServesTheBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	js := get(tr, "/nui.js").Body.String()
+	js := get(tr, "/stakeout.js").Body.String()
 	if js == "" || strings.Contains(js, "sourceMappingURL") || strings.Contains(js, "/*") ||
 		strings.Count(js, "\n") > 2 {
-		t.Errorf("nui.js is not the minified build (%d bytes, %d lines)", len(js), strings.Count(js, "\n"))
+		t.Errorf("stakeout.js is not the minified build (%d bytes, %d lines)", len(js), strings.Count(js, "\n"))
 	}
 }
 

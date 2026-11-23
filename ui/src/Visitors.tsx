@@ -455,8 +455,8 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
               </>
             ) : (
               <p className="mt-1.5 mb-0 text-[13px] text-muted">
-                No reading for this address yet; the signals above are what nui
-                measured.
+                No reading for this address yet; the signals above are what
+                Stakeout measured.
               </p>
             )}
             <div className="eyebrow mt-4">Activity by hour{SEP}00 to 23</div>

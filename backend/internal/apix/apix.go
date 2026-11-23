@@ -1,5 +1,5 @@
-// Package apix writes nui's JSON answers. Errors are {"detail": "…"} (the API contract), where kit's httpx writes
-// {"error": "…"}; everything else is kit's.
+// Package apix writes Stakeout's JSON answers. Errors are {"detail": "…"} (the API contract), where kit's httpx
+// writes {"error": "…"}; everything else is kit's.
 package apix
 
 import (

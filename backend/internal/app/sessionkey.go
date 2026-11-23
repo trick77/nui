@@ -15,7 +15,7 @@ import (
 	"github.com/trick77/ship/kit/auth"
 )
 
-// SessionSecretFile is the session secret nui keeps in the data directory when BACKEND_SESSION_SECRET is empty:
+// SessionSecretFile is the session secret Stakeout keeps in the data directory when BACKEND_SESSION_SECRET is empty:
 // made once, owner-only, reused across restarts.
 const SessionSecretFile = "session.secret"
 
@@ -33,11 +33,11 @@ func sessionKey(cfg Config) ([]byte, error) {
 		secret = s
 	}
 	m := hmac.New(sha256.New, secret)
-	m.Write([]byte("nui-session\x00" + cfg.AdminToken))
+	m.Write([]byte("stakeout-session\x00" + cfg.AdminToken))
 	return m.Sum(nil), nil
 }
 
-// loadSessionSecret reads dir's session secret, making it on the first start. A directory nui cannot write is a
+// loadSessionSecret reads dir's session secret, making it on the first start. A directory Stakeout cannot write is a
 // start-up error, never a key per start: that would sign everyone out on every restart, silently.
 func loadSessionSecret(dir string) ([]byte, error) {
 	path := filepath.Join(dir, SessionSecretFile)

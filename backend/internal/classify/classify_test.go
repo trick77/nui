@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/refdata"
-	"github.com/trick77/nui/backend/internal/sites"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/refdata"
+	"github.com/trick77/stakeout/backend/internal/sites"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 const crawlers = `{"services":{
@@ -55,7 +55,7 @@ type rig struct {
 
 func newRig(t *testing.T, feed bool) *rig {
 	t.Helper()
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "nui.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +495,7 @@ func TestPass_BrowserEvidence(t *testing.T) {
 	}
 }
 
-// A person whose page reaches the product over one path and whose beacon reaches nui over another (dual stack, a
+// A person whose page reaches the product over one path and whose beacon reaches Stakeout over another (dual stack, a
 // relay) is one by the beacon for the same page with the same user agent within a minute; a beacon too late, or for
 // another page, is no evidence.
 func TestPass_BeaconFromAnotherAddress(t *testing.T) {

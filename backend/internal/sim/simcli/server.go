@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/app"
-	"github.com/trick77/nui/backend/internal/sim"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/app"
+	"github.com/trick77/stakeout/backend/internal/sim"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // Server is server -sim's world: written into a temporary data directory (its sites file, the world's reference
@@ -28,7 +28,7 @@ type Server struct {
 
 // NewServer prepares a simulated server's data directory for the knobs, the world anchored at now.
 func NewServer(k sim.Knobs, now time.Time) (*Server, error) {
-	dir, err := os.MkdirTemp("", "nui-sim-")
+	dir, err := os.MkdirTemp("", "stakeout-sim-")
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func (s *Server) Backfill(ctx context.Context, st *store.Store) error {
 
 // Wrap advances the world live at every request to dash, into the collector's handlers: world time is the anchor
 // when Wrap is called (serving begins, the history written) and runs on from there, whatever wall time the anchor
-// names (NUI_SIM_START in the past or the future).
+// names (STAKEOUT_SIM_START in the past or the future).
 func (s *Server) Wrap(dash http.Handler, h sim.Handlers) http.Handler {
 	s.live = sim.NewLive(s.World, time.Now(), s.Knobs.Speed)
 	next := s.live.Wrap(dash, h, time.Duration(s.Knobs.SlowMS)*time.Millisecond)
@@ -103,7 +103,7 @@ func (s *Server) Wrap(dash http.Handler, h sim.Handlers) http.Handler {
 }
 
 // PIDHeader names the simulated server's process on every dashboard answer.
-const PIDHeader = "X-Nui-Sim-Pid"
+const PIDHeader = "X-Stakeout-Sim-Pid"
 
 // Close removes the data directory.
 func (s *Server) Close() { _ = os.RemoveAll(s.Dir) }

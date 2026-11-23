@@ -121,8 +121,8 @@ func tokenPost(body string) *http.Request {
 }
 
 func TestAuthMethods(t *testing.T) {
-	oidc := map[string]string{"BACKEND_OIDC_ISSUER": "https://auth.example.com", "BACKEND_OIDC_CLIENT_ID": "nui",
-		"BACKEND_OIDC_CLIENT_SECRET": "s", "BACKEND_OIDC_REDIRECT_URL": "https://nui.example.com/api/auth/callback"}
+	oidc := map[string]string{"BACKEND_OIDC_ISSUER": "https://auth.example.com", "BACKEND_OIDC_CLIENT_ID": "stakeout",
+		"BACKEND_OIDC_CLIENT_SECRET": "s", "BACKEND_OIDC_REDIRECT_URL": "https://stakeout.example.com/api/auth/callback"}
 	both := map[string]string{"BACKEND_ADMIN_TOKEN": testToken}
 	for k, v := range oidc {
 		both[k] = v
@@ -148,7 +148,7 @@ func TestAuthMethods(t *testing.T) {
 }
 
 func TestTokenSignIn(t *testing.T) {
-	a := tokenAuth(t, map[string]string{"BACKEND_ADMIN_TOKEN": testToken, "BACKEND_OIDC_ADMIN_GROUP": "nui-admins"})
+	a := tokenAuth(t, map[string]string{"BACKEND_ADMIN_TOKEN": testToken, "BACKEND_OIDC_ADMIN_GROUP": "stakeout-admins"})
 	h := routes(t, a)
 	var logs bytes.Buffer
 	prev := slog.Default()
@@ -273,7 +273,7 @@ func TestSessionSecretFile(t *testing.T) {
 		t.Errorf("a restart made another key: %v", err)
 	}
 	// Neither the token alone nor kit's derivation from it.
-	if bytes.Equal(k1, auth.DeriveKey(testToken, "nui-session")) {
+	if bytes.Equal(k1, auth.DeriveKey(testToken, "stakeout-session")) {
 		t.Error("the key is the token's alone")
 	}
 	// A file others can read is restricted, not refused.

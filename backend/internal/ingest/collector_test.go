@@ -19,8 +19,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/trick77/nui/backend/internal/sites"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/sites"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 const (
@@ -53,7 +53,7 @@ func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)
 // newRig is a collector on a fresh database; the writer runs until the test ends unless queue is 0 (not started).
 func newRig(t *testing.T, queue int, start bool) *rig {
 	t.Helper()
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "nui.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -960,7 +960,7 @@ func TestWriter_BytesBalance(t *testing.T) {
 
 // Shutdown during a write: the write under way completes and the queue is drained; nothing is dropped.
 func TestWriter_ShutdownDuringWrite(t *testing.T) {
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "nui.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

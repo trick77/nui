@@ -1,10 +1,10 @@
-# nui
+# Stakeout
 
 Self-hosted usage analytics that sees all of your incoming traffic, not only the part that runs JavaScript.
 
-The name: *nui* is Hawaiian and Māori for "many", for all the data that comes in.
+The name: a stakeout is a quiet watch on a door, noting everyone who comes and goes, invited or not.
 
-Most analytics tools are a browser script, so they only ever see visitors whose browser runs it. nui also takes a
+Most analytics tools are a browser script, so they only ever see visitors whose browser runs it. Stakeout also takes a
 feed from your backend and puts the two together: the people, and everything else that knocks on your door, from
 crawlers and uptime probes to scanners and scripts walking your API.
 
@@ -16,10 +16,10 @@ crawlers and uptime probes to scanners and scripts walking your API.
   is sampled and nothing leaves your server.
 - **People or bots.** Each visitor is classed as a person, a known bot, an uptime probe or unknown automation, and
   the dashboard shows the reasons. Known bots come from the [ipverse](https://github.com/ipverse) lists.
-- **AI that reads the traffic for you.** With a model key nui writes a short briefing of what changed and says in a
+- **AI that reads the traffic for you.** With a model key Stakeout writes a short briefing of what changed and says in a
   sentence what an address is up to. Every figure is computed without it; the model never produces a number.
 - **Harmless to your site.** The script is under 6 kB gzipped, sends in the background, and caps and backs off on its
-  own. If nui is down, your pages and your backend do not notice.
+  own. If Stakeout is down, your pages and your backend do not notice.
 - **One container.** A single image behind your reverse proxy, with its database inside and sign-in by OIDC or an
   admin token: `docker compose up -d`.
 
@@ -45,7 +45,7 @@ BACKEND_DATA_DIR=./data BACKEND_AUTH_DISABLED=true BACKEND_REFDATA_DISABLED=true
 ```
 
 and open <http://localhost:8080/dashboard/>. `-demo 30` fills an empty database with 30 days of simulated traffic
-on the configured sites and marks the directory as the simulator's (`nui-sim.json`): a later `-demo` start serves
+on the configured sites and marks the directory as the simulator's (`stakeout-sim.json`): a later `-demo` start serves
 it as it is, a database with events the simulator did not write is refused. `-demo` and `-sim` are development
 only: never together, never with `PUBLIC_FQDN` set.
 
@@ -59,19 +59,19 @@ knobs, each falling back to its default with a warning when it does not parse:
 
 | Knob | Default | |
 |---|---|---|
-| `NUI_SIM_SEED` | 1 | the world: the same seed and start give the same world |
-| `NUI_SIM_SCALE` | 1 | volume; 1 is about 25 visitors a day per site, at most 50 |
-| `NUI_SIM_SPEED` | 1 | simulated time per wall time, live, at most 3600; a tick hands out at most an hour of it |
-| `NUI_SIM_DAYS` | 30 | history before the start |
-| `NUI_SIM_START` | now | the start, RFC 3339: the history ends there, and live time runs on from it once the server serves |
-| `NUI_SIM_PORT` | 8080 | the server's loopback port (the UI proxies there) |
-| `NUI_SIM_SCENARIOS` | the default set | comma-separated, `all` for every one (`sim scenarios` below) |
-| `NUI_SIM_CLASSIFY` | true | run the classifier over the history |
-| `NUI_SIM_FEED_OUTAGE` | off | minutes the lookup site's feed is down, from a minute after the start |
-| `NUI_SIM_FLOOD` | off | `addr`, `64` or `48`: a ten-minute flood from one address, a /64 or a /48 |
-| `NUI_SIM_LATE_FEED` | off | minutes after the start until the blog's feed first delivers (0: at the start), or `never` |
-| `NUI_SIM_SLOW_MS` | 0 | every dashboard answer waits this long |
-| `NUI_SIM_EMPTY_SITE` | false | one more site, configured, that never delivers |
+| `STAKEOUT_SIM_SEED` | 1 | the world: the same seed and start give the same world |
+| `STAKEOUT_SIM_SCALE` | 1 | volume; 1 is about 25 visitors a day per site, at most 50 |
+| `STAKEOUT_SIM_SPEED` | 1 | simulated time per wall time, live, at most 3600; a tick hands out at most an hour of it |
+| `STAKEOUT_SIM_DAYS` | 30 | history before the start |
+| `STAKEOUT_SIM_START` | now | the start, RFC 3339: the history ends there, and live time runs on from it once the server serves |
+| `STAKEOUT_SIM_PORT` | 8080 | the server's loopback port (the UI proxies there) |
+| `STAKEOUT_SIM_SCENARIOS` | the default set | comma-separated, `all` for every one (`sim scenarios` below) |
+| `STAKEOUT_SIM_CLASSIFY` | true | run the classifier over the history |
+| `STAKEOUT_SIM_FEED_OUTAGE` | off | minutes the lookup site's feed is down, from a minute after the start |
+| `STAKEOUT_SIM_FLOOD` | off | `addr`, `64` or `48`: a ten-minute flood from one address, a /64 or a /48 |
+| `STAKEOUT_SIM_LATE_FEED` | off | minutes after the start until the blog's feed first delivers (0: at the start), or `never` |
+| `STAKEOUT_SIM_SLOW_MS` | 0 | every dashboard answer waits this long |
+| `STAKEOUT_SIM_EMPTY_SITE` | false | one more site, configured, that never delivers |
 
 The simulator (`backend/internal/sim`) has a command line of its own, `go run ./cmd/server sim <command>` in
 `backend/`, the knobs as above and flags over them (`-h`):
@@ -79,7 +79,7 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
 - `scenarios` lists the scenarios, their windows and what the dashboard shows for each; `check` plays each on its
   own and checks exactly that.
 - `backfill -data ./data [-wipe]` writes a history, `sites.json` and the world's reference data (`ref/`) into an
-  empty or absent data directory, or one it wrote before (marked by `nui-sim.json`; a second history is refused,
+  empty or absent data directory, or one it wrote before (marked by `stakeout-sim.json`; a second history is refused,
   `-wipe` empties the directory first). Anything else is refused untouched, and so is every run with `PUBLIC_FQDN`
   set. Serve it with `server -demo 1` and `BACKEND_REFDATA_DISABLED=true`. About 25,000 events a second.
   The largest run is scale 50: about 110,000 events a simulated day, some 5 s of backfill each, and with the default
@@ -91,7 +91,7 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
   a 5xx after a growing wait. It stops with an error when the server fails everything for 30 s or refuses a site's
   batches for good (401: a wrong `-key`, 403: a site its sites file lacks). `-rate` sets the scale for that many
   events a second, averaged over a simulated week (the day's rhythm and the weekend vary it; at speed 1 at most about
-  1, raise `-speed` for more). Each browser's address goes in `X-Forwarded-For`, which nui reads with one trusted
+  1, raise `-speed` for more). Each browser's address goes in `X-Forwarded-For`, which Stakeout reads with one trusted
   hop: target the server itself, `server -sim` (it sets `BACKEND_TRUSTED_HOPS=1` whatever the environment says) or
   one left at the default; at 0 every visitor is the loopback. Without `-key` the feeds use the simulator's own keys,
   which a `make sim-server` of the same seed has configured.
@@ -101,7 +101,7 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
 Every address is a documentation address (RFC 5737, 2544, 3849). Real reference data knows none of them, so the
 simulator brings its own (made-up networks, their countries, three made-up bots) wherever it backfills; with a real
 bot list loaded, its crawlers and probe take a real service's ranges from it. Its reference data is marked
-(`ref/nui-sim-ref.json`) and only its modes (`-sim`, `-demo`) use it, without rDNS verification of the bots; a
+(`ref/stakeout-sim-ref.json`) and only its modes (`-sim`, `-demo`) use it, without rDNS verification of the bots; a
 normal start discards it and fetches the real data, always verifies, warns loudly in a directory the simulator
 wrote and refuses one with `PUBLIC_FQDN` set. In a Go test, `sim.History(ctx, st, sim.HistoryOptions{...})`
 backfills a seeded history; its world's `Expectations()` are the scenarios' checks, which `simcli.Check` runs
@@ -114,10 +114,10 @@ against the dashboard.
 answers 404 like any unknown path and does not lead there.
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/trick77/nui/master/compose.yaml
-printf 'PUBLIC_FQDN=nui.example.com\nBACKEND_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
+curl -fsSLO https://raw.githubusercontent.com/trick77/stakeout/master/compose.yaml
+printf 'PUBLIC_FQDN=stakeout.example.com\nBACKEND_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
 mkdir -p data
-curl -fsSL -o data/sites.json https://raw.githubusercontent.com/trick77/nui/master/docs/sites.example.json
+curl -fsSL -o data/sites.json https://raw.githubusercontent.com/trick77/stakeout/master/docs/sites.example.json
 # edit .env: your host name; edit data/sites.json: your domains (next section)
 sudo chown -R 65532:65532 data
 docker compose pull && docker compose up -d
@@ -132,30 +132,30 @@ default and what it does; copy a line from there into `.env` only to change it.
 ### Sign-in
 
 The dashboard signs in with OIDC (`BACKEND_OIDC_*`), with an admin token (`BACKEND_ADMIN_TOKEN`, 32 to 2048 bytes,
-`openssl rand -hex 32`), or with either: the sign-in card offers what is configured. With `PUBLIC_FQDN` set nui
+`openssl rand -hex 32`), or with either: the sign-in card offers what is configured. With `PUBLIC_FQDN` set Stakeout
 refuses to start with neither. The token is the way in when the identity provider is down; its session is named
 `admin`. The session cookie is signed with a key derived from a session secret together with the token: changing
-either signs everyone out. The secret is `BACKEND_SESSION_SECRET`, or, left empty, one nui makes at first start and
-keeps in `data/session.secret` (owner-only; a data directory nui cannot write stops the start). Token attempts are
+either signs everyone out. The secret is `BACKEND_SESSION_SECRET`, or, left empty, one Stakeout makes at first start and
+keeps in `data/session.secret` (owner-only; a data directory Stakeout cannot write stops the start). Token attempts are
 spaced a second apart per address or IPv6 /64, half a second per IPv4 /24 or IPv6 /48 and a quarter of a second
 across all callers: at most 4 guesses a second in all. Past a short queue they get a 429 with `Retry-After`.
 
-nui reads the caller's address from `X-Forwarded-For` as many entries from the right as there are proxies in front
+Stakeout reads the caller's address from `X-Forwarded-For` as many entries from the right as there are proxies in front
 of it (`BACKEND_TRUSTED_HOPS`, 1 for the compose file's Traefik). Reached without a proxy (a published port, a local
 run), set it to 0: the caller could otherwise write its own address into the header.
 
 ### Sites
 
-nui only stores events for the sites listed in `data/sites.json` (the container's `/data/sites.json`; shape in
+Stakeout only stores events for the sites listed in `data/sites.json` (the container's `/data/sites.json`; shape in
 [docs/sites.example.json](docs/sites.example.json)): domain, product, path rules that group raw paths into
-templates, and for a server feed the SHA-256 of its key. The file is read at start: restart nui after changing it.
-Without it nui still starts, logs `Sites file missing`, refuses every event (403) and the dashboard lists no domain;
-with it, the start log names the loaded domains (`Sites loaded`).
+templates, and for a server feed the SHA-256 of its key. The file is read at start: restart Stakeout after changing it.
+Without it Stakeout still starts, logs `Sites file missing`, refuses every event (403) and the dashboard lists no
+domain; with it, the start log names the loaded domains (`Sites loaded`).
 
 A site without a server feed leaves `feed_key_sha256` empty. For one with a feed, create a key and its hash with
 
 ```sh
-docker compose run --rm nui -new-feed-key
+docker compose run --rm stakeout -new-feed-key
 ```
 
 The key goes to the product's feed emitter (`Authorization: Bearer <key>` on `POST /api/feed`), the hash into
@@ -166,7 +166,7 @@ The key goes to the product's feed emitter (`Authorization: Bearer <key>` on `PO
 Adding a product, script and feed: [INTEGRATION.md](INTEGRATION.md). On a page, include the script:
 
 ```html
-<script src="https://nui.example.com/nui.js" defer></script>
+<script src="https://stakeout.example.com/stakeout.js" defer></script>
 ```
 
 It posts batches to `POST /api/in` and keeps every batch within the collector's limits on its own; a batch over
@@ -201,7 +201,7 @@ passes while the key has a token left, running it into debt; a key without one i
 (429). One event's content never refuses the batch: strings over their limit are clipped (on a character boundary),
 and an event that is no JSON object, has a field of the wrong type, lacks a parseable `ip` or has an impossible
 `status` (outside 0-999), `dur_ms` or `bytes` (negative) is dropped and counted as rejected in the dashboard's
-footer, the rest is stored. A request with a wrong key names no site nui can trust: it is counted collector-wide,
+footer, the rest is stored. A request with a wrong key names no site Stakeout can trust: it is counted collector-wide,
 with the unknown domains every footer shows.
 
 | Field | Limit (bytes) |

@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/sim"
-	"github.com/trick77/nui/backend/internal/sites"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/sim"
+	"github.com/trick77/stakeout/backend/internal/sites"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // exportRanges limits the export's ranges (tests); nil is every range.
@@ -24,7 +24,7 @@ var exportRanges []string
 // maxRate bounds -rate, events a second: the scale it sets is bounded anyway, this keeps the arithmetic finite.
 const maxRate = 1e6
 
-// FixtureAnchor is where an export's history ends unless NUI_SIM_START says otherwise: the UI fixtures' "now".
+// FixtureAnchor is where an export's history ends unless STAKEOUT_SIM_START says otherwise: the UI fixtures' "now".
 var FixtureAnchor = time.Date(2026, 11, 22, 13, 20, 0, 0, time.UTC)
 
 const usage = `usage: server sim <command> [flags]
@@ -35,9 +35,9 @@ Commands:
   live        send live traffic to a running collector (-target)
   export      write the dashboard's answers over a simulated history as fixture files (-out)
   check       backfill each scenario on its own and check its expectations
-  port        print the port server -sim listens on (NUI_SIM_PORT, its default when it does not parse)
+  port        print the port server -sim listens on (STAKEOUT_SIM_PORT, its default when it does not parse)
 
-The NUI_SIM_* environment knobs (README) set the world; the flags below override them.
+The STAKEOUT_SIM_* environment knobs (README) set the world; the flags below override them.
 `
 
 // Main is server sim: args after "sim", the environment through getenv. It returns the exit code.
@@ -50,16 +50,16 @@ func Main(ctx context.Context, args []string, getenv func(string) string, stdout
 	k := sim.ReadKnobs(getenv, func(s string) { log.Warn(s) })
 	fl := flag.NewFlagSet("sim "+args[0], flag.ContinueOnError)
 	fl.SetOutput(stderr)
-	seed := fl.Uint64("seed", k.Seed, "the world's seed (NUI_SIM_SEED)")
-	scale := fl.Float64("scale", k.Scale, "volume, 1 a small product (NUI_SIM_SCALE)")
-	days := fl.Int("days", k.Days, "days of history (NUI_SIM_DAYS)")
-	scenarios := fl.String("scenarios", k.Scenarios, "comma-separated scenarios, all for every one (NUI_SIM_SCENARIOS)")
-	classify := fl.Bool("classify", k.Classify, "run the classifier over the history (NUI_SIM_CLASSIFY)")
-	data := fl.String("data", "", "backfill: the data directory (nui.db, sites.json, ref/): empty, absent or one the simulator wrote")
+	seed := fl.Uint64("seed", k.Seed, "the world's seed (STAKEOUT_SIM_SEED)")
+	scale := fl.Float64("scale", k.Scale, "volume, 1 a small product (STAKEOUT_SIM_SCALE)")
+	days := fl.Int("days", k.Days, "days of history (STAKEOUT_SIM_DAYS)")
+	scenarios := fl.String("scenarios", k.Scenarios, "comma-separated scenarios, all for every one (STAKEOUT_SIM_SCENARIOS)")
+	classify := fl.Bool("classify", k.Classify, "run the classifier over the history (STAKEOUT_SIM_CLASSIFY)")
+	data := fl.String("data", "", "backfill: the data directory (stakeout.db, sites.json, ref/): empty, absent or one the simulator wrote")
 	wipe := fl.Bool("wipe", false, "backfill: empty a data directory the simulator wrote first, its history written anew")
 	out := fl.String("out", "", "export: the directory to write the answers to")
 	target := fl.String("target", "", "live: the collector's base URL, the server itself with one trusted hop (server -sim)")
-	speed := fl.Float64("speed", k.Speed, "live: world time per wall time (NUI_SIM_SPEED)")
+	speed := fl.Float64("speed", k.Speed, "live: world time per wall time (STAKEOUT_SIM_SPEED)")
 	rate := fl.Float64("rate", 0, "live: events a second to aim for (sets the scale)")
 	dur := fl.Duration("for", 0, "live: how long to run (0: until interrupted)")
 	var keys keyFlag
@@ -86,7 +86,7 @@ func Main(ctx context.Context, args []string, getenv func(string) string, stdout
 	case "scenarios":
 		err = listScenarios(stdout)
 	case "port":
-		// The port server -sim listens on, NUI_SIM_PORT as read (make sim points the UI there).
+		// The port server -sim listens on, STAKEOUT_SIM_PORT as read (make sim points the UI there).
 		_, _ = fmt.Fprintln(stdout, k.Port)
 	case "backfill":
 		err = backfillCmd(ctx, k, *data, *wipe, getenv, log, stdout)
@@ -125,7 +125,7 @@ func (k *keyFlag) Set(v string) error {
 }
 
 func listScenarios(out io.Writer) error {
-	dir, err := os.MkdirTemp("", "nui-sim-ref-")
+	dir, err := os.MkdirTemp("", "stakeout-sim-ref-")
 	if err != nil {
 		return err
 	}
@@ -168,7 +168,7 @@ func backfillCmd(ctx context.Context, k sim.Knobs, dir string, wipe bool, getenv
 	if err := sim.Claim(dir, wipe); err != nil {
 		return err
 	}
-	st, err := store.Open(ctx, filepath.Join(dir, "nui.db"))
+	st, err := store.Open(ctx, filepath.Join(dir, "stakeout.db"))
 	if err != nil {
 		return err
 	}
@@ -222,7 +222,7 @@ func liveCmd(ctx context.Context, k sim.Knobs, target string, rate float64, dur 
 	if target == "" {
 		return errors.New("live needs -target")
 	}
-	dir, err := os.MkdirTemp("", "nui-sim-ref-")
+	dir, err := os.MkdirTemp("", "stakeout-sim-ref-")
 	if err != nil {
 		return err
 	}
@@ -280,7 +280,7 @@ func exportCmd(ctx context.Context, k sim.Knobs, dir string, log *slog.Logger, o
 
 // scratchHistory backfills the knobs' world into a temporary directory.
 func scratchHistory(ctx context.Context, k sim.Knobs, log *slog.Logger) (*store.Store, *sim.World, func(), error) {
-	tmp, err := os.MkdirTemp("", "nui-sim-")
+	tmp, err := os.MkdirTemp("", "stakeout-sim-")
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -297,7 +297,7 @@ func scratchHistory(ctx context.Context, k sim.Knobs, log *slog.Logger) (*store.
 	if err := ref.Stamp(w.Anchor); err != nil {
 		return fail(err)
 	}
-	st, err := store.Open(ctx, filepath.Join(tmp, "nui.db"))
+	st, err := store.Open(ctx, filepath.Join(tmp, "stakeout.db"))
 	if err != nil {
 		return fail(err)
 	}

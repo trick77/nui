@@ -1,4 +1,4 @@
-module github.com/trick77/nui/backend
+module github.com/trick77/stakeout/backend
 
 go 1.27.2
 

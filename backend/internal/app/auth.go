@@ -16,14 +16,14 @@ import (
 	"github.com/trick77/ship/kit/run"
 	"github.com/trick77/ship/kit/secret"
 
-	"github.com/trick77/nui/backend/internal/apix"
+	"github.com/trick77/stakeout/backend/internal/apix"
 )
 
 // SessionCookie is the session cookie's name, prefixed so another app on the same parent domain cannot overwrite it.
-const SessionCookie = "nui_session"
+const SessionCookie = "stakeout_session"
 
 // CookiePrefix names the OIDC flow's transient cookies.
-const CookiePrefix = "nui_"
+const CookiePrefix = "stakeout_"
 
 // AdminName is the identity of a session signed in with the admin token: whoever held it, not a person.
 const AdminName = "admin"

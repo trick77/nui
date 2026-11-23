@@ -38,7 +38,7 @@ function Source({ s, missing }: { s: SourceState | null; missing: string }) {
   );
 }
 
-// How the domain is connected, what nui accepted and refused, what is
+// How the domain is connected, what Stakeout accepted and refused, what is
 // stored, and the rules behind it all.
 export function DomainFooter() {
   const { scope, site } = useDash();
@@ -74,7 +74,7 @@ export function DomainFooter() {
       <SectionHead
         id="domain"
         title="This domain"
-        lead="How it is connected, what nui accepted and refused, and what is stored."
+        lead="How it is connected, what Stakeout accepted and refused, and what is stored."
       />
       <Panel label="This domain" busy={d.loading}>
         {d.error ? (

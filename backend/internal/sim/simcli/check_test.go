@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/sim"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/sim"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 var anchor = time.Date(2026, 11, 22, 13, 30, 0, 0, time.UTC)
@@ -81,7 +81,7 @@ func TestMain(m *testing.M) {
 func (h *sharedHistory) build(seed uint64, scale float64, days int, scenarios string) error {
 	ctx := context.Background()
 	var err error
-	if h.dir, err = os.MkdirTemp("", "nui-simcli-test-"); err != nil {
+	if h.dir, err = os.MkdirTemp("", "stakeout-simcli-test-"); err != nil {
 		return err
 	}
 	ref, err := sim.OpenReference(filepath.Join(h.dir, "ref"))
@@ -103,7 +103,7 @@ func (h *sharedHistory) build(seed uint64, scale float64, days int, scenarios st
 		Ref: ref}); err != nil {
 		return err
 	}
-	if h.st, err = store.Open(ctx, filepath.Join(h.dir, "nui.db")); err != nil {
+	if h.st, err = store.Open(ctx, filepath.Join(h.dir, "stakeout.db")); err != nil {
 		return err
 	}
 	if _, err := h.w.SyncSites(ctx, h.st); err != nil {

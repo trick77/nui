@@ -7,12 +7,12 @@
 # without PUBLIC_FQDN every compose command refuses to run. .env holds only what differs from the defaults (README,
 # "Running it"); .env.example lists every variable, copy a line from it to change one.
 services:
-  nui:
+  stakeout:
     # Every release moves latest: `docker compose pull && docker compose up -d` updates.
-    image: ghcr.io/trick77/nui:latest
+    image: ghcr.io/trick77/stakeout:latest
     restart: unless-stopped
-    # Docker's default 10 s is shorter than nui's shutdown (HTTP drain, the event writer's tail, the counter flush:
-    # at most 30 s, cmd/server shutdownBudget); a kill before it ends loses queued events and counters.
+    # Docker's default 10 s is shorter than Stakeout's shutdown (HTTP drain, the event writer's tail, the counter
+    # flush: at most 30 s, cmd/server shutdownBudget); a kill before it ends loses queued events and counters.
     stop_grace_period: 35s
     # distroless nonroot's own uid, never 1000 (the host's first user). Host ./data must belong to it:
     # sudo chown -R 65532:65532 data
@@ -30,8 +30,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    # ./data holds nui.db, the reference data cache (ref/), sites.json, the sites nui collects for (README), and
-    # session.secret when BACKEND_SESSION_SECRET is empty.
+    # ./data holds stakeout.db, the reference data cache (ref/), sites.json, the sites Stakeout collects for (README),
+    # and session.secret when BACKEND_SESSION_SECRET is empty.
     volumes:
       - ./data:/data
     expose:
@@ -42,16 +42,16 @@ services:
       traefik.enable: "true"
       traefik.docker.network: traefik
       # BACKEND_ADDR's port: change both together.
-      traefik.http.services.nui.loadbalancer.server.port: "8080"
+      traefik.http.services.stakeout.loadbalancer.server.port: "8080"
       # The whole host: the collector under /api, the dashboard under /dashboard. The app mounts both itself, no
       # strip middleware.
-      traefik.http.routers.nui.rule: Host(`${PUBLIC_FQDN:?set PUBLIC_FQDN in .env, the hostname Traefik routes nui on}`)
-      traefik.http.routers.nui.entrypoints: websecure
+      traefik.http.routers.stakeout.rule: Host(`${PUBLIC_FQDN:?set PUBLIC_FQDN in .env, the hostname Traefik routes Stakeout on}`)
+      traefik.http.routers.stakeout.entrypoints: websecure
       # No certresolver: the server's Traefik picks the certificate (a wildcard for its own subdomains) and
       # redirects its `web` entrypoint to `websecure` for every host, so no http router here.
-      traefik.http.routers.nui.tls: "true"
-      traefik.http.routers.nui.middlewares: nui-compress
-      traefik.http.middlewares.nui-compress.compress: "true"
+      traefik.http.routers.stakeout.tls: "true"
+      traefik.http.routers.stakeout.middlewares: stakeout-compress
+      traefik.http.middlewares.stakeout-compress.compress: "true"
       com.centurylinklabs.watchtower.enable: "false"
       diun.enable: "false"
 

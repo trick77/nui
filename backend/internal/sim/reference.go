@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/refdata"
+	"github.com/trick77/stakeout/backend/internal/refdata"
 )
 
 // The world's reference data. Documentation address ranges are announced by nobody, so the real AS and country

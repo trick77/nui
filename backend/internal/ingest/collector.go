@@ -20,9 +20,9 @@ import (
 	"github.com/trick77/ship/kit/httpx"
 	"github.com/trick77/ship/kit/ratelimit"
 
-	"github.com/trick77/nui/backend/internal/apix"
-	"github.com/trick77/nui/backend/internal/sites"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/apix"
+	"github.com/trick77/stakeout/backend/internal/sites"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // Limits of the browser endpoint (contract §1) and the feed (§2).

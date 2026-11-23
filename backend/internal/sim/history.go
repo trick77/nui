@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // HistoryOptions shape History.
@@ -28,12 +28,12 @@ type HistoryOptions struct {
 // History backfills a seeded history into st on the sites configured there (or the default sites, synced, when st
 // has none) and returns its world, whose Expectations say what the dashboard shows for it. For a test:
 //
-//	st, _ := store.Open(ctx, filepath.Join(t.TempDir(), "nui.db"))
+//	st, _ := store.Open(ctx, filepath.Join(t.TempDir(), "stakeout.db"))
 //	w, _, err := sim.History(ctx, st, sim.HistoryOptions{Seed: 7, Anchor: end, Days: 14, Scale: 1,
 //		Scenarios: "api-walker", Classify: true})
 func History(ctx context.Context, st *store.Store, o HistoryOptions) (*World, Stats, error) {
 	if o.RefDir == "" {
-		dir, err := os.MkdirTemp("", "nui-sim-ref-")
+		dir, err := os.MkdirTemp("", "stakeout-sim-ref-")
 		if err != nil {
 			return nil, Stats{}, err
 		}

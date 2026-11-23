@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import source from "./nui.ts?raw";
-import { LIMITS, cleanProps, clip, start, utf8Len, type Tracker } from "./nui";
+import source from "./stakeout.ts?raw";
+import {
+  LIMITS,
+  cleanProps,
+  clip,
+  start,
+  utf8Len,
+  type Tracker,
+} from "./stakeout";
 
 type Body = {
   v: number;
@@ -16,7 +23,7 @@ type Body = {
   }[];
 };
 
-const SRC = "https://collector.example.com/nui.js";
+const SRC = "https://collector.example.com/stakeout.js";
 const win = window as Window & typeof globalThis;
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -39,7 +46,7 @@ function boot(): Tracker {
 beforeEach(() => {
   vi.useFakeTimers({ now: new Date("2026-11-22T12:00:00Z") });
   localStorage.clear();
-  delete (win as { nui?: unknown }).nui;
+  delete (win as { stakeout?: unknown }).stakeout;
   fetchMock = vi.fn(() => reply(204));
   vi.stubGlobal("fetch", fetchMock);
   history.replaceState(null, "", "/");
@@ -195,10 +202,13 @@ describe("automation probes", () => {
   });
 
   it("sends a kept renderer, and ignores what the page wrote there", async () => {
-    localStorage.setItem("nui.gl", JSON.stringify(["Apple Inc.", "Apple GPU"]));
+    localStorage.setItem(
+      "stakeout.gl",
+      JSON.stringify(["Apple Inc.", "Apple GPU"]),
+    );
     expect((await ctxOf(boot())).gl).toEqual(["Apple Inc.", "Apple GPU"]);
     tracker!.stop();
-    localStorage.setItem("nui.gl", '{"x":1}');
+    localStorage.setItem("stakeout.gl", '{"x":1}');
     expect((await ctxOf(boot())).gl).toBeUndefined();
   });
 
@@ -240,7 +250,7 @@ describe("automation probes", () => {
       "ANGLE (SwiftShader)",
     ]);
     expect(loseContext).toHaveBeenCalledTimes(1);
-    expect(localStorage.getItem("nui.gl")).toContain("SwiftShader");
+    expect(localStorage.getItem("stakeout.gl")).toContain("SwiftShader");
   });
 
   it("asks no more where asking threw, and not at all without idle callbacks", async () => {
@@ -256,7 +266,7 @@ describe("automation probes", () => {
     const idle = stubIdle();
     boot();
     idle.run(49);
-    expect(localStorage.getItem("nui.gl")).toBe("-");
+    expect(localStorage.getItem("stakeout.gl")).toBe("-");
     tracker!.stop();
     boot();
     expect(idle.queued()).toBe(0);
@@ -449,7 +459,7 @@ describe("sending", () => {
     });
 
     it("sends the document's referrer with its first session only", async () => {
-      const from = "https://search.example.org/?q=nui";
+      const from = "https://search.example.org/?q=stakeout";
       Object.defineProperty(document, "referrer", {
         configurable: true,
         value: from,
@@ -519,8 +529,8 @@ describe("sending", () => {
     t.event("before");
     // Another tab of the browser idled out first and started a new one.
     const other = "ab".repeat(16);
-    localStorage.setItem("nui.sid", other);
-    localStorage.setItem("nui.seen", String(Date.now()));
+    localStorage.setItem("stakeout.sid", other);
+    localStorage.setItem("stakeout.seen", String(Date.now()));
     t.event("after");
     expect(t.state().sid).toBe(other);
     t.flush(true);
@@ -949,7 +959,7 @@ describe("sending", () => {
 
   it("finds its own script tag when currentScript is gone", () => {
     const s = document.createElement("script");
-    s.setAttribute("src", "https://other.example.org/nui.js");
+    s.setAttribute("src", "https://other.example.org/stakeout.js");
     document.head.appendChild(s);
     tracker = start(win, null);
     expect(tracker).not.toBeNull();
@@ -1489,7 +1499,7 @@ describe("capture", () => {
       value: true,
       configurable: true,
     });
-    (win as { nui?: unknown }).nui = { q: [["early", {}]] };
+    (win as { stakeout?: unknown }).stakeout = { q: [["early", {}]] };
     try {
       const t = boot();
       emit("paint", [{ name: "first-contentful-paint", startTime: 300 }]);
@@ -1525,18 +1535,18 @@ describe("capture", () => {
   });
 
   it("takes custom events, including those queued before it loaded", async () => {
-    (win as { nui?: unknown }).nui = {
+    (win as { stakeout?: unknown }).stakeout = {
       q: [["copy_prefix_list", { asn: 15169 }]],
     };
     const t = boot();
     const g = (
       win as unknown as {
-        nui: {
+        stakeout: {
           event: (n: string, p?: unknown) => void;
           q: { push: (a: unknown) => void };
         };
       }
-    ).nui;
+    ).stakeout;
     g.event("signup", { plan: "free" });
     g.q.push(["late", {}]);
     g.event("", {});
@@ -1787,8 +1797,8 @@ describe("collector limits", () => {
   });
 
   it("keeps every property it sends within the collector's limits", async () => {
-    localStorage.setItem("nui.vid", "v".repeat(2000));
-    localStorage.setItem("nui.sid", "s".repeat(2000));
+    localStorage.setItem("stakeout.vid", "v".repeat(2000));
+    localStorage.setItem("stakeout.sid", "s".repeat(2000));
     const long = "é".repeat(3000);
     Object.defineProperty(navigator, "userAgentData", {
       configurable: true,

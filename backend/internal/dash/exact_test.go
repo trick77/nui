@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/insight"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/insight"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // exactRig is an empty rig plus a way to write hand-made events for the feed site.

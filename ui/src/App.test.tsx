@@ -91,7 +91,7 @@ describe("sign-in", () => {
     // The icon's chip beside the wordmark.
     expect(
       screen
-        .getByRole("heading", { name: "nui" })
+        .getByRole("heading", { name: "Stakeout" })
         .querySelector('img[src="/dashboard/icon.svg"]'),
     ).not.toBeNull();
   });
@@ -343,7 +343,7 @@ describe("dashboard on a domain with a server feed", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Bots" }));
     expect(window.location.search).toContain("aud=bots");
-    expect(localStorage.getItem("nui.aud")).toBe("bots");
+    expect(localStorage.getItem("stakeout.aud")).toBe("bots");
     expect(
       await screen.findByText(`Addresses per day${SEP}bots`, asIs),
     ).toBeInTheDocument();

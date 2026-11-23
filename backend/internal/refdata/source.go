@@ -250,7 +250,7 @@ func (d *Data) download(ctx context.Context, url, file string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "nui-refdata")
+	req.Header.Set("User-Agent", "stakeout-refdata")
 	resp, err := d.o.Client.Do(req)
 	if err != nil {
 		return "", err

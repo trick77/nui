@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/insight"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/insight"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 // Briefing answers from the cache, and only with a briefing written for the input's set of fact ids: the ids carry

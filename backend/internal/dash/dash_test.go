@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/nui/backend/internal/apix"
-	"github.com/trick77/nui/backend/internal/ingest"
-	"github.com/trick77/nui/backend/internal/insight"
-	"github.com/trick77/nui/backend/internal/sim"
-	"github.com/trick77/nui/backend/internal/sites"
-	"github.com/trick77/nui/backend/internal/store"
+	"github.com/trick77/stakeout/backend/internal/apix"
+	"github.com/trick77/stakeout/backend/internal/ingest"
+	"github.com/trick77/stakeout/backend/internal/insight"
+	"github.com/trick77/stakeout/backend/internal/sim"
+	"github.com/trick77/stakeout/backend/internal/sites"
+	"github.com/trick77/stakeout/backend/internal/store"
 )
 
 const (
@@ -78,7 +78,7 @@ type rig struct {
 
 func newRig(t *testing.T, days, people int, model insight.Model) *rig {
 	t.Helper()
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "nui.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

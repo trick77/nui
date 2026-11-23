@@ -28,7 +28,7 @@ export type View = {
   log: LogFilter;
 };
 
-const AUD_KEY = "nui.aud";
+const AUD_KEY = "stakeout.aud";
 
 export function storedAudience(): Audience {
   try {

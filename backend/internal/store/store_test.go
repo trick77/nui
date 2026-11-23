@@ -16,7 +16,7 @@ import (
 // Open opens a fresh database in t's temp dir.
 func open(t *testing.T) *Store {
 	t.Helper()
-	st, err := Open(t.Context(), filepath.Join(t.TempDir(), "nui.db"))
+	st, err := Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
