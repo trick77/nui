@@ -12,6 +12,7 @@ import {
   SectionHead,
   Skeleton,
   useDash,
+  VitalHint,
 } from "./ui";
 
 const CLASS_OPTS: [string, string][] = [
@@ -268,6 +269,7 @@ export function LogPage({
                     </td>
                     <td className="min-w-[200px] font-mono text-[12.5px] wrap-anywhere">
                       {r.what}
+                      <VitalHint kind={r.kind} what={r.what} />
                     </td>
                     <td className="text-[12px] whitespace-nowrap text-muted">
                       {r.client}

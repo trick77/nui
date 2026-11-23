@@ -1,10 +1,12 @@
 // The page's primitives, in the family's look: tokens only.
 
 import {
+  type CSSProperties,
   type ReactNode,
   createContext,
   useCallback,
   useContext,
+  useId,
   useState,
 } from "react";
 import type {
@@ -16,7 +18,7 @@ import type {
   SiteInfo,
   Verdict,
 } from "./api";
-import { changeText } from "./format";
+import { SEP, changeText } from "./format";
 
 // What every section needs: the query scope, the site and what it has,
 // and the page-wide jumps (into the log, to a panel).
@@ -366,5 +368,77 @@ export function Tip({ tip }: { tip: TipData | null }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// The web vitals the tracker sends: name, what it measures, Google's
+// good and poor thresholds.
+const VITALS: Record<string, [string, string, string]> = {
+  LCP: [
+    "Largest Contentful Paint",
+    "Time until the page's largest image or text block shows.",
+    "Good up to 2.5 s, poor over 4 s.",
+  ],
+  CLS: [
+    "Cumulative Layout Shift",
+    "How much visible content jumped around during the whole visit, shifts right after a click or key press left out. No unit.",
+    "Google: good up to 0.1, poor over 0.25, for the worst burst of shifts only; a long visit sums up to more.",
+  ],
+  INP: [
+    "Interaction to Next Paint",
+    "The slowest delay from a click, tap or key press to the next screen update.",
+    "Good up to 200 ms, poor over 500 ms.",
+  ],
+  FCP: [
+    "First Contentful Paint",
+    "Time until the first text or image shows.",
+    "Good up to 1.8 s, poor over 3 s.",
+  ],
+  TTFB: [
+    "Time to First Byte",
+    "Time until the server's first byte arrived.",
+    "Good up to 0.8 s, poor over 1.8 s.",
+  ],
+};
+
+// An (i) after an event line that names a web vital: a click opens what
+// the abbreviation means. A popover, so touch works and Esc or a click
+// elsewhere closes it.
+export function VitalHint({ kind, what }: { kind: string; what: string }) {
+  const id = useId();
+  if (kind !== "vital") return null;
+  const name = what.replace(/^vital /, "");
+  // The name is the sender's: an inherited key (constructor) is no vital.
+  if (!Object.hasOwn(VITALS, name)) return null;
+  const v = VITALS[name];
+  const pop = `vital${id.replace(/[^\w-]/g, "")}`;
+  const anchor = `--${pop}`;
+  return (
+    <>
+      <button
+        type="button"
+        className="vital-hint"
+        popoverTarget={pop}
+        aria-label={`What is ${name}?`}
+        style={{ anchorName: anchor } as CSSProperties}
+      >
+        i
+      </button>
+      {/* Spans only: it sits inside a trail line's span. */}
+      <span
+        id={pop}
+        popover="auto"
+        className="tip vital-pop"
+        style={{ positionAnchor: anchor } as CSSProperties}
+      >
+        <span className="vital-pop-title">
+          {name}
+          {SEP}
+          {v[0]}
+        </span>
+        <span>{v[1]}</span>
+        <span>{v[2]}</span>
+      </span>
+    </>
   );
 }

@@ -805,6 +805,53 @@ table.t th button {
   font-weight: 400;
 }
 
+/* The (i) after a web vital and its popover, placed under the (i) and
+   flipped when that runs off screen. */
+.vital-hint {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  vertical-align: 1px;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background: none;
+  color: var(--color-muted);
+  font: italic 600 10px/1 var(--font-sans);
+  cursor: pointer;
+}
+.vital-hint:hover,
+.vital-hint:focus-visible {
+  color: var(--color-ink);
+  border-color: var(--color-ink-dim);
+}
+.tip.vital-pop {
+  position: fixed;
+  inset: auto;
+  top: anchor(bottom);
+  left: anchor(left);
+  margin: 6px 0 0;
+  position-try-fallbacks: flip-block, flip-inline;
+  pointer-events: auto;
+  max-width: min(320px, calc(100vw - 32px));
+  color: var(--color-muted);
+  font-family: var(--font-sans);
+  white-space: normal;
+  overflow-wrap: normal;
+}
+.tip.vital-pop > span {
+  display: block;
+  margin: 0 0 4px;
+}
+.tip.vital-pop > span:last-child {
+  margin: 0;
+}
+.tip.vital-pop > .vital-pop-title {
+  font: 500 12.5px var(--font-sans);
+  color: var(--color-elevated-ink);
+}
+
 /* In the components layer, so a utility on a link (font-mono) wins. */
 @layer components {
   .link {
