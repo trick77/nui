@@ -435,6 +435,53 @@ func TestSources_Sessions(t *testing.T) {
 	}
 }
 
+// A span starting off a UTC midnight (7d in Zurich starts 23:00 UTC) reads its first whole day raw under every
+// source: a session carried into that day from before the span is one visit, not none. 24h never holds a whole
+// UTC day, so its visitors are raw under every source.
+func TestSources_HeadCut(t *testing.T) {
+	t.Parallel()
+	r, insert := exactRig(t)
+	view := func(ts int64, sid string) store.Event {
+		return store.Event{TS: ts, Source: "browser", Kind: "page_view", Visitor: "v1", SID: sid, IP: "192.0.2.41",
+			IPKey: "192.0.2.41", Template: "/", Cls: store.ClsHuman}
+	}
+	insert(view(at("2026-11-15T22:30:00Z"), "s1"), view(at("2026-11-16T00:10:00Z"), "s1"),
+		view(at("2026-11-17T10:00:00Z"), "s2"), view(at("2026-11-22T12:00:00Z"), "s3"))
+	r.build(t)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	for _, tc := range []struct {
+		rng, tz string
+		visits  float64
+	}{{"7d", "Europe/Zurich", 3}, {"7d", "UTC", 3}, {"24h", "UTC", 1}, {"24h", "Europe/Zurich", 1}} {
+		for _, src := range []Source{SourceRaw, SourceAgg} {
+			var table, detail float64
+			n := countPieces(r, func(r *rig) {
+				_, v := r.getFrom(t, src, "visitors", p(feedSite, "range", tc.rng, "tz", tc.tz))
+				for _, row := range listRows(v) {
+					if row["key"] == "192.0.2.41" {
+						table = num64(row["visits"])
+					}
+				}
+				// The detail's sums (its answer shows no visits).
+				loc, _ := time.LoadLocation(tc.tz)
+				q := &query{site: site, aud: "all", p: newPeriod(tc.rng, "off", r.s.now(), loc)}
+				if a, err := r.server(src).actorOne(t.Context(), q, "192.0.2.41"); err != nil || a == nil {
+					t.Errorf("%s %s %v: detail %v, %v", tc.rng, tc.tz, src, a, err)
+				} else {
+					detail = float64(a.visits)
+				}
+			})
+			if table != tc.visits || detail != tc.visits {
+				t.Errorf("%s %s %v: %v visits in the table, %v in the detail, want %v", tc.rng, tc.tz, src, table,
+					detail, tc.visits)
+			}
+			if src == SourceAgg && (n.raw != 0 || (tc.rng == "24h") != (n.agg == 0)) {
+				t.Errorf("%s %s: pieces %+v", tc.rng, tc.tz, n)
+			}
+		}
+	}
+}
+
 // Where raw is gone (retention cut it), the sums still come from the aggregates, while the trail, the log and a
 // reading reach back to detail_since only; the footer says since when figures go back.
 func TestSources_RawSpan(t *testing.T) {
@@ -736,5 +783,270 @@ func TestUniq(t *testing.T) {
 	}
 	if err := w.addSketch([]byte{9}); err == nil {
 		t.Error("a bad sketch merged")
+	}
+}
+
+// buildK rebuilds every day of the rig at k entries a list part.
+func (r *rig) buildK(t *testing.T, k int) {
+	t.Helper()
+	if _, err := agg.BuildThrough(t.Context(), r.s.DB, r.end, k); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// otherOf is a list answer's Other.
+func otherOf(body map[string]any) (count, value float64) {
+	o := body["other"].(map[string]any)
+	return num64(o["count"]), num64(o["value"])
+}
+
+// Other rows at one entry a day: the bots audience counts an Other's addresses, not its browser ids; a sub= filter
+// keeps its own Other; a key that may sit in a closed day's Other has no change; past the listing bound Other's
+// count is a lower bound that never counts a shown key.
+func TestSources_OtherRows(t *testing.T) {
+	r, insert := exactRig(t)
+	view := func(ts int64, tmpl, vid, ip string, cls int) store.Event {
+		return store.Event{TS: ts, Source: "browser", Kind: "page_view", Visitor: vid, SID: vid + "-s", IP: ip,
+			IPKey: ip, Path: tmpl, Template: tmpl, Cls: cls}
+	}
+	act := func(ts int64, kind, name, vid string) store.Event {
+		return store.Event{TS: ts, Source: "browser", Kind: kind, Name: name, Visitor: vid, SID: vid + "-s",
+			IP: "192.0.2.70", IPKey: "192.0.2.70", Cls: store.ClsHuman}
+	}
+	nov := func(day, i int) int64 { return at(fmt.Sprintf("2026-11-%02dT10:00:00Z", day)) + int64(i)*1000 }
+	var evs []store.Event
+	// Bots on the 10th: /a by one address under five ids, /b by three addresses under one id (both kept), /c by one
+	// address under four ids, collapsed.
+	for i := range 5 {
+		evs = append(evs, view(nov(10, i), "/a", fmt.Sprint("a", i), "198.51.100.1", store.ClsBot))
+	}
+	for i := range 3 {
+		evs = append(evs, view(nov(10, 10+i), "/b", "w", fmt.Sprint("198.51.100.", 2+i), store.ClsBot))
+	}
+	for i := range 4 {
+		evs = append(evs, view(nov(10, 20+i), "/c", fmt.Sprint("c", i), "198.51.100.5", store.ClsBot))
+	}
+	// Events on the 11th: signup kept, share (custom) and two automatic kinds collapsed.
+	for i := range 3 {
+		evs = append(evs, act(nov(11, i), "custom", "signup", fmt.Sprint("p", i)))
+	}
+	evs = append(evs, act(nov(11, 5), "custom", "share", "p9"), act(nov(11, 6), "rage_click", "", "p1"),
+		act(nov(11, 7), "rage_click", "", "p2"), act(nov(11, 8), "download", "", "p3"))
+	// People: /y collapsed on the 12th (/x kept), kept on the 13th, seen before in the prior period.
+	for i := range 3 {
+		evs = append(evs, view(nov(12, i), "/x", fmt.Sprint("x", i), fmt.Sprint("192.0.2.", 10+i), store.ClsHuman))
+	}
+	evs = append(evs, view(nov(12, 9), "/y", "y0", "192.0.2.20", store.ClsHuman))
+	for i := range 5 {
+		evs = append(evs, view(nov(13, i), "/y", fmt.Sprint("y", 1+i), fmt.Sprint("192.0.2.", 21+i), store.ClsHuman))
+	}
+	for i := range 2 {
+		evs = append(evs, view(at("2026-10-01T10:00:00Z")+int64(i), "/y", fmt.Sprint("o", i),
+			fmt.Sprint("192.0.2.", 30+i), store.ClsHuman))
+	}
+	// The 14th: /top kept, five keys collapsed.
+	for i := range 3 {
+		evs = append(evs, view(nov(14, i), "/top", fmt.Sprint("t", i), fmt.Sprint("192.0.2.", 40+i), store.ClsHuman))
+	}
+	for i := range 5 {
+		evs = append(evs, view(nov(14, 10+i), fmt.Sprint("/k", i), fmt.Sprint("k", i), "192.0.2.50", store.ClsHuman))
+	}
+	insert(evs...)
+	r.buildK(t, 1)
+	ask := func(src Source, kv ...string) map[string]any {
+		t.Helper()
+		code, body := r.getFrom(t, src, "list", p(feedSite, append([]string{"range", "30d", "tz", "UTC",
+			"limit", "500"}, kv...)...))
+		if code != 200 {
+			t.Fatalf("%v: %d %v", kv, code, body)
+		}
+		return body
+	}
+	total := func(body map[string]any) float64 {
+		_, v := otherOf(body)
+		for _, row := range listRows(body) {
+			v += num64(row["value"])
+		}
+		return v
+	}
+
+	// The bots audience: /c's one address, not its four ids.
+	if c, v := otherOf(ask(SourceAgg, "dim", "pages", "aud", "bots")); c != 1 || v != 1 {
+		t.Errorf("bots' Other: %v keys, %v addresses, want 1 and 1", c, v)
+	}
+	// sub=: each keeps its own Other, the totals are raw's.
+	for sub, want := range map[string]float64{"custom": 1, "auto": 2} {
+		got, raw := ask(SourceAgg, "dim", "events", "sub", sub), ask(SourceRaw, "dim", "events", "sub", sub)
+		if c, _ := otherOf(got); c != want || total(got) != total(raw) {
+			t.Errorf("sub=%s: Other %v keys, total %v, raw %v", sub, c, total(got), total(raw))
+		}
+	}
+	// A search: a row's share is of the whole list, the Other rows' value included, as raw has it (signup's 3 of 7).
+	got, raw := ask(SourceAgg, "dim", "events", "q", "sign"), ask(SourceRaw, "dim", "events", "q", "sign")
+	agree(t, "events q=sign", raw, got, nil)
+	if rows := listRows(got); len(rows) != 1 || num64(rows[0]["share"]) != 43 {
+		t.Errorf("events q=sign: rows %v, want signup at 43 %%", rows)
+	}
+	// /y sits in the 12th's Other: its change is not known.
+	for _, row := range listRows(ask(SourceAgg, "dim", "pages", "aud", "humans")) {
+		if row["key"] == "/y" && row["change"] != nil {
+			t.Errorf("/y, collapsed on a closed day: change %v", row["change"])
+		}
+	}
+	// Past the listing bound (keys NULL): the 14th held five keys, three rows are shown, so at least two are hidden;
+	// /y, shown, is not counted although the 12th's Other held it.
+	if _, err := r.s.DB.DB.Exec(`UPDATE agg_list SET keys = NULL WHERE dim = 'pages' AND other = 1 AND part = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := otherOf(ask(SourceAgg, "dim", "pages", "aud", "humans")); c != 2 {
+		t.Errorf("unlisted Other: %v keys, want the lower bound 2", c)
+	}
+}
+
+// A template's paths are raw: with raw cut inside the comparison (7d), no path has a change (never "new"); a
+// comparison before the first event (30d) never held any. A path's entry share is of the visits raw still holds.
+func TestSources_WithinCut(t *testing.T) {
+	t.Parallel()
+	r := copyRig(t, nil)
+	cut := r.end.AddDate(0, 0, -10)
+	if _, err := r.s.DB.PruneAge(t.Context(), cut); err != nil {
+		t.Fatal(err)
+	}
+	site, _ := r.s.Sites.Lookup(feedSite)
+	_, pages := r.get(t, "list", p(feedSite, "range", "30d", "tz", "UTC", "dim", "entry"))
+	tmpl := listRows(pages)[0]["key"].(string)
+	for _, rng := range []string{"7d", "30d"} {
+		_, in := r.get(t, "list", p(feedSite, "range", rng, "tz", "UTC", "dim", "entry", "within", tmpl,
+			"limit", "500"))
+		rows := listRows(in)
+		if len(rows) == 0 {
+			t.Fatalf("%s: no paths in %s", rng, tmpl)
+		}
+		news := 0
+		for _, row := range rows {
+			if changeOf(row["change"]) == `{"new":true}` {
+				news++
+			}
+			if rng == "7d" && row["change"] != nil {
+				t.Errorf("%s %s: change %v with the comparison's raw cut", rng, row["key"], row["change"])
+			}
+		}
+		if rng == "7d" {
+			continue
+		}
+		if news == 0 {
+			t.Errorf("30d: no path new against a comparison before the first event")
+		}
+		var all, path float64
+		from, to := cut.Truncate(24*time.Hour).UnixMilli(), r.end.Truncate(24*time.Hour).AddDate(0, 0, 1).UnixMilli()
+		if err := r.s.DB.DB.QueryRow(`SELECT COUNT(*), SUM(template = ? AND path = ?) FROM event WHERE site_id = ?
+			AND ts >= ? AND ts < ? AND kind = 'session_start'`, tmpl, rows[0]["key"], site.ID, from, to).
+			Scan(&all, &path); err != nil {
+			t.Fatal(err)
+		}
+		if want := math.Round(path/all*1000) / 10; num64(rows[0]["entry"]) != want {
+			t.Errorf("entry share of %s: %v, raw %v", rows[0]["key"], rows[0]["entry"], want)
+		}
+	}
+}
+
+// A session crossing midnight from an aggregate day whose raw is gone into a day read raw (7d reads raw where it is
+// whole) is one visit: the raw day's stored rows say which of its sessions the day before had, in every audience.
+func TestSources_StitchRawGone(t *testing.T) {
+	r, insert := exactRig(t)
+	ev := func(ts int64, sid string) store.Event {
+		return store.Event{TS: ts, Source: "browser", Kind: "page_view", Visitor: "v1", SID: sid, IP: "192.0.2.62",
+			IPKey: "192.0.2.62", Template: "/", Cls: store.ClsHuman}
+	}
+	insert(ev(at("2026-11-17T23:50:00Z"), "s1"), ev(at("2026-11-18T00:10:00Z"), "s1"),
+		ev(at("2026-11-18T10:00:00Z"), "s2"))
+	r.build(t)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	// The 17th's raw cut as retention cuts it: deleted, the day marked without raw, its rows kept.
+	for _, q := range []string{`DELETE FROM event WHERE ts < ` + fmt.Sprint(at("2026-11-18T00:00:00Z")),
+		`UPDATE agg_day SET raw = 0 WHERE day = ` + fmt.Sprint(at("2026-11-17T00:00:00Z")/dayMS)} {
+		if _, err := r.s.DB.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, aud := range []string{"all", "humans"} {
+		var table float64 = -1
+		n := countPieces(r, func(r *rig) {
+			_, v := r.getFrom(t, SourceAuto, "visitors", p(feedSite, "range", "7d", "tz", "UTC", "aud", aud))
+			for _, row := range listRows(v) {
+				if row["key"] == "192.0.2.62" {
+					table = num64(row["visits"])
+				}
+			}
+		})
+		q := &query{site: site, aud: aud, p: newPeriod("7d", "off", r.s.now(), time.UTC)}
+		a, err := r.server(SourceAuto).actorOne(t.Context(), q, "192.0.2.62")
+		if err != nil || a == nil || table != 2 || a.visits != 2 || n.agg == 0 || n.raw == 0 {
+			t.Errorf("%s: %v visits in the table, detail %+v %v, pieces %+v; want 2", aud, table, a, err, n)
+		}
+	}
+}
+
+// A session carried into an aggregate day from a day read from nowhere (its raw cut, never built) is a visit: the
+// table and the detail stitch only onto a day they counted.
+func TestSources_StitchAfterGap(t *testing.T) {
+	r, insert := exactRig(t)
+	ev := func(ts int64) store.Event {
+		return store.Event{TS: ts, Source: "browser", Kind: "page_view", Visitor: "v1", SID: "s1", IP: "192.0.2.60",
+			IPKey: "192.0.2.60", Template: "/", Cls: store.ClsHuman}
+	}
+	insert(ev(at("2026-11-10T23:50:00Z")), ev(at("2026-11-11T00:10:00Z")))
+	r.build(t)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	for _, q := range []string{`DELETE FROM event WHERE ts < ` + fmt.Sprint(at("2026-11-11T00:00:00Z")),
+		`UPDATE agg_day SET raw = 0, frozen = 0 WHERE day = ` + fmt.Sprint(at("2026-11-10T00:00:00Z")/dayMS)} {
+		if _, err := r.s.DB.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, src := range []Source{SourceAgg, SourceAuto} {
+		_, v := r.getFrom(t, src, "visitors", p(feedSite, "range", "30d", "tz", "UTC"))
+		var table float64 = -1
+		for _, row := range listRows(v) {
+			if row["key"] == "192.0.2.60" {
+				table = num64(row["visits"])
+			}
+		}
+		q := &query{site: site, aud: "all", p: newPeriod("30d", "off", r.s.now(), time.UTC)}
+		a, err := r.server(src).actorOne(t.Context(), q, "192.0.2.60")
+		if err != nil || a == nil || table != 1 || a.visits != 1 {
+			t.Errorf("%v: %v visits in the table, detail %+v %v; want 1", src, table, a, err)
+		}
+	}
+}
+
+// A network that may sit in a prior day's Other is no spike: what it had then is not known.
+func TestSources_NetSpikePriorOther(t *testing.T) {
+	r, insert := exactRig(t)
+	req := func(ts int64, ip string, asn int64) store.Event {
+		return store.Event{TS: ts, Source: "server", Kind: "request", IP: ip, IPKey: ip, Template: "GET /",
+			Method: "GET", Status: 200, ASN: asn, Cls: store.ClsBot}
+	}
+	var evs []store.Event
+	// The prior period: AS64600 100 requests, AS64601 150 from two addresses (kept at one entry a day).
+	for i := range 100 {
+		evs = append(evs, req(at("2026-10-10T10:00:00Z")+int64(i)*1000, "198.51.100.80", 64600))
+	}
+	for i := range 150 {
+		evs = append(evs, req(at("2026-10-10T11:00:00Z")+int64(i)*1000, fmt.Sprint("198.51.100.", 81+i%2), 64601))
+	}
+	// Now AS64600 sends 250: raw compares them with its 100 (no threefold growth).
+	for i := range 250 {
+		evs = append(evs, req(at("2026-11-15T10:00:00Z")+int64(i)*1000, "198.51.100.80", 64600))
+	}
+	insert(evs...)
+	r.buildK(t, 1)
+	for _, src := range []Source{SourceRaw, SourceAgg} {
+		_, body := r.getFrom(t, src, "noteworthy", p(feedSite, "range", "30d", "tz", "UTC", "findings", "all"))
+		for _, x := range body["items"].([]any) {
+			if id := x.(map[string]any)["id"].(string); strings.HasPrefix(id, "spike:net:") {
+				t.Errorf("%v: %s", src, id)
+			}
+		}
 	}
 }
