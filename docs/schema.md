@@ -78,6 +78,7 @@ Checks:
 
 Go types:
 
+- `dash.dayState` (internal/dash): dayState is one agg_day row as the dashboard needs it.
 - `store.AggDay` (internal/store): AggDay is one site-day's aggregate build state: the dashboard reads the day's aggregates only while it is frozen and clean, raw otherwise.
 
 | Column | Type | Null | Default | PK |
@@ -318,7 +319,7 @@ In `internal/dash`. bucketStats is one bucket's overview figures, sums over even
 
 | Field | Type | Doc |
 | --- | --- | --- |
-| `visitors` | `map[string]struct{}` | visitor ids (aud bots: address keys) |
+| `visitors` | `uniq` | visitor ids (aud bots: address keys) |
 | `views` | `float64` |  |
 | `events` | `float64` |  |
 | `requests` | `float64` |  |
