@@ -155,14 +155,23 @@ export function DomainFooter() {
                 <Dl
                   rows={[
                     // Every request with its address, user agent and path:
-                    // the log, a visitor's trail and what it does.
+                    // the log, a visitor's trail and what it does. During
+                    // the purge's grace after an upgrade, raw still reaches
+                    // further back: from when the older part goes.
                     [
                       "Raw events",
-                      joinSep([
-                        `${num(x.storage.events)} stored`,
-                        x.storage.oldest && `since ${date(x.storage.oldest)}`,
-                        `kept ${num(x.storage.raw_days)} days`,
-                      ]),
+                      <>
+                        {joinSep([
+                          `${num(x.storage.events)} stored`,
+                          x.storage.oldest && `since ${date(x.storage.oldest)}`,
+                          `kept ${num(x.storage.raw_days)} days`,
+                        ])}
+                        {x.storage.purge_from && (
+                          <div className="text-[12px] text-muted">
+                            {`raw older than ${num(x.storage.raw_days)} days is deleted from ${date(x.storage.purge_from)}`}
+                          </div>
+                        )}
+                      </>,
                     ],
                     // The tiles, lists and sums, from the first event on:
                     // they may reach further back than raw. None without data.

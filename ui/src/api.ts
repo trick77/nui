@@ -276,6 +276,9 @@ export type Domain = {
     events: number;
     oldest: string | null;
     raw_days: number;
+    // During the purge's grace after an upgrade: when raw older than
+    // raw_days starts to go, if the site holds any; null otherwise.
+    purge_from: string | null;
     // The oldest figure, from the aggregates or raw: it may be older than
     // the oldest raw event.
     figures_since: string | null;

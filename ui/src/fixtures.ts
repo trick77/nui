@@ -1199,7 +1199,8 @@ function domain(site: string, feed: boolean, script: boolean): Domain {
     storage: {
       events: feed ? 1284551 : 398211,
       oldest: DETAIL_SINCE,
-      raw_days: 761,
+      raw_days: 90,
+      purge_from: null,
       figures_since: FIGURES_SINCE,
       bytes: feed ? 432013312 : 134217728,
       retention_months: 25,
