@@ -25,15 +25,57 @@ function labelStep(n: number, width: number): number {
 // bucket is left out, it would always read as a drop.
 // The comparison series, or null when there is none: with the comparison
 // off the backend sends an empty one.
-const series = (s: number[] | null | undefined) => (s?.length ? s : null);
+const series = (s: (number | null)[] | null | undefined) =>
+  s?.length ? s : null;
+
+// The area under a series, one for each of its unbroken runs.
+function areaPath(
+  a: (number | null)[],
+  x: (i: number) => number,
+  y: (v: number) => number,
+  base: number,
+): string {
+  let d = "";
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] == null) continue;
+    const from = i;
+    while (i + 1 < a.length && a[i + 1] != null) i++;
+    if (i > from)
+      d += `${brokenPath(a, from, i + 1, x, y)}L${x(i)} ${base}L${x(from)} ${base}Z`;
+  }
+  return d;
+}
+
+// What a series has: it may lack a bucket's figure (null).
+const known = (a: (number | null)[]) => a.filter((v) => v != null);
+
+// A series as a path over its points, broken where a figure is missing; one
+// that stands alone is a dot (its line needs a round cap).
+function brokenPath(
+  a: (number | null)[],
+  from: number,
+  to: number,
+  x: (i: number) => number,
+  y: (v: number) => number,
+): string {
+  let d = "";
+  for (let i = from; i < to; i++) {
+    const v = a[i];
+    if (v == null) continue;
+    const start = i === from || a[i - 1] == null;
+    const alone = start && (i === to - 1 || a[i + 1] == null);
+    d += `${start ? "M" : "L"}${x(i).toFixed(1)} ${y(v).toFixed(1)}${alone ? "h0" : ""}`;
+  }
+  return d;
+}
 
 export function Spark({
   cur,
   prev: prevIn,
   open,
 }: {
-  cur: number[];
-  prev: number[] | null;
+  cur: (number | null)[];
+  prev: (number | null)[] | null;
   open: boolean;
 }) {
   const prev = series(prevIn);
@@ -41,19 +83,20 @@ export function Spark({
   const H = 30;
   const n = cur.length;
   const shown = open ? cur.slice(0, -1) : cur;
-  const all = [...shown, ...(prev ?? [])];
+  const all = known([...shown, ...(prev ?? [])]);
   if (n < 2 || !all.length)
     return <svg width={W} height={H} aria-hidden="true" />;
   const max = Math.max(...all);
   const min = Math.min(...all) * 0.9;
   const span = max - min || 1;
-  const pts = (a: number[]) =>
-    a
-      .map(
-        (v, i) =>
-          `${((i * W) / (n - 1)).toFixed(1)},${(H - 2 - ((H - 4) * (v - min)) / span).toFixed(1)}`,
-      )
-      .join(" ");
+  const pts = (a: (number | null)[]) =>
+    brokenPath(
+      a,
+      0,
+      a.length,
+      (i) => (i * W) / (n - 1),
+      (v) => H - 2 - ((H - 4) * (v - min)) / span,
+    );
   return (
     <svg
       width={W}
@@ -63,18 +106,20 @@ export function Spark({
       className="flex-none"
     >
       {prev && (
-        <polyline
-          points={pts(prev)}
+        <path
+          d={pts(prev)}
           fill="none"
           stroke="var(--color-reference)"
           strokeWidth="1.25"
+          strokeLinecap="round"
         />
       )}
-      <polyline
-        points={pts(shown)}
+      <path
+        d={pts(shown)}
         fill="none"
         stroke="var(--color-s1)"
         strokeWidth="2"
+        strokeLinecap="round"
         strokeLinejoin="round"
       />
     </svg>
@@ -96,16 +141,19 @@ export function MainChart({
   prev: prevIn,
   median,
   kind,
+  unit = "",
   open,
   hourly = false,
   title,
   prevLabel,
 }: {
   labels: string[];
-  cur: number[];
-  prev: number[] | null;
+  cur: (number | null)[];
+  prev: (number | null)[] | null;
   median: number | null;
   kind: "sum" | "rate";
+  // Shown after every figure; a rate has its own.
+  unit?: string;
   open: boolean;
   hourly?: boolean;
   title: string;
@@ -125,28 +173,27 @@ export function MainChart({
       </div>
     );
   const H = 250;
-  const L = 52;
-  const R = 92;
+
   const T = 12;
   const B = 26;
-  const fmt = (v: number) => fmtValue(v, kind);
-  const vals = [...cur, ...(prev ?? []), ...(median != null ? [median] : [])];
+  const fmt = (v: number | null) =>
+    fmtValue(v, kind) + (v != null && kind === "sum" && unit ? ` ${unit}` : "");
+  const vals = known([...cur, ...(prev ?? []), median]);
   const lo =
-    kind === "sum"
+    kind === "sum" || !vals.length
       ? 0
       : Math.max(0, Math.floor((Math.min(...vals) * 0.8) / 10) * 10);
-  const hi = lo + nice((Math.max(...vals) - lo) * 1.05);
+  const hi = lo + nice((Math.max(lo, ...vals) - lo) * 1.05);
+  // The gutters hold the longest label: the top tick, the median's chip
+  // (mono, 6.4 px a character).
+  const medLabel = median != null ? `median ${fmt(median)}` : "";
+  const L = Math.max(52, fmt(hi).length * 6.4 + 14);
+  const R = Math.max(92, medLabel.length * 6.4 + 19);
   const x = (i: number) =>
     n < 2 ? L + (W - L - R) / 2 : L + ((W - L - R) * i) / (n - 1);
   const y = (v: number) => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
-  const path = (a: number[], from: number, to: number) =>
-    a
-      .slice(from, to)
-      .map(
-        (v, i) =>
-          `${i ? "L" : "M"}${x(i + from).toFixed(1)} ${y(v).toFixed(1)}`,
-      )
-      .join("");
+  const path = (a: (number | null)[], from: number, to: number) =>
+    brokenPath(a, from, to, x, y);
   const openLast = open && n >= 2;
   const solidTo = openLast ? n - 1 : n;
   const step = labelStep(n, W - L - R);
@@ -167,7 +214,9 @@ export function MainChart({
     show(e, bucketName(labels[i], hourly, openLast && i === n - 1), rows);
   };
 
-  const medLabel = median != null ? `median ${fmt(median)}` : "";
+  const lastSolid = cur[solidTo - 1];
+  const last = cur[n - 1];
+  const hovered = hover == null ? null : cur[hover];
   return (
     <div ref={ref} className="relative">
       <svg
@@ -241,7 +290,7 @@ export function MainChart({
         {n >= 2 && (
           <path
             className="chart-fill"
-            d={`${path(cur, 0, n)}L${x(n - 1)} ${H - B}L${x(0)} ${H - B}Z`}
+            d={areaPath(cur, x, y, H - B)}
             fill={`url(#ag${id})`}
           />
         )}
@@ -253,6 +302,7 @@ export function MainChart({
             fill="none"
             stroke="var(--color-reference)"
             strokeWidth="1.5"
+            strokeLinecap="round"
             strokeLinejoin="round"
           />
         )}
@@ -293,6 +343,7 @@ export function MainChart({
             fill="none"
             stroke="var(--color-s1)"
             strokeWidth="2.25"
+            strokeLinecap="round"
             strokeLinejoin="round"
             style={{ filter: "drop-shadow(0 0 6px rgba(57,135,229,.55))" }}
           />
@@ -307,18 +358,20 @@ export function MainChart({
             strokeDasharray="3 4"
           />
         )}
-        <circle
-          cx={x(solidTo - 1)}
-          cy={y(cur[solidTo - 1])}
-          r="4"
-          fill="var(--color-s1)"
-          stroke="var(--color-panel)"
-          strokeWidth="2"
-        />
-        {openLast && (
+        {lastSolid != null && (
+          <circle
+            cx={x(solidTo - 1)}
+            cy={y(lastSolid)}
+            r="4"
+            fill="var(--color-s1)"
+            stroke="var(--color-panel)"
+            strokeWidth="2"
+          />
+        )}
+        {openLast && last != null && (
           <circle
             cx={x(n - 1)}
-            cy={y(cur[n - 1])}
+            cy={y(last)}
             r="3.5"
             fill="var(--color-panel)"
             stroke="var(--color-s1)"
@@ -334,14 +387,16 @@ export function MainChart({
               y2={H - B}
               stroke="var(--color-axis)"
             />
-            <circle
-              cx={x(hover)}
-              cy={y(cur[hover])}
-              r="4"
-              fill="var(--color-s1)"
-              stroke="var(--color-panel)"
-              strokeWidth="2"
-            />
+            {hovered != null && (
+              <circle
+                cx={x(hover)}
+                cy={y(hovered)}
+                r="4"
+                fill="var(--color-s1)"
+                stroke="var(--color-panel)"
+                strokeWidth="2"
+              />
+            )}
           </g>
         )}
         <rect

@@ -2,10 +2,12 @@ import { api, type Audience, type Clients, type ShareRow } from "./api";
 import { Strip } from "./charts";
 import { countryName, num } from "./format";
 import { useApi } from "./hooks";
-import { scopeKey, useList } from "./lists";
+import { TopList, scopeKey, useList } from "./lists";
 import { WorldMap } from "./map";
 import { AUD_NOTE } from "./Overview";
 import {
+  AllClasses,
+  AsAudience,
   CardHead,
   Empty,
   ErrorBox,
@@ -42,30 +44,41 @@ function shareParts(rows: ShareRow[]) {
   }));
 }
 
-export function Origin({ aud }: { aud: Audience }) {
-  const { scope } = useDash();
+// An API's callers on the map are its programs, counted by address: the other
+// audiences count browsers there, which an API has none of.
+export function Origin({ aud, api: isApi }: { aud: Audience; api: boolean }) {
+  return isApi ? (
+    <AsAudience aud="bots">
+      <OriginPanels aud="bots" isApi />
+    </AsAudience>
+  ) : (
+    <OriginPanels aud={aud} isApi={false} />
+  );
+}
+
+function OriginPanels({ aud, isApi }: { aud: Audience; isApi: boolean }) {
+  const title = isApi ? "Where callers are" : MAP_TITLE[aud];
   const countries = useList("countries", "volume", { limit: MAP_LIMIT });
   // The legend's top countries and how many more: the backend's, as asked.
   const top = useList("countries", "volume", { limit: LEGEND_LIMIT });
-  const cl = useApi<Clients>(
-    scopeKey("clients", scope),
-    (s) => api.clients(scope, s),
-    scope.site,
-  );
   const rows = countries.data?.rows ?? [];
   const metric = aud === "bots" ? "Addresses" : "Visitors";
   return (
     <>
       <SectionHead
         id="origin"
-        title="Origin and clients"
-        lead={AUD_NOTE[aud]}
-        sources={["browser"]}
+        title={isApi ? "Origin" : "Origin and clients"}
+        lead={
+          isApi
+            ? "Its programs on the map, every client's network beside it, by address."
+            : AUD_NOTE[aud]
+        }
+        sources={[isApi ? "server" : "browser"]}
       />
       <div className="grid grid-cols-1 gap-3 min-[1000px]:grid-cols-2">
-        <Panel label={MAP_TITLE[aud]} className="card" busy={countries.loading}>
+        <Panel label={title} className="card" busy={countries.loading}>
           <CardHead
-            title={MAP_TITLE[aud]}
+            title={title}
             right={
               <div className="legend items-center">
                 <span>fewer</span>
@@ -92,7 +105,10 @@ export function Origin({ aud }: { aud: Audience }) {
             <>
               <WorldMap rows={rows} metric={metric} />
               {rows.length === 0 ? (
-                <Empty>No visitors with a known country in this range.</Empty>
+                <Empty>
+                  No {isApi ? "callers" : "visitors"} with a known country in
+                  this range.
+                </Empty>
               ) : (
                 top.data && (
                   <div className="legend mt-2.5">
@@ -115,33 +131,63 @@ export function Origin({ aud }: { aud: Audience }) {
             </>
           )}
         </Panel>
-        <Panel label="Clients" className="card" busy={cl.loading}>
-          <CardHead title="Clients" />
-          {cl.error ? (
-            <ErrorBox error={cl.error} />
-          ) : !cl.data ? (
-            <Skeleton h={280} />
-          ) : (
-            (
-              [
-                ["IP version", cl.data.ip_version],
-                ["Browsers", cl.data.browsers],
-                ["Operating systems", cl.data.os],
-                ["Devices", cl.data.devices],
-              ] as [string, ShareRow[]][]
-            ).map(([title, list]) => (
-              <div key={title}>
-                <div className="eyebrow mt-3.5 mb-1.5">{title}</div>
-                {list.length ? (
-                  <Strip label={title} parts={shareParts(list)} />
-                ) : (
-                  <Empty>Nothing recorded yet.</Empty>
-                )}
-              </div>
-            ))
-          )}
-        </Panel>
+        {/* A program's user agent names no browser, system or device. */}
+        {isApi ? (
+          <AllClasses>
+            <NetworksPanel />
+          </AllClasses>
+        ) : (
+          <ClientsPanel />
+        )}
       </div>
     </>
+  );
+}
+
+export function NetworksPanel() {
+  return (
+    <TopList
+      id="networks-panel"
+      title="Networks"
+      tabs={[{ key: "networks", label: "Networks", dim: "networks" }]}
+      empty="No networks in this range yet."
+    />
+  );
+}
+
+function ClientsPanel() {
+  const { scope } = useDash();
+  const cl = useApi<Clients>(
+    scopeKey("clients", scope),
+    (s) => api.clients(scope, s),
+    scope.site,
+  );
+  return (
+    <Panel label="Clients" className="card" busy={cl.loading}>
+      <CardHead title="Clients" />
+      {cl.error ? (
+        <ErrorBox error={cl.error} />
+      ) : !cl.data ? (
+        <Skeleton h={280} />
+      ) : (
+        (
+          [
+            ["IP version", cl.data.ip_version],
+            ["Browsers", cl.data.browsers],
+            ["Operating systems", cl.data.os],
+            ["Devices", cl.data.devices],
+          ] as [string, ShareRow[]][]
+        ).map(([title, list]) => (
+          <div key={title}>
+            <div className="eyebrow mt-3.5 mb-1.5">{title}</div>
+            {list.length ? (
+              <Strip label={title} parts={shareParts(list)} />
+            ) : (
+              <Empty>Nothing recorded yet.</Empty>
+            )}
+          </div>
+        ))
+      )}
+    </Panel>
   );
 }

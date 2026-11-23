@@ -12,6 +12,7 @@ import {
   type Scope,
   type SiteInfo,
 } from "./api";
+import { ApiSection } from "./Calls";
 import { Content } from "./Content";
 import { DomainFooter } from "./DomainFooter";
 import { SEP, num } from "./format";
@@ -53,6 +54,8 @@ const PANEL_ID: Record<Exclude<PanelKey, "log">, string> = {
   referrers: "referrers-panel",
   probed: "probed-panel",
   events: "events-panel",
+  endpoints: "endpoints-panel",
+  failures: "failures-panel",
   domain: "domain",
 };
 
@@ -120,8 +123,14 @@ export default function Dashboard({ me }: { me: Me }) {
     [],
   );
 
+  const feed = site?.server != null;
+  // Configured is enough: the backend answers for an API from then on.
+  const isApi = site?.kind === "api" && site.feed;
+  // An API's callers are programs: no audience to pick there, and the one
+  // remembered from a website would empty it.
+  const aud: Audience = isApi ? "all" : view.aud;
   const scope: Scope | null = site
-    ? { site: site.site, range: view.range, aud: view.aud, cmp: view.cmp }
+    ? { site: site.site, range: view.range, aud, cmp: view.cmp }
     : null;
   const ov = useApi<Overview>(
     scope ? `overview|${JSON.stringify(scope)}` : null,
@@ -165,7 +174,6 @@ export default function Dashboard({ me }: { me: Me }) {
 
   const set = (patch: Partial<View>) => go({ ...view, ...patch });
 
-  const feed = site?.server != null;
   const dash: Dash | null =
     site && scope
       ? {
@@ -185,7 +193,7 @@ export default function Dashboard({ me }: { me: Me }) {
     ["Overview", "overview"],
     ...(feed ? [["Traffic", "traffic"] as [string, string]] : []),
     ["Visitors", "visitors"],
-    ["Content", "content"],
+    [isApi ? "API" : "Content", "content"],
     ["Origin", "origin"],
   ];
 
@@ -282,6 +290,7 @@ export default function Dashboard({ me }: { me: Me }) {
               view={view}
               overview={ov.data}
               busy={ov.loading}
+              isApi={isApi}
               onSite={(s) => set({ site: s })}
               onRange={(r) => set({ range: r })}
               onAud={(a) => {
@@ -298,7 +307,8 @@ export default function Dashboard({ me }: { me: Me }) {
                   data={ov.data}
                   error={ov.error}
                   busy={ov.loading}
-                  aud={view.aud}
+                  aud={aud}
+                  api={isApi}
                 />
                 {/* Side by side only from 1200 px: an iPad across (up to
                     1194 px) left Noteworthy's text ~250 px. */}
@@ -307,9 +317,9 @@ export default function Dashboard({ me }: { me: Me }) {
                   {feed ? <WhoIsAsking classes={classes} /> : <ErrorsPanel />}
                 </div>
                 {feed && <Traffic classes={classes} />}
-                <Visitors aud={view.aud} />
-                <Content />
-                <Origin aud={view.aud} />
+                <Visitors aud={aud} />
+                {isApi ? <ApiSection /> : <Content />}
+                <Origin aud={aud} api={isApi} />
                 <DomainFooter />
               </>
             )}
@@ -325,6 +335,7 @@ function FilterBar({
   view,
   overview,
   busy,
+  isApi,
   onSite,
   onRange,
   onAud,
@@ -334,6 +345,7 @@ function FilterBar({
   view: View;
   overview: Overview | null;
   busy: boolean;
+  isApi: boolean;
   onSite: (s: string) => void;
   onRange: (r: Range) => void;
   onAud: (a: Audience) => void;
@@ -374,7 +386,7 @@ function FilterBar({
         value={view.range}
         onChange={onRange}
       />
-      {dash && (
+      {dash && !isApi && (
         <Seg
           label="Audience"
           options={AUDIENCES.map((a) => ({ key: a, label: AUD_LABEL[a] }))}

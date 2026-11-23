@@ -22,6 +22,8 @@ export type SiteInfo = {
   // null: the source has never delivered (for the server: or has no feed).
   browser: { last: string } | null;
   server: { last: string } | null;
+  // A server feed is configured, delivered or not.
+  feed: boolean;
 };
 
 export type Period = {
@@ -31,24 +33,39 @@ export type Period = {
   labels: string[];
   prev_label: string;
   last_bucket_open: boolean;
+  // Where the figures begin, when that is within the range; null otherwise.
+  since: string | null;
 };
 
 export type TileKey =
-  "visitors" | "views" | "events" | "requests" | "auto_share" | "errors";
+  | "visitors"
+  | "views"
+  | "events"
+  | "requests"
+  | "auto_share"
+  | "errors"
+  // An API's.
+  | "calls"
+  | "accounts"
+  | "callers"
+  | "failed"
+  | "p95";
 
 export type Tile = {
   key: TileKey;
   label: string;
   unit: string;
   kind: "sum" | "rate";
-  value: number;
+  // null, here and in the series: there is no such figure (a percentile of
+  // no calls, a bucket without figures).
+  value: number | null;
   prev: number | null;
   change: Change;
   // flat with the comparison off; prev_series then empty.
   verdict: Verdict;
-  series: number[];
-  prev_series: number[];
-  median: number;
+  series: (number | null)[];
+  prev_series: (number | null)[];
+  median: number | null;
   server: boolean;
 };
 
@@ -64,7 +81,15 @@ export type Gen = { gen: string | null; text: string };
 
 export type FindingKind = "problem" | "automation" | "people";
 export type Panel =
-  "errors" | "visitors" | "referrers" | "probed" | "events" | "domain" | "log";
+  | "errors"
+  | "visitors"
+  | "referrers"
+  | "probed"
+  | "events"
+  | "endpoints"
+  | "failures"
+  | "domain"
+  | "log";
 
 // A briefing line may cover several findings of one kind (ids): its text
 // is then "<lead text>, and N related", detail names each finding with its
@@ -115,7 +140,11 @@ export type Dim =
   | "probed"
   | "refused"
   | "errors"
-  | "countries";
+  | "countries"
+  | "endpoints"
+  | "accounts"
+  | "failures"
+  | "agents";
 
 export type ListRow = {
   key: string;
@@ -133,6 +162,11 @@ export type ListRow = {
   // the backend sends them.
   entry?: number;
   level?: number;
+  // Endpoints and accounts: the percent of calls that failed. Endpoints:
+  // their durations' percentiles in ms.
+  failed?: number;
+  p50?: number;
+  p95?: number;
 };
 
 export type List = {
@@ -246,6 +280,9 @@ export type LogRow = {
   what: string;
   client: string;
   source: "browser" | "server";
+  // A server request's: the account it acted as ("" for none), its duration.
+  account: string;
+  dur_ms: number | null;
 };
 
 export type Log = {
@@ -493,4 +530,12 @@ export type LogFilter = {
   class?: string;
   kind?: string;
   status?: string;
+  // "1": the calls among the events (an account's row counts those).
+  calls?: string;
+  // Exact, set by a click on a row: an endpoint, an account, an operation,
+  // a reason to fail.
+  endpoint?: string;
+  account?: string;
+  op?: string;
+  failure?: string;
 };

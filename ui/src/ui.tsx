@@ -13,6 +13,7 @@ import type {
   Change,
   ClassKey,
   LogFilter,
+  Audience,
   Panel as PanelKey,
   Scope,
   SiteInfo,
@@ -59,9 +60,20 @@ export function SepTail({ children }: { children: ReactNode }) {
 // Panels that always show every class, whatever the audience switch
 // says: the server's traffic and the errors.
 export function AllClasses({ children }: { children: ReactNode }) {
+  return <AsAudience aud="all">{children}</AsAudience>;
+}
+
+// One audience for what is inside, whatever the switch says.
+export function AsAudience({
+  aud,
+  children,
+}: {
+  aud: Audience;
+  children: ReactNode;
+}) {
   const d = useDash();
   return (
-    <DashContext.Provider value={{ ...d, scope: { ...d.scope, aud: "all" } }}>
+    <DashContext.Provider value={{ ...d, scope: { ...d.scope, aud } }}>
       {children}
     </DashContext.Provider>
   );

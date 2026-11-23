@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Audience, Overview, Tile, TileKey } from "./api";
 import { MainChart, Spark } from "./charts";
-import { SEP, num } from "./format";
+import { SEP, num, rawSince } from "./format";
 import { Delta, ErrorBox, Panel, SectionHead, Skeleton } from "./ui";
 
 export const AUD_NOTE: Record<Audience, string> = {
@@ -19,7 +19,7 @@ function TileValue({ t }: { t: Tile }) {
   return (
     <>
       {num(t.value, t.kind === "rate" ? 1 : 0)}
-      {t.unit && (
+      {t.unit && t.value != null && (
         <small className="ml-[3px] font-sans text-[14px] font-normal text-muted">
           {t.unit}
         </small>
@@ -38,15 +38,18 @@ export function OverviewSection({
   error,
   busy,
   aud,
+  api,
 }: {
   data: Overview | null;
   error: Error | null;
   busy: boolean;
   aud: Audience;
+  api: boolean;
 }) {
   const [metric, setMetric] = useState<TileKey>("visitors");
   const tiles = data?.tiles ?? [];
-  // A server tile picked on a domain without a feed falls back to the first.
+  // A tile the domain shown does not have (a server tile without a feed, a
+  // website's on an API) falls back to the first.
   const sel = tiles.find((t) => t.key === metric) ?? tiles[0];
   const p = data?.period;
   return (
@@ -55,7 +58,7 @@ export function OverviewSection({
         id="overview"
         title="Overview"
         lead={AUD_NOTE[aud]}
-        sources={["browser", "server"]}
+        sources={api ? ["server"] : ["browser", "server"]}
       />
       <Panel className="hero" label="Overview" busy={busy}>
         {error ? (
@@ -129,6 +132,11 @@ export function OverviewSection({
                         median
                       </span>
                     )}
+                    {p.since && (
+                      <span className="text-muted">
+                        figures since {rawSince(p.since)}
+                      </span>
+                    )}
                     {p.last_bucket_open && (
                       <span className="text-muted">
                         dashed end = {p.bucket} still filling
@@ -142,6 +150,7 @@ export function OverviewSection({
                   prev={sel.prev_series}
                   median={sel.median}
                   kind={sel.kind}
+                  unit={sel.unit}
                   open={p.last_bucket_open}
                   hourly={p.bucket === "hour"}
                   title={sel.label}
