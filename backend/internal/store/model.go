@@ -207,6 +207,14 @@ type AggAddr struct {
 	Cls      int
 }
 
+// AggAddrKey is an agg_addr row's key within its site-day.
+//
+// Table: agg_addr
+type AggAddrKey struct {
+	IPKey string
+	Part  int
+}
+
 // Usage is one site's model calls and tokens on one day.
 //
 // Table: llm_usage
