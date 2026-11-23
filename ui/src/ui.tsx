@@ -18,7 +18,7 @@ import type {
   SiteInfo,
   Verdict,
 } from "./api";
-import { SEP, changeText } from "./format";
+import { SEP, SEP_BREAK, SEP_LEAD, changeText } from "./format";
 
 // What every section needs: the query scope, the site and what it has,
 // and the page-wide jumps (into the log, to a panel).
@@ -40,6 +40,20 @@ export function useDash(): Dash {
   const d = useContext(DashContext);
   if (!d) throw new Error("useDash outside the dashboard");
   return d;
+}
+
+// A tail after SEP that wraps whole: a narrow column breaks the line before
+// the dot, never after it or inside the tail.
+export function SepTail({ children }: { children: ReactNode }) {
+  return (
+    <>
+      {SEP_BREAK}
+      <span className="whitespace-nowrap">
+        {SEP_LEAD}
+        {children}
+      </span>
+    </>
+  );
 }
 
 // Panels that always show every class, whatever the audience switch

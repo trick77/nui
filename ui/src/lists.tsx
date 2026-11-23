@@ -6,7 +6,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { api, type Dim, type List, type ListRow } from "./api";
 import { BarRows } from "./charts";
-import { SEP, changeText, joinSep, num, pct } from "./format";
+import { SEP, changeText, joinSep, num, pct, rawSince } from "./format";
 import { useApi, useDebounced } from "./hooks";
 import {
   CardHead,
@@ -334,6 +334,8 @@ function Within({
   sort: Sort;
 }) {
   const l = useList(dim, sort, { within: template });
+  // The paths are raw events, the template's row the whole range.
+  const since = rawSince(l.data?.detail_since);
   if (l.error)
     return (
       <tr>
@@ -366,10 +368,16 @@ function Within({
           ))}
         </tr>
       ))}
-      {l.data.other.count > 0 && (
+      {(l.data.other.count > 0 || since) && (
         <tr className="bg-white/[.02]">
           <td className="pl-8 text-muted" colSpan={cols.length}>
-            and {num(l.data.other.count)} more
+            {!l.data.rows.length
+              ? `No paths since ${since}`
+              : joinSep([
+                  l.data.other.count > 0 &&
+                    `and ${num(l.data.other.count)} more`,
+                  since && `paths since ${since}`,
+                ])}
           </td>
         </tr>
       )}

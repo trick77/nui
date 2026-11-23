@@ -11,6 +11,10 @@ const LOCALE = "de-CH";
 // invisible in review. The backend's is apix.Sep.
 const ENSP = String.fromCharCode(0x2002);
 export const SEP = `${ENSP}·${ENSP}`;
+// SEP in two, for a tail that must wrap whole (SepTail): the space a line
+// may break at, and the dot that goes with the tail.
+export const SEP_BREAK = ENSP;
+export const SEP_LEAD = `·${ENSP}`;
 
 // Parts joined by SEP, the empty ones dropped.
 export function joinSep(parts: (string | false | null | undefined)[]): string {
@@ -69,6 +73,17 @@ export function date(iso: string | null | undefined, tz?: string): string {
     year: "numeric",
     timeZone: tz,
   });
+}
+
+// The date raw events reach back to, as an answer's detail_since has it:
+// the server sends one only when what it read from raw begins after the
+// range does (on the UTC days it reads), the figures going back further.
+// null otherwise. Dates are the viewer's (tz).
+export function rawSince(
+  detailSince: string | null | undefined,
+  tz?: string,
+): string | null {
+  return detailSince ? date(detailSince, tz) : null;
 }
 
 // Day and month, with the year when it is not the current one: a span

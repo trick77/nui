@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useState } from "react";
 import { api, type Log, type LogFilter, type LogRow } from "./api";
-import { num, when } from "./format";
+import { joinSep, num, rawSince, when } from "./format";
 import { useApi, useMore } from "./hooks";
 import { scopeKey } from "./lists";
 import {
@@ -135,6 +135,8 @@ export function LogPage({
   // are the previous filter's: no paging from them.
   const fresh = !page.loading;
   const next = more.next ?? page.data?.next ?? "";
+  // Raw events only: the range may start before the oldest.
+  const since = rawSince(page.data?.detail_since);
   // Clearing starts the text fields afresh, dropping what is still pending.
   const [cleared, setCleared] = useState(0);
   const set = (k: keyof LogFilter, v: string) =>
@@ -228,8 +230,10 @@ export function LogPage({
         ) : !rows.length ? (
           <Empty>
             {Object.keys(filter).length
-              ? "No event in this range matches the filter."
-              : "No events in this range yet."}
+              ? `No event ${since ? `since ${since}` : "in this range"} matches the filter.`
+              : since
+                ? `No events since ${since}.`
+                : "No events in this range yet."}
           </Empty>
         ) : (
           <div className="overflow-x-auto">
@@ -292,7 +296,10 @@ export function LogPage({
         <div className="mt-2.5 flex flex-wrap items-center gap-4 border-t border-border-soft px-2.5 pt-2.5 text-[12.5px] text-muted">
           <span className="mr-auto">
             {page.data
-              ? `${num(rows.length)} of ${num(page.data.total)} events in this range`
+              ? joinSep([
+                  `${num(rows.length)} of ${num(page.data.total)} events in this range`,
+                  since && `the log reaches back to ${since}`,
+                ])
               : ""}
           </span>
           {next && (
