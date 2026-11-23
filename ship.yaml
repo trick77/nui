@@ -7,5 +7,18 @@ go:
 ui:
   # ship empties it but for .gitkeep before ui.build; vite writes there with emptyOutDir off.
   embed: backend/web/dist
+steps:
+  # -race slows SQLite (wasm) tenfold and more: the tests that compare or play long histories skip it and run here.
+  # ship runs its steps for docs alone too, where its own go test does not: nothing but Markdown changed, skip. A git
+  # that cannot tell runs the tests.
+  - name: go test, full histories
+    run: |
+      base=$(git merge-base origin/master HEAD)
+      if git diff --quiet "$base" -- ':(top)' ':(top,exclude)*.md'; then
+        echo "(nothing but docs changed)"
+      else
+        go test -count=1 ./internal/dash/ ./internal/sim/simcli/
+      fi
+    dir: backend
 images:
   - {}

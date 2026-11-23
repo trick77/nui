@@ -128,8 +128,11 @@ func (b *backfill) clock() time.Time { return b.now }
 
 // Drain thresholds: the writer's queue is written out before it nears its bounds (a full queue drops).
 const (
-	drainEvents = 1000 // one insert transaction of the writer's: a drain is never near its time bound
+	// A drain has the writer's drainTimeout of wall time: 1000 events took longer under -race on a busy CI runner
+	// (150 events/s), and the writer dropped them.
+	drainEvents = 200
 	drainBytes  = 4 << 20
+	queueEvents = 4000 // the writer's bound, far past the threshold and the largest batch
 )
 
 // BackfillOptions shape a backfill.
@@ -233,6 +236,10 @@ func (b *backfill) window(w *World, from, to time.Time, retries *reqHeap) error 
 		}
 		for retries.Len() > 0 && (*retries)[0].At.Before(end) {
 			q := heap.Pop(retries).(*Request)
+			// Before a batch that would pass the threshold, not after: a drain is that many events, or one batch.
+			if n := b.col.Writer.Queued(); n > 0 && n+int64(q.Events()) > drainEvents {
+				b.drain()
+			}
 			b.now = q.At
 			status, wait := b.send(q)
 			if status == http.StatusTooManyRequests && !q.Hammer() && q.Tries < 5 {
@@ -240,7 +247,7 @@ func (b *backfill) window(w *World, from, to time.Time, retries *reqHeap) error 
 				b.stats.Retried++
 				heap.Push(retries, q)
 			}
-			if b.col.Writer.Queued() > drainEvents || b.col.Writer.QueuedBytes() > drainBytes {
+			if b.col.Writer.QueuedBytes() > drainBytes {
 				b.drain()
 			}
 		}
@@ -279,7 +286,7 @@ func retryAfter(v string) time.Duration {
 
 // writer is a fresh batch writer: it runs only when drained.
 func (b *backfill) writer() *ingest.Writer {
-	return ingest.NewWriter(b.st, b.col.Counters, 4*drainEvents, b.cls.Enrich, b.log)
+	return ingest.NewWriter(b.st, b.col.Counters, queueEvents, b.cls.Enrich, b.log)
 }
 
 // drain writes what the writer holds now: Run on an ended context drains, flushes and returns.

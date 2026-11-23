@@ -20,20 +20,79 @@ import (
 	"github.com/trick77/stakeout/backend/internal/store"
 )
 
+// writeBeside keeps inserting into a site, as the collector does, until stop, which checks that it went well.
+func writeBeside(t *testing.T, r *rig, site int64) (stop func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	var written int64
+	var writeErr error
+	done := make(chan struct{})
+	first := make(chan struct{})
+	go func() {
+		defer close(done)
+		for ctx.Err() == nil {
+			batch := make([]store.Event, 50)
+			for j := range batch {
+				batch[j] = store.Event{SiteID: site, TS: r.end.UnixMilli(), Source: "server", Kind: "request",
+					IP: "192.0.2.200", IPKey: "192.0.2.200", Template: "GET /", Status: 200}
+			}
+			if err := r.s.DB.InsertEvents(ctx, batch); err != nil {
+				if ctx.Err() == nil {
+					writeErr = err
+				}
+				return
+			}
+			if written == 0 {
+				close(first)
+			}
+			written += int64(len(batch))
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	select { // the reads begin beside a writer under way
+	case <-first:
+	case <-done:
+	}
+	return func() {
+		t.Helper()
+		cancel()
+		<-done
+		if writeErr != nil {
+			t.Fatalf("the writer failed during the reads: %v", writeErr)
+		}
+		if written == 0 {
+			t.Error("the writer made no progress during the reads")
+		}
+	}
+}
+
+// Every endpoint reads beside a writer into its site, under -race too, where TestLargeTable does not run.
+func TestReadsBesideWriter(t *testing.T) {
+	r := newRig(t, 2, 4, nil)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	stop := writeBeside(t, r, site.ID)
+	for _, rng := range []string{"24h", "30d"} {
+		for _, c := range [][]string{{"overview"}, {"noteworthy"}, {"classes"}, {"status"}, {"clients"}, {"visitors"},
+			{"visitor", "key", "192.0.2.200"}, {"log"}, {"domain"}, {"list", "dim", "pages"}} {
+			code, body := r.getFrom(t, SourceAuto, c[0], p(feedSite, append([]string{"range", rng}, c[1:]...)...))
+			if code != 200 {
+				t.Errorf("%s %v: %d %v", rng, c, code, body)
+			}
+		}
+	}
+	stop()
+}
+
 // TestLargeTable fills 13 months of traffic (about 100k events, the feed's asset requests included), builds its
 // aggregates, runs every endpoint over the longest range from each source (auto while a writer keeps inserting), and
 // checks the plan of every statement the dashboard and the builder ran: none may scan the event table or an
-// aggregate table. Plans, not wall times: those are flaky under -race and on CI.
+// aggregate table. Plans, not wall times: those are flaky on CI.
 func TestLargeTable(t *testing.T) {
+	skipRace(t)
 	if testing.Short() {
 		t.Skip("large table")
 	}
-	// Under -race the data is smaller (the plans are the same, the race detector makes SQLite crawl); a plain
-	// go test runs the full size.
 	days, people, want := 395, 4, int64(50_000)
-	if raceOn {
-		days, people, want = 45, 1, 1_500
-	}
 	r := newRig(t, 0, 0, &fakeModel{})
 	site, _ := r.s.Sites.Lookup(feedSite)
 	other, _ := r.s.Sites.Lookup(plainSite)
@@ -113,28 +172,7 @@ func TestLargeTable(t *testing.T) {
 		if src == SourceAuto {
 			into = site.ID
 		}
-		ctx, cancel := context.WithCancel(t.Context())
-		var written atomic.Int64
-		var writeErr atomic.Value
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			for i := 0; ctx.Err() == nil; i++ {
-				batch := make([]store.Event, 50)
-				for j := range batch {
-					batch[j] = store.Event{SiteID: into, TS: r.end.UnixMilli(), Source: "server", Kind: "request",
-						IP: "192.0.2.200", IPKey: "192.0.2.200", Template: "GET /", Status: 200}
-				}
-				if err := r.s.DB.InsertEvents(ctx, batch); err != nil {
-					if ctx.Err() == nil {
-						writeErr.Store(err)
-					}
-					return
-				}
-				written.Add(int64(len(batch)))
-				time.Sleep(5 * time.Millisecond)
-			}
-		}()
+		stop := writeBeside(t, r, into)
 		var took time.Duration
 		asked := calls
 		if src == SourceRaw {
@@ -165,14 +203,7 @@ func TestLargeTable(t *testing.T) {
 			t.Logf("%s %s %s %s: %v", srcName[src], c.ep, c.params["dim"], c.params["aud"], d.Round(time.Millisecond))
 		}
 		t.Logf("%s: every call in %v", srcName[src], took.Round(time.Millisecond))
-		cancel()
-		<-done
-		if err := writeErr.Load(); err != nil {
-			t.Fatalf("the writer failed during the reads: %v", err)
-		}
-		if written.Load() == 0 {
-			t.Error("the writer made no progress during the reads")
-		}
+		stop()
 	}
 
 	if len(seen) < 20 || len(built) < 2 {
@@ -215,10 +246,9 @@ func TestLargeTable(t *testing.T) {
 var srcName = map[Source]string{SourceAuto: "auto", SourceRaw: "raw", SourceAgg: "aggregates"}
 
 // visitorsBounds checks what one 12-month visitors table from the aggregates costs, by counts, not wall time (a year
-// of 23 M events once took 5.4 s warm, 26 s cold), from what the seeded history holds (45 days under -race, more
-// than the range without): a statement per built day, a month's piece of the classes over the range, and per page row
-// a statement per month of its raw span, its values and trail, and its reading's raw sums when raw begins inside the
-// range. The months are counted here, not from the code's spans: shorter windows must fail.
+// of 23 M events once took 5.4 s warm, 26 s cold), from what the seeded history holds (more than the range): a
+// statement per built day, a month's piece of the classes over the range, and per page row a statement per month of
+// its raw span, its values and trail, and its reading's raw sums when raw begins inside the range. The months are counted here, not from the code's spans: shorter windows must fail.
 func visitorsBounds(t *testing.T, db *sql.DB, site int64, params map[string]string, body map[string]any, stmts int64) {
 	t.Helper()
 	loc, err := time.LoadLocation(cmp.Or(params["tz"], "UTC"))
