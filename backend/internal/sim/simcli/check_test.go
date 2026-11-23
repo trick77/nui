@@ -258,7 +258,7 @@ func visitorsUp(t *testing.T, st *store.Store, w *sim.World) float64 {
 
 // worldVisitorsUp is the same change on the growth world's own clients, no history written: the distinct visitor
 // ids the lookup site's tracker batches carry in the overview's 90 day buckets (the last one open at the anchor)
-// against the 90 before.
+// against the 90 before, up to the anchor's hour.
 func worldVisitorsUp(t *testing.T, ref *sim.Reference, seed uint64) float64 {
 	t.Helper()
 	sc, _ := sim.Scenarios("growth")
@@ -286,7 +286,8 @@ func worldVisitorsUp(t *testing.T, ref *sim.Reference, seed uint64) float64 {
 		return float64(len(ids))
 	}
 	from := anchor.Truncate(24*time.Hour).AddDate(0, 0, -89)
-	cur, prev := visitors(from, anchor), visitors(from.AddDate(0, 0, -90), from)
+	cur := visitors(from, anchor)
+	prev := visitors(from.AddDate(0, 0, -90), anchor.Truncate(time.Hour).AddDate(0, 0, -90))
 	return 100 * (cur - prev) / prev
 }
 

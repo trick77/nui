@@ -152,7 +152,7 @@ const mono = (s: string) => (
 // The server's view: requests per class, errors, probed paths, refused
 // requests by address. Shown only on a domain with a feed, always over
 // every class.
-export function Traffic(props: { classes: Loaded<Classes>; open: boolean }) {
+export function Traffic(props: { classes: Loaded<Classes> }) {
   return (
     <AllClasses>
       <TrafficPanels {...props} />
@@ -160,13 +160,7 @@ export function Traffic(props: { classes: Loaded<Classes>; open: boolean }) {
   );
 }
 
-function TrafficPanels({
-  classes,
-  open,
-}: {
-  classes: Loaded<Classes>;
-  open: boolean;
-}) {
+function TrafficPanels({ classes }: { classes: Loaded<Classes> }) {
   const { scope, openLog } = useDash();
   const st = useApi<Status>(
     scopeKey("status", scope),
@@ -206,7 +200,12 @@ function TrafficPanels({
           ) : !c ? (
             <Skeleton h={250} />
           ) : (
-            <StackChart labels={c.labels} series={c.series} open={open} />
+            <StackChart
+              labels={c.labels}
+              series={c.series}
+              open={c.last_bucket_open}
+              hourly={c.bucket === "hour"}
+            />
           )}
         </Panel>
         <ErrorsPanel />

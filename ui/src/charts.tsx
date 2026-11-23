@@ -81,6 +81,12 @@ export function Spark({
   );
 }
 
+// A bucket's name in a tooltip. An hour's label is its end: 24h ends now, and
+// its hours begin and end at now's minute.
+const bucketName = (label: string, hourly: boolean, filling: boolean) =>
+  (hourly ? `hour to ${label}` : label) +
+  (filling ? `${SEP}still filling` : "");
+
 // The overview's main line: this period with an area under it, the
 // previous period grey, the median dashed with a label chip, the open
 // bucket dashed over a hatch.
@@ -91,6 +97,7 @@ export function MainChart({
   median,
   kind,
   open,
+  hourly = false,
   title,
   prevLabel,
 }: {
@@ -100,6 +107,7 @@ export function MainChart({
   median: number | null;
   kind: "sum" | "rate";
   open: boolean;
+  hourly?: boolean;
   title: string;
   prevLabel: string;
 }) {
@@ -156,11 +164,7 @@ export function MainChart({
     const rows: [string, string][] = [[title, fmt(cur[i])]];
     if (prev) rows.push([prevLabel, prev[i] != null ? fmt(prev[i]) : "–"]);
     if (median != null) rows.push(["Median", fmt(median)]);
-    show(
-      e,
-      labels[i] + (openLast && i === n - 1 ? `${SEP}still filling` : ""),
-      rows,
-    );
+    show(e, bucketName(labels[i], hourly, openLast && i === n - 1), rows);
   };
 
   const medLabel = median != null ? `median ${fmt(median)}` : "";
@@ -171,7 +175,7 @@ export function MainChart({
         height={H}
         viewBox={`0 0 ${W} ${H}`}
         role="img"
-        aria-label={`${title}, ${labels[0]} to ${labels[n - 1]}`}
+        aria-label={`${title}, ${hourly ? `${n} hours` : labels[0]} to ${labels[n - 1]}`}
         className="block max-w-full"
       >
         <defs>
@@ -364,10 +368,12 @@ export function StackChart({
   labels,
   series,
   open,
+  hourly = false,
 }: {
   labels: string[];
   series: Record<ClassKey, number[]>;
   open: boolean;
+  hourly?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const W = Math.max(280, useWidth(ref, 560));
@@ -466,7 +472,7 @@ export function StackChart({
                 onMouseMove={(e) =>
                   show(
                     e,
-                    lab + (open && i === n - 1 ? `${SEP}still filling` : ""),
+                    bucketName(lab, hourly, open && i === n - 1),
                     CLASSES.map((c) => [c.label, num(series[c.key]?.[i] ?? 0)]),
                   )
                 }

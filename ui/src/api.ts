@@ -98,7 +98,9 @@ export type ClassRow = {
 };
 
 export type Classes = {
+  bucket: Period["bucket"];
   labels: string[];
+  last_bucket_open: boolean;
   series: Record<ClassKey, number[]>;
   rows: ClassRow[];
 };
@@ -185,6 +187,8 @@ export type Visitors = {
   rows: VisitorRow[];
   total: number;
   next: string;
+  // Where the span begins, unix ms.
+  from: number;
   detail_since: string | null;
 };
 
@@ -230,6 +234,7 @@ export type Visitor = {
   hours: number[];
   trail: TrailItem[];
   trail_next: string;
+  from: number;
   detail_since: string | null;
 };
 
@@ -247,6 +252,7 @@ export type Log = {
   rows: LogRow[];
   total: number;
   next: string;
+  from: number;
   detail_since: string | null;
 };
 
@@ -458,11 +464,23 @@ export const api = {
       },
       signal,
     ),
-  // cursor: a previous answer's trail_next, for earlier trail entries.
-  visitor: (s: Scope, key: string, cursor?: string, signal?: AbortSignal) =>
-    dash<Visitor>("visitor", s, { key, cursor }, signal),
-  log: (s: Scope, f: LogFilter, cursor?: string, signal?: AbortSignal) =>
-    dash<Log>("log", s, { ...f, cursor }, signal),
+  // cursor: a previous answer's trail_next, for earlier trail entries. from:
+  // the table's, so a row shown opens however long ago the table loaded (the
+  // log's likewise: its first page's, for the next).
+  visitor: (
+    s: Scope,
+    key: string,
+    cursor?: string,
+    signal?: AbortSignal,
+    from?: number,
+  ) => dash<Visitor>("visitor", s, { key, cursor, from }, signal),
+  log: (
+    s: Scope,
+    f: LogFilter,
+    cursor?: string,
+    signal?: AbortSignal,
+    from?: number,
+  ) => dash<Log>("log", s, { ...f, cursor, from }, signal),
   domain: (s: Scope, signal?: AbortSignal) =>
     dash<Domain>("domain", s, {}, signal),
 };

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"slices"
 	"sync"
 	"time"
 
@@ -93,11 +92,10 @@ var checkSources = []struct {
 	src  dash.Source
 }{{"raw", dash.SourceRaw}, {"aggregates", dash.SourceAgg}}
 
-// rawOnly: at 24h only what agg_hour serves has an aggregate answer: the overview's tiles, the classes, Noteworthy
-// (its tiles' trends and its spikes' request total; its lists raw under every source). Lists, the visitors table, a
-// visitor and the log read hours raw under every source (daily tables cannot serve them): asked raw only.
+// rawOnly: 24h begins and ends inside an hour, so it is read raw under every source, but for Noteworthy, whose 24h is
+// whole hours (agg_hour's, its lists raw): asked raw only.
 func rawOnly(e sim.Expectation) bool {
-	return e.Params["range"] == "24h" && !slices.Contains([]string{"overview", "classes", "noteworthy"}, e.Endpoint)
+	return e.Params["range"] == "24h" && e.Endpoint != "noteworthy"
 }
 
 // buildMu serializes the aggregate builds: tests check one stored history from several goroutines, and a second

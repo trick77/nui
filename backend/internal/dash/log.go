@@ -109,6 +109,10 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 		apix.Error(w, http.StatusBadRequest, "bad cursor")
 		return
 	}
+	if err := q.holdFrom(v.Get("from")); err != nil {
+		apix.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	cond := strings.Join(where, " AND ") + " AND ts >= ? AND ts < ?"
 	ctx := r.Context()
 	pl, err := s.planOf(ctx, q)
@@ -165,7 +169,8 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 		s.fail(w, r, err)
 		return
 	}
-	apix.JSON(w, http.StatusOK, map[string]any{"rows": out, "total": total, "next": next, "detail_since": since})
+	apix.JSON(w, http.StatusOK, map[string]any{"rows": out, "total": total, "next": next, "from": ms(q.p.win.From),
+		"detail_since": since})
 }
 
 // scanWindow is the longest span one log or footer statement reads: a day of a busy site is short, a year is not.
@@ -217,6 +222,9 @@ func (s *Server) logRows(ctx context.Context, table, cond string, args []any, li
 func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) {
 	ctx := r.Context()
 	from := q.p.From().Unix() / 3600
+	if q.rng == "24h" { // it begins inside an hour, whose count is partly older: the hours inside, as Noteworthy's
+		from = (q.p.From().Unix() + 3599) / 3600
+	}
 	var c struct {
 		Accepted      int64 `json:"accepted"`
 		RateLimited   int64 `json:"rate_limited"`

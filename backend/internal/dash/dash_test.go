@@ -459,7 +459,7 @@ func TestOverview(t *testing.T) {
 				noNullLists(t, "overview", body)
 				period := body["period"].(map[string]any)
 				n := map[string]int{"24h": 24, "7d": 7, "30d": 30, "90d": 90, "12mo": 12}[rng]
-				if len(period["labels"].([]any)) != n || period["last_bucket_open"] != true {
+				if len(period["labels"].([]any)) != n || period["last_bucket_open"] != (rng != "24h") {
 					t.Errorf("%s period %v", rng, period)
 				}
 				ts := tiles(t, body)
@@ -484,14 +484,18 @@ func TestOverview(t *testing.T) {
 		ts["requests"]["value"].(float64) == 0 || ts["auto_share"]["value"].(float64) == 0 {
 		t.Errorf("empty tiles: %v", ts)
 	}
-	// The visitors value is distinct over the closed buckets, never a sum of buckets.
-	var sum float64
-	series := ts["visitors"]["series"].([]any)
-	for _, x := range series[:len(series)-1] {
-		sum += x.(float64)
+	// A tile's value covers every bucket, the open one in: a count is their sum, the visitors distinct, never more.
+	sum := func(key string) (s float64) {
+		for _, x := range ts[key]["series"].([]any) {
+			s += x.(float64)
+		}
+		return s
 	}
-	if ts["visitors"]["value"].(float64) > sum {
-		t.Errorf("visitors %v above the bucket sum %v", ts["visitors"]["value"], sum)
+	if v := ts["visitors"]["value"].(float64); v > sum("visitors") {
+		t.Errorf("visitors %v above the bucket sum %v", v, sum("visitors"))
+	}
+	if v := ts["views"]["value"].(float64); v != sum("views") {
+		t.Errorf("views %v, the buckets %v", v, sum("views"))
 	}
 	if ts["auto_share"]["change"] != nil {
 		if _, ok := ts["auto_share"]["change"].(map[string]any)["pp"]; !ok {
@@ -1457,9 +1461,52 @@ func TestPeriod(t *testing.T) {
 	if !p.Prev[7].Equal(p.Bounds[0]) {
 		t.Error("prev does not end where the range starts")
 	}
+	// 24h ends now, to the minute; the year before is on the aggregates' hours.
 	p = newPeriod("24h", "yoy", now, time.UTC)
-	if p.n() != 24 || p.labels[23] != "12:00" || p.prevL != "last year" || p.Prev[0].Year() != 2025 {
-		t.Errorf("24h %v", p.labels)
+	if p.n() != 24 || p.labels[23] != "12:30" || p.labels[0] != "13:30" || p.prevL != "last year" || p.open ||
+		!p.Bounds[24].Equal(now) || !p.ClosedEnd().Equal(now) || p.win.Closed != p.win.End ||
+		!p.Prev[24].Equal(time.Date(2025, 3, 29, 12, 0, 0, 0, time.UTC)) || p.prevCut != p.Prev[24] {
+		t.Errorf("24h yoy %v %v %+v %v", p.labels, p.Bounds, p.win, p.Prev)
+	}
+	// The day after 29 February, last year has 24 hours too.
+	p = newPeriod("24h", "yoy", time.Date(2028, 3, 1, 13, 31, 0, 0, time.UTC), time.UTC)
+	if !p.Prev[0].Equal(time.Date(2027, 3, 1, 13, 0, 0, 0, time.UTC)) || p.prevCut.Sub(p.Prev[0]) != 24*time.Hour ||
+		!slices.IsSortedFunc(p.Prev, time.Time.Compare) {
+		t.Errorf("24h yoy after 29 February %v", p.Prev)
+	}
+	p = newPeriod("24h", "prev", now, time.UTC)
+	if !p.Prev[24].Equal(p.Bounds[0]) || p.prevCut != p.Prev[24] || !p.prevWin.From.Equal(now.Add(-48*time.Hour)) ||
+		!p.prevWin.Closed.Equal(now.Add(-24*time.Hour)) {
+		t.Errorf("24h prev %v %+v", p.Prev, p.prevWin)
+	}
+	// Any other range's comparison ends at now's hour of the prior period, by the viewer's clock, never outside the
+	// bucket the open one is compared with.
+	ld := func(s, tz string) time.Time {
+		loc, _ := time.LoadLocation(tz)
+		d, err := time.ParseInLocation("2006-01-02T15:04", s, loc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	for _, c := range []struct{ rng, cmp, tz, now, cut string }{
+		{"7d", "prev", "UTC", "2026-11-22T13:31", "2026-11-15T13:00"},
+		{"7d", "prev", "Europe/Zurich", "2026-11-22T00:20", "2026-11-15T00:00"},     // just after midnight: nothing of the day
+		{"7d", "prev", "Europe/Zurich", "2026-03-29T14:30", "2026-03-22T14:00"},     // across the clock change
+		{"30d", "prev", "America/New_York", "2026-11-21T20:40", "2026-10-22T20:00"}, // into daylight time
+		{"30d", "yoy", "UTC", "2026-11-22T13:31", "2025-11-22T13:00"},
+		{"7d", "prev", "Asia/Kolkata", "2026-11-22T00:10", "2026-11-15T00:00"},  // the UTC hour began before the day
+		{"30d", "prev", "Asia/Kolkata", "2026-11-22T19:00", "2026-10-23T18:30"}, // floored to the UTC hour
+		{"12mo", "prev", "UTC", "2026-11-22T13:31", "2025-11-22T13:00"},
+		{"12mo", "yoy", "UTC", "2028-02-29T13:31", "2027-03-01T00:00"}, // no 29 February: the whole month
+		{"7d", "yoy", "UTC", "2028-02-29T13:31", "2027-03-01T13:00"},   // seven days on from 23 February 2027
+		{"7d", "yoy", "UTC", "2028-03-03T13:31", "2027-03-04T13:00"},   // across it: six days and now's hours too
+	} {
+		loc, _ := time.LoadLocation(c.tz)
+		p := newPeriod(c.rng, c.cmp, ld(c.now, c.tz), loc)
+		if want := ld(c.cut, c.tz); !p.prevCut.Equal(want) || !p.open {
+			t.Errorf("%s %s %s at %s: cut %v, want %v", c.rng, c.cmp, c.tz, c.now, p.prevCut, want)
+		}
 	}
 	p = newPeriod("12mo", "prev", now, time.UTC)
 	if p.labels[11] != "Mar" || p.Bounds[0].Month() != time.April || p.prevL != "prior 12 mo" {
