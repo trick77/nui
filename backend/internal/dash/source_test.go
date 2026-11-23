@@ -68,7 +68,7 @@ func agree(t *testing.T, where string, raw, got any, loose func(path string, v a
 	t.Helper()
 	var walk func(path string, a, b any, isLoose bool)
 	walk = func(path string, a, b any, isLoose bool) {
-		isLoose = isLoose || loose(path, a)
+		isLoose = isLoose || (loose != nil && loose(path, a))
 		switch x := a.(type) {
 		case map[string]any:
 			y, ok := b.(map[string]any)
@@ -144,6 +144,203 @@ func TestSources_Hourly(t *testing.T) {
 						}
 					}
 				}
+			}
+		}
+	}
+}
+
+// looseRows marks a list's rows as loose when a figure of theirs is a distinct count; count dimensions agree exactly.
+func looseRows(dim string) func(string, any) bool {
+	d, ok := dims[dim]
+	distinct := ok && d.distinct != ""
+	return func(path string, v any) bool {
+		return distinct && (strings.HasPrefix(path, ".rows[") || path == ".other")
+	}
+}
+
+// The lists, status, the clients split and Noteworthy's findings read the same from the daily aggregates as from
+// raw, in every zone and comparison.
+func TestSources_Lists(t *testing.T) {
+	r := newRig(t, 20, 12, nil)
+	ask := func(ep, where string, params map[string]string, loose func(string, any) bool) {
+		t.Helper()
+		code, raw := r.getFrom(t, SourceRaw, ep, params)
+		var got map[string]any
+		var gotCode int
+		n := countPieces(t, func() { gotCode, got = r.getFrom(t, SourceAgg, ep, params) })
+		if code != 200 || gotCode != 200 {
+			t.Fatalf("%s %s: %d, %d %v", ep, where, code, gotCode, got)
+		}
+		agree(t, ep+" "+where, raw, got, loose)
+		if n.raw != 0 || (n.agg == 0 && params["range"] != "7d" && params["within"] == "" && params["dim"] != "refused") {
+			t.Errorf("%s %s: pieces %+v", ep, where, n)
+		}
+	}
+	for _, tz := range []string{"UTC", "Europe/Zurich", "Asia/Kolkata", "America/New_York"} {
+		for _, rng := range []string{"7d", "30d", "90d", "12mo"} {
+			if rng == "12mo" && tz != "UTC" {
+				continue
+			}
+			for _, c := range []string{"prev", "yoy"} {
+				for _, aud := range []string{"all", "humans", "bots"} {
+					if aud != "all" && (rng != "30d" || c != "prev") {
+						continue
+					}
+					base := p(feedSite, "range", rng, "cmp", c, "aud", aud, "tz", tz)
+					where := fmt.Sprint(base)
+					for dim := range dims {
+						params := p(feedSite, "range", rng, "cmp", c, "aud", aud, "tz", tz, "dim", dim, "limit", "500")
+						ask("list", where+" "+dim, params, looseRows(dim))
+					}
+					ask("status", where, base, nil)
+					ask("clients", where, base, func(path string, _ any) bool { return rng != "7d" })
+					if aud == "all" {
+						ask("noteworthy", where, p(feedSite, "range", rng, "cmp", c, "tz", tz, "findings", "all"), nil)
+					}
+				}
+			}
+		}
+	}
+	// The other parameters: a sort, a search, a sub, the paths inside a template (raw only).
+	for _, kv := range [][]string{{"dim", "pages", "sort", "change"}, {"dim", "pages", "limit", "2"},
+		{"dim", "countries", "q", "ch"}, {"dim", "events", "sub", "custom"}, {"dim", "events", "sub", "auto"},
+		{"dim", "pages", "within", "/:cidr"}, {"dim", "entry", "limit", "3"}} {
+		params := p(feedSite, append([]string{"range", "30d", "tz", "UTC"}, kv...)...)
+		ask("list", fmt.Sprint(kv), params, looseRows(kv[1]))
+	}
+}
+
+// Cut to three entries a day, the aggregates still add up: rows and Other hold the raw total of a counted list, a
+// key never collapsed has its raw figures and change, and a key that may hide in a day's Other has no change, never
+// new. Four days of the history come again 30, 90 and 365 days earlier: the prior periods of 30d and 90d and the
+// year before hold data, some of it collapsed.
+func TestSources_ListsTopThree(t *testing.T) {
+	r := newRig(t, 20, 12, nil)
+	for _, tbl := range []string{"agg_day", "agg_hour", "agg_list", "agg_addr"} {
+		if _, err := r.s.DB.DB.Exec(`DELETE FROM ` + tbl); err != nil { //nolint:gosec // the test's own names
+			t.Fatal(err)
+		}
+	}
+	from, to := r.end.AddDate(0, 0, -8).Truncate(24*time.Hour), r.end.AddDate(0, 0, -4).Truncate(24*time.Hour)
+	for _, back := range []int{30, 90, 365} {
+		if _, err := r.s.DB.DB.Exec(`INSERT INTO event (site_id, ts, source, kind, name, visitor, sid, ip, ip_key, ua,
+			path, template, url, ref, ref_host, method, status, dur_ms, asn, country, account, cls, props)
+			SELECT site_id, ts - ?, source, kind, name, visitor, sid, ip, ip_key, ua, path, template, url, ref, ref_host,
+			method, status, dur_ms, asn, country, account, cls, props FROM event WHERE ts >= ? AND ts < ?`,
+			int64(back)*dayMS, from.UnixMilli(), to.UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := agg.BuildThrough(t.Context(), r.s.DB, r.end, 3); err != nil {
+		t.Fatal(err)
+	}
+	site, _ := r.s.Sites.Lookup(feedSite)
+	// The hashes of every key some day collapsed, by dimension.
+	collapsed := map[string]map[uint64]bool{}
+	rows, err := r.s.DB.DB.Query(`SELECT dim, keys FROM agg_list WHERE site_id = ? AND other = 1`, site.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truncated := 0
+	for rows.Next() {
+		var dim string
+		var keys []byte
+		if err := rows.Scan(&dim, &keys); err != nil {
+			t.Fatal(err)
+		}
+		if collapsed[dim] == nil {
+			collapsed[dim] = map[uint64]bool{}
+		}
+		for _, h := range agg.OtherKeys(keys) {
+			collapsed[dim][h] = true
+			truncated++
+		}
+	}
+	_ = rows.Close()
+	if truncated == 0 {
+		t.Fatal("nothing collapsed at three entries a day")
+	}
+	byKey := func(body map[string]any) map[string]map[string]any {
+		out := map[string]map[string]any{}
+		for _, row := range listRows(body) {
+			out[row["key"].(string)] = row
+		}
+		return out
+	}
+	var priorOthers int
+	if err := r.s.DB.DB.QueryRow(`SELECT COUNT(*) FROM agg_list WHERE site_id = ? AND other = 1 AND day < ?`,
+		site.ID, r.end.AddDate(0, 0, -30).UnixMilli()/dayMS).Scan(&priorOthers); err != nil || priorOthers == 0 {
+		t.Fatalf("no Other row in a prior period: %d, %v", priorOthers, err)
+	}
+	compared := 0 // changes from the aggregates against prior data
+	combos := [][2]string{{"30d", "prev"}, {"90d", "prev"}, {"30d", "yoy"}, {"90d", "yoy"}}
+	if raceOn { // a prior period and a year before, at both ranges
+		combos = [][2]string{{"30d", "prev"}, {"90d", "yoy"}}
+	}
+	for _, rc := range combos {
+		rng := rc[0] + " " + rc[1]
+		for dim, d := range dims {
+			if dim == "refused" {
+				continue
+			}
+			params := p(feedSite, "range", rc[0], "cmp", rc[1], "tz", "UTC", "dim", dim, "limit", "500")
+			_, raw := r.getFrom(t, SourceRaw, "list", params)
+			_, got := r.getFrom(t, SourceAgg, "list", params)
+			rawRows, gotRows := byKey(raw), byKey(got)
+			for k, g := range gotRows {
+				w, ok := rawRows[k]
+				cut := collapsed[dim][agg.Hash(k)]
+				switch {
+				case !ok:
+					t.Errorf("%s %s: %s is no raw key", rng, dim, k)
+				case !cut && (num64(g["value"]) != num64(w["value"]) || num64(g["second"]) != num64(w["second"])):
+					t.Errorf("%s %s %s, never collapsed: %v, raw %v", rng, dim, k, g, w)
+				case !cut && (changeOf(g["change"]) != changeOf(w["change"]) || g["verdict"] != w["verdict"]):
+					t.Errorf("%s %s %s, never collapsed: change %v %v, raw %v %v", rng, dim, k, g["change"],
+						g["verdict"], w["change"], w["verdict"])
+				case cut && g["change"] != nil && changeOf(g["change"]) != changeOf(w["change"]):
+					t.Errorf("%s %s %s, collapsed: change %v, raw %v", rng, dim, k, g["change"], w["change"])
+				}
+				if c, ok := g["change"].(map[string]any); ok && c["pct"] != nil {
+					compared++
+				}
+				if changeOf(g["change"]) == `{"new":true}` && changeOf(w["change"]) != `{"new":true}` {
+					t.Errorf("%s %s %s: new from the aggregates, raw %v", rng, dim, k, w["change"])
+				}
+			}
+			total := func(body map[string]any) float64 {
+				sum := num64(body["other"].(map[string]any)["value"])
+				for _, row := range listRows(body) {
+					sum += num64(row["value"])
+				}
+				return sum
+			}
+			if d.distinct == "" || d.value(1, 0, 0) == 1 { // value is the counted a
+				if total(raw) != total(got) {
+					t.Errorf("%s %s: rows and Other %v, raw %v", rng, dim, total(got), total(raw))
+				}
+			}
+			if num64(got["total"]) != float64(len(listRows(got)))+num64(got["other"].(map[string]any)["count"]) {
+				t.Errorf("%s %s: total %v", rng, dim, got["total"])
+			}
+		}
+	}
+	if compared == 0 {
+		t.Error("no change from the aggregates compared prior data")
+	}
+	// No finding of a new key the aggregates cannot vouch for.
+	for _, rc := range combos {
+		rng := rc[0] + " " + rc[1]
+		params := p(feedSite, "range", rc[0], "cmp", rc[1], "tz", "UTC", "findings", "all")
+		_, raw := r.getFrom(t, SourceRaw, "noteworthy", params)
+		_, got := r.getFrom(t, SourceAgg, "noteworthy", params)
+		rawIDs := map[string]bool{}
+		for _, x := range raw["items"].([]any) {
+			rawIDs[x.(map[string]any)["id"].(string)] = true
+		}
+		for _, x := range got["items"].([]any) {
+			if id := x.(map[string]any)["id"].(string); !rawIDs[id] && !strings.HasPrefix(id, "trend:") {
+				t.Errorf("%s: finding %s only from the aggregates", rng, id)
 			}
 		}
 	}

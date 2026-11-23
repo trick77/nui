@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/trick77/stakeout/backend/internal/apix"
 	"github.com/trick77/stakeout/backend/internal/insight"
@@ -298,14 +300,14 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insigh
 func closedPart(w window) window { return closedWin(w.From, w.Closed) }
 
 // newKeys reports the keys of a list dimension that have at least min in the closed part and nothing in the
-// comparison.
+// comparison: not among its rows, and not maybe collapsed into one of its days' Other rows.
 func (s *Server) newKeys(ctx context.Context, q *query, dim string, minValue int64, fn func(string, int64)) error {
-	d := dims[dim]
-	cur, prev := aggMap{}, aggMap{}
-	if err := s.scanDim(ctx, q, d, "", nil, closedPart(q.p.win), cur); err != nil {
+	sc := scanOf(dim)
+	cur, prev := newSums(), newSums()
+	if err := s.scanDim(ctx, q, sc, closedPart(q.p.win), !q.p.agg, cur); err != nil {
 		return err
 	}
-	if err := s.scanDim(ctx, q, d, "", nil, *q.p.prevWin, prev); err != nil {
+	if err := s.scanDim(ctx, q, sc, *q.p.prevWin, !q.p.prevAgg, prev); err != nil {
 		return err
 	}
 	type kv struct {
@@ -313,9 +315,9 @@ func (s *Server) newKeys(ctx context.Context, q *query, dim string, minValue int
 		v int64
 	}
 	var out []kv
-	for k, g := range cur {
-		v := d.value(g.a, g.b, int64(len(g.d)))
-		if _, seen := prev[k]; !seen && v >= minValue && k != "" {
+	for k, g := range cur.m {
+		v := sc.figure(g)
+		if _, seen := prev.m[k]; !seen && !prev.other.hides(k) && v >= minValue && k != "" {
 			out = append(out, kv{k, v})
 		}
 	}
@@ -331,31 +333,34 @@ func (s *Server) newKeys(ctx context.Context, q *query, dim string, minValue int
 	return nil
 }
 
-// spikes finds one address or one network taking a large and grown share of the requests.
+// spikes finds one address or one network taking a large and grown share of the requests. A network's requests
+// are its networks list's server rows (b); one collapsed into a day's Other row counts as nothing that day.
 func (s *Server) spikes(ctx context.Context, q *query, add func(insight.Fact)) error {
+	total, err := s.requestsIn(ctx, q, closedPart(q.p.win), !q.p.agg)
+	if err != nil {
+		return err
+	}
 	for _, sp := range []struct {
-		key, id     string
-		minRequests int64
-		share       float64
-	}{{"ip_key", "spike:addr:", minSpikeRequests, spikeShare}, {"CAST(asn AS TEXT)", "spike:net:", minNetworkRequests, networkShare}} {
-		d := dimSpec{where: "source = 'server'", key: sp.key, a: "COUNT(*)", b: "0", value: countA, second: zeroSecond}
-		cur, prev := aggMap{}, aggMap{}
-		if err := s.scanDim(ctx, q, d, "", nil, closedPart(q.p.win), cur); err != nil {
+		key, id, dim string
+		minRequests  int64
+		share        float64
+	}{{"ip_key", "spike:addr:", "", minSpikeRequests, spikeShare},
+		{"CAST(asn AS TEXT)", "spike:net:", "networks", minNetworkRequests, networkShare}} {
+		sc := scan{dimSpec: dimSpec{where: "source = 'server'", key: sp.key, a: "COUNT(*)", b: "0", value: countA,
+			second: zeroSecond}, dim: sp.dim, fromB: true}
+		cur, prev := newSums(), newSums()
+		if err := s.scanDim(ctx, q, sc, closedPart(q.p.win), !q.p.agg, cur); err != nil {
 			return err
 		}
-		if err := s.scanDim(ctx, q, d, "", nil, *q.p.prevWin, prev); err != nil {
+		if err := s.scanDim(ctx, q, sc, *q.p.prevWin, !q.p.prevAgg, prev); err != nil {
 			return err
 		}
-		var total int64
-		for _, g := range cur {
-			total += g.a
-		}
-		for k, g := range cur {
+		for k, g := range cur.m {
 			if k == "" || k == "0" || g.a < sp.minRequests || float64(g.a) < sp.share*float64(total) {
 				continue
 			}
 			was := int64(0)
-			if p, ok := prev[k]; ok {
+			if p, ok := prev.m[k]; ok {
 				was = p.a
 			}
 			if was*3 > g.a {
@@ -379,6 +384,37 @@ func (s *Server) spikes(ctx context.Context, q *query, add func(insight.Fact)) e
 		}
 	}
 	return nil
+}
+
+// requestsIn is the server requests over w, a piece at a time from its source.
+func (s *Server) requestsIn(ctx context.Context, q *query, w window, short bool) (int64, error) {
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, pc := range pieces(w.From, w.End) {
+		if err := pl.read(ctx, pc[0], pc[1], time.Hour, short, func() (bool, error) {
+			var ok sql.NullBool
+			var n int64
+			if err := s.row(ctx, `SELECT d.ok, COALESCE(SUM(t.requests), 0)`+
+				aggFrom("agg_hour", "t.hour >= ?3 AND t.hour < ?4"), q.site.ID, ms(pc[0])/dayMS, ms(pc[0])/hourMS,
+				ms(pc[1])/hourMS).Scan(&ok, &n); err != nil || !ok.Bool {
+				return false, err
+			}
+			total += n
+			return true, nil
+		}, func() error {
+			var n int64
+			err := s.row(ctx, `SELECT COUNT(*) FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND source = 'server'`,
+				q.site.ID, ms(pc[0]), ms(pc[1])).Scan(&n)
+			total += n
+			return err
+		}); err != nil {
+			return 0, err
+		}
+	}
+	return total, nil
 }
 
 func upDown(f float64) string {
