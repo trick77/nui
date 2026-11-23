@@ -642,6 +642,128 @@ func TestPass_APIClient(t *testing.T) {
 	}
 }
 
+// A user agent that is no browser's is a program's on any site, however plain its name and whatever it fetched; only a
+// script's beacon shows a browser behind one, and then its requests stay the person's between passes.
+func TestPass_ProgramIsNoPerson(t *testing.T) {
+	for _, script := range []bool{false, true} {
+		r := newRig(t, true)
+		if script {
+			if err := r.st.AddStats(t.Context(), []store.IngestStat{{SiteID: r.site.ID, Hour: r.now.Unix() / 3600,
+				Accepted: 5}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		const odd = "Opera/9.80 (Windows NT 6.1) Presto/2.12 Version/12.16"
+		evs := []store.Event{
+			req("192.0.2.210", "claude-code/2.1 (cli)", "", "/mcp", 401, `{}`),
+			req("192.0.2.211", "some-agent/1", "", "/v1/x", 200, `{}`),
+			req("192.0.2.212", "some-agent/1", "image", "/favicon.ico", 200, `{}`),
+			req("192.0.2.213", "Dalvik/2.1.0 (Linux; U; Android 14)", "", "/v1/x", 200, ""),
+			req("192.0.2.214", odd, "document", "/", 200, ""),
+			{Source: "browser", Kind: "page_view", IP: "192.0.2.214", UA: odd},
+			account(req("192.0.2.217", odd, "document", "/", 200, "")),
+			account(req("192.0.2.217", odd, "empty", "/api/me", 200, "")),
+		}
+		// A person, and a program beside them.
+		evs = append(evs, req("192.0.2.215", browserUA, "script", "/assets/a.js", 200, ""),
+			req("192.0.2.215", "some-agent/1", "", "/v1/x", 200, `{}`))
+		for range 5 {
+			evs = append(evs, req("192.0.2.215", browserUA, "document", "/", 200, ""))
+		}
+		r.insert(t, evs...)
+		if err := r.c.Pass(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+		for key, want := range map[string]string{
+			"192.0.2.210": "unknown|client claude-code/2.1",
+			"192.0.2.211": "unknown|client some-agent/1",
+			"192.0.2.212": "unknown|client some-agent/1",
+			"192.0.2.213": "unknown|client Dalvik/2.1.0",
+			"192.0.2.214": "human|script beacon,no assets",
+			"192.0.2.215": "human|assets loaded",
+			// A document loaded with an account: a person's browser, however odd its user agent.
+			"192.0.2.217": "human|signed in,no assets",
+		} {
+			if script && key == "192.0.2.215" {
+				want += ",no script beacon"
+			}
+			if script && key == "192.0.2.217" {
+				want = "unknown|no sign of a browser" // the script would have shown it
+			}
+			a := classes[key]
+			if got := a.Class + "|" + strings.Join(a.Reasons, ","); got != want {
+				t.Errorf("script %v, %s = %q, want %q", script, key, got, want)
+			}
+		}
+		for _, tt := range []struct {
+			ip, ua string
+			want   int
+		}{
+			{"192.0.2.214", odd, store.ClsHuman},
+			{"192.0.2.215", "some-agent/1", store.ClsUnknown},
+			{"192.0.2.215", "other-agent/1", store.ClsUnknown}, // new behind the person
+			{"192.0.2.216", "other-agent/1", store.ClsUnknown}, // new altogether
+			{"192.0.2.215", browserUA, store.ClsHuman},
+		} {
+			e := req(tt.ip, tt.ua, "", "/v1/x", 200, `{}`)
+			e.SiteID, e.IPKey, e.TS = r.site.ID, e.IP, r.now.UnixMilli()
+			r.c.Enrich(&e)
+			if e.Cls != tt.want {
+				t.Errorf("script %v, new request of %s %q: %d, want %d", script, tt.ip, tt.ua, e.Cls, tt.want)
+			}
+		}
+	}
+}
+
+// On a site that cannot show a browser a person's browser stays one beside a program that calls more; a rotating
+// program's names are few reasons; behind people with more clients than the pass weighs the programs stay programs.
+func TestPass_ProgramsBesidePeople(t *testing.T) {
+	r := newRig(t, true)
+	evs := []store.Event{req("192.0.2.220", browserUA, "document", "/", 200, ""),
+		req("192.0.2.222", browserUA, "document", "/docs", 200, ""),
+		account(req("192.0.2.222", "sdk/1", "", "/v1/x", 200, `{}`))}
+	for range 3 {
+		evs = append(evs, req("192.0.2.220", "some-agent/1", "", "/v1/x", 200, `{}`),
+			req("192.0.2.222", "some-agent/1", "", "/v1/x", 200, `{}`))
+	}
+	for i := range 10 {
+		evs = append(evs, req("192.0.2.221", fmt.Sprintf("agent%c/1", 'a'+i), "", "/v1/x", 200, `{}`))
+	}
+	for range 300 {
+		evs = append(evs, req("192.0.2.223", browserUA, "document", "/", 200, ""))
+	}
+	for i := range 2 * maxUAs {
+		evs = append(evs, req("192.0.2.223", fmt.Sprintf("agent/1.%d", i), "", "/v1/x", 200, `{}`))
+	}
+	r.insert(t, evs...)
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	for key, want := range map[string]string{
+		"192.0.2.220": "unknown|client some-agent/1",
+		"192.0.2.221": "unknown|client agenta/1,client agentb/1,client agentc/1,more clients",
+	} {
+		a := classes[key]
+		if got := a.Class + "|" + strings.Join(a.Reasons, ","); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	for _, tt := range []struct {
+		ip    string
+		cls   int
+		count int
+	}{{"192.0.2.220", store.ClsHuman, 1}, {"192.0.2.222", store.ClsHuman, 1}, {"192.0.2.222", store.ClsAPI, 1},
+		{"192.0.2.223", store.ClsHuman, 300}, {"192.0.2.223", store.ClsUnknown, 2 * maxUAs}} {
+		var n int
+		if err := r.st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE ip = ? AND cls = ?`, tt.ip, tt.cls).Scan(&n); err != nil ||
+			n != tt.count {
+			t.Errorf("%s: %d events of class %d, want %d, %v", tt.ip, n, tt.cls, tt.count, err)
+		}
+	}
+}
+
 // A GET of an API outside /api/ is no page load: a key-holding script wearing a browser's user agent is a program on a
 // site with the script and on one without; without Sec-Fetch but with Accept-Language nobody's browser, never a person.
 // A headless browser rendering pages with a session is no program of the API's, nor is a program without an account
