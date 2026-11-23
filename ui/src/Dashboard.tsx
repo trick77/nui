@@ -300,7 +300,9 @@ export default function Dashboard({ me }: { me: Me }) {
                   busy={ov.loading}
                   aud={view.aud}
                 />
-                <div className="mt-3 grid grid-cols-1 gap-3 min-[1000px]:grid-cols-2">
+                {/* Side by side only from 1200 px: an iPad across (up to
+                    1194 px) left Noteworthy's text ~250 px. */}
+                <div className="mt-3 grid grid-cols-1 gap-3 min-[1200px]:grid-cols-2">
                   <Noteworthy />
                   {feed ? <WhoIsAsking classes={classes} /> : <ErrorsPanel />}
                 </div>

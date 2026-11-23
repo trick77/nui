@@ -729,7 +729,7 @@ table.t th button {
   box-shadow: 0 0 0 3px var(--color-panel);
 }
 
-/* Noteworthy: one line per finding, the kind as the coloured edge. */
+/* Noteworthy: one row per finding, the kind as the coloured edge. */
 .nw {
   list-style: none;
   margin: 0;
@@ -769,12 +769,17 @@ table.t th button {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Two lines, not one: beside Who-is-asking the text got ~250 px and lost
+   half of most lines. */
 .nw .say {
   font-size: 14.5px;
+  line-height: 1.35;
   color: var(--color-ink-dim);
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 .nw em {
   font-style: normal;
