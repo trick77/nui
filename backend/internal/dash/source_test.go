@@ -667,6 +667,88 @@ func TestSources_ListsTopThree(t *testing.T) {
 	}
 }
 
+// A backfill cut off midway (the oldest site-days built, one left under way) and then resumed changes no answer at
+// 90d or 12mo: auto reads raw wherever a day is not built and clean.
+func TestSources_Backfill(t *testing.T) {
+	t.Parallel()
+	r := copyRig(t, nil)
+	for _, tbl := range []string{"agg_day", "agg_hour", "agg_list", "agg_addr"} {
+		if _, err := r.s.DB.DB.Exec(`DELETE FROM ` + tbl); err != nil { //nolint:gosec // the test's own names
+			t.Fatal(err)
+		}
+	}
+	asks := []struct {
+		ep     string
+		params map[string]string
+		loose  func(string, any) bool
+	}{
+		{"overview", p(feedSite, "range", "90d", "tz", "UTC"), looseTiles},
+		{"overview", p(feedSite, "range", "12mo", "cmp", "yoy", "tz", "UTC"), looseTiles},
+		{"classes", p(feedSite, "range", "12mo", "tz", "UTC"), looseTiles},
+		{"list", p(feedSite, "range", "90d", "tz", "UTC", "dim", "pages", "limit", "500"), looseRows("pages")},
+		{"list", p(feedSite, "range", "12mo", "tz", "UTC", "dim", "probed", "limit", "500"), looseRows("probed")},
+		{"visitors", p(feedSite, "range", "90d", "tz", "UTC", "limit", "7"), nil},
+	}
+	answers := func(stage string) ([]map[string]any, pieceCount) {
+		var out []map[string]any
+		n := countPieces(r, func(r *rig) {
+			for _, a := range asks {
+				code, body := r.getFrom(t, SourceAuto, a.ep, a.params)
+				if code != http.StatusOK {
+					t.Fatalf("%s %s %v: %d %v", stage, a.ep, a.params, code, body)
+				}
+				out = append(out, body)
+			}
+		})
+		return out, n
+	}
+	before, n := answers("unbuilt")
+	if n.agg != 0 {
+		t.Fatalf("unbuilt: pieces %+v", n)
+	}
+	// The oldest half of the site-days built, the next one cut off between its first and last transaction.
+	rows, err := r.s.DB.DB.Query(`SELECT DISTINCT site_id, ts / 86400000 FROM event ORDER BY 2, 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sds [][2]int64
+	for rows.Next() {
+		var sd [2]int64
+		if err := rows.Scan(&sd[0], &sd[1]); err != nil {
+			t.Fatal(err)
+		}
+		sds = append(sds, sd)
+	}
+	_ = rows.Close()
+	b := &agg.Builder{Store: r.s.DB}
+	for _, sd := range sds[:len(sds)/2] {
+		if _, err := b.BuildDay(t.Context(), sd[0], sd[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := r.s.DB.BeginAggDay(t.Context(), sds[len(sds)/2][0], sds[len(sds)/2][1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.s.DB.DB.Exec(`UPDATE agg_day SET dirty = ? WHERE site_id = ? AND day = ?`, store.AggWriting,
+		sds[len(sds)/2][0], sds[len(sds)/2][1]); err != nil {
+		t.Fatal(err)
+	}
+	cut, n := answers("cut off")
+	if n.agg == 0 || n.raw == 0 {
+		t.Errorf("cut off: pieces %+v", n)
+	}
+	r.build(t)
+	after, n := answers("resumed")
+	if n.agg == 0 {
+		t.Errorf("resumed: pieces %+v", n)
+	}
+	for i, a := range asks {
+		where := fmt.Sprint(a.ep, a.params)
+		agree(t, "cut off "+where, before[i], cut[i], a.loose)
+		agree(t, "resumed "+where, before[i], after[i], a.loose)
+	}
+}
+
 // The source of each day: auto reads 24h and 7d raw, every clean day of a longer range from the aggregates, a dirty
 // or unbuilt day raw, and nothing before the first event; SourceAgg fails on a day with raw but no clean build.
 func TestSources_Plan(t *testing.T) {
