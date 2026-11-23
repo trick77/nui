@@ -109,7 +109,13 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 	}
 	cond := strings.Join(where, " AND ") + " AND ts >= ? AND ts < ?"
 	ctx := r.Context()
-	from, to := ms(q.p.win.From), ms(q.p.win.End)
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	// Raw events only: from the oldest one on, not a window per empty day before it.
+	from, to := ms(pl.rawFrom(q.p.win.From)), ms(q.p.win.End)
 	// The total and the page are read a window at a time: a filter the indexes cannot answer (a path substring)
 	// otherwise reads the whole range in one statement, seconds long on a year of events.
 	var total int64
@@ -152,7 +158,8 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 			break
 		}
 	}
-	apix.JSON(w, http.StatusOK, map[string]any{"rows": out, "total": total, "next": next})
+	apix.JSON(w, http.StatusOK, map[string]any{"rows": out, "total": total, "next": next,
+		"detail_since": pl.detailSince()})
 }
 
 // scanWindow is the longest span one log or footer statement reads: a day of a busy site is short, a year is not.
@@ -269,19 +276,32 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 		s.fail(w, r, err)
 		return
 	}
+	// The first figure: the oldest built hour or the oldest raw event, whichever is older.
+	var firstHour sql.NullInt64
+	if err := s.row(ctx, `SELECT MIN(hour) FROM agg_hour WHERE site_id = ?`, q.site.ID).Scan(&firstHour); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	figures := first
+	if firstHour.Valid && (figures == 0 || firstHour.Int64*hourMS < figures) {
+		figures = firstHour.Int64 * hourMS
+	}
 	// feed: the site has a server feed configured, so a null server source is one that has not delivered yet.
 	sources := map[string]any{"browser": source(browser, s.now()), "server": nil, "feed": q.site.HasFeed,
 		"script": "/stakeout.js", "build": version.String(), "first": nil}
 	if q.site.HasFeed {
 		sources["server"] = source(server, s.now())
 	}
-	if first > 0 {
-		sources["first"] = iso(time.UnixMilli(first))
-	}
-	var oldest any
+	var oldest, figuresSince any
 	if first > 0 {
 		oldest = iso(time.UnixMilli(first))
 	}
+	if figures > 0 {
+		figuresSince = iso(time.UnixMilli(figures))
+		sources["first"] = figuresSince
+	}
+	// Raw events are kept as long as everything else until their own retention ships: the months, in days.
+	rawDays := int(s.now().Sub(s.now().AddDate(0, -s.RetentionMonths, 0)).Hours() / 24)
 	rules := map[string]any{"rate": ingest.RateRule(), "batch": ingest.BatchRule(), "tz": q.tz,
 		"botlist": map[string]any{"services": 0, "updated": nil}, "networks": map[string]any{"updated": nil},
 		"llm": map[string]any{"calls_today": 0, "budget": 0, "configured": false}}
@@ -301,7 +321,8 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 		"counters": c,
 		"sources":  sources,
 		"storage": map[string]any{"events": events, "bytes": used, "retention_months": s.RetentionMonths,
-			"oldest": oldest, "identity": "address + user agent, plus browser id"},
+			"oldest": oldest, "identity": "address + user agent, plus browser id", "raw_days": rawDays,
+			"figures_since": figuresSince},
 		"rules": rules,
 	})
 }

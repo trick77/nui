@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"slices"
@@ -334,36 +335,56 @@ func (s *Server) newKeys(ctx context.Context, q *query, dim string, minValue int
 }
 
 // spikes finds one address or one network taking a large and grown share of the requests. A network's requests
-// are its networks list's server rows (b); one collapsed into a day's Other row counts as nothing that day.
+// are its networks list's server rows (b); one collapsed into a day's Other row counts as nothing that day, and one
+// that may sit in a prior day's Other is no spike: its growth is not known.
 func (s *Server) spikes(ctx context.Context, q *query, add func(insight.Fact)) error {
 	total, err := s.requestsIn(ctx, q, closedPart(q.p.win), !q.p.agg)
 	if err != nil {
 		return err
 	}
+	nets := func(w window, short bool, _ map[string]bool) (map[string]int64, *otherSums, error) {
+		sc := scan{dimSpec: dimSpec{where: "source = 'server'", key: "CAST(asn AS TEXT)", a: "COUNT(*)", b: "0",
+			value: countA, second: zeroSecond}, dim: "networks", fromB: true}
+		sums := newSums()
+		if err := s.scanDim(ctx, q, sc, w, short, sums); err != nil {
+			return nil, nil, err
+		}
+		out := map[string]int64{}
+		for k, g := range sums.m {
+			out[k] = g.a
+		}
+		return out, &sums.other, nil
+	}
+	addrs := func(w window, short bool, keys map[string]bool) (map[string]int64, *otherSums, error) {
+		out, err := s.addrRequests(ctx, q, w, short, keys)
+		return out, &otherSums{}, err
+	}
 	for _, sp := range []struct {
-		key, id, dim string
-		minRequests  int64
-		share        float64
-	}{{"ip_key", "spike:addr:", "", minSpikeRequests, spikeShare},
-		{"CAST(asn AS TEXT)", "spike:net:", "networks", minNetworkRequests, networkShare}} {
-		sc := scan{dimSpec: dimSpec{where: "source = 'server'", key: sp.key, a: "COUNT(*)", b: "0", value: countA,
-			second: zeroSecond}, dim: sp.dim, fromB: true}
-		cur, prev := newSums(), newSums()
-		if err := s.scanDim(ctx, q, sc, closedPart(q.p.win), !q.p.agg, cur); err != nil {
+		id          string
+		sums        func(w window, short bool, keys map[string]bool) (map[string]int64, *otherSums, error)
+		minRequests int64
+		share       float64
+	}{{"spike:addr:", addrs, minSpikeRequests, spikeShare}, {"spike:net:", nets, minNetworkRequests, networkShare}} {
+		cur, _, err := sp.sums(closedPart(q.p.win), !q.p.agg, nil)
+		if err != nil {
 			return err
 		}
-		if err := s.scanDim(ctx, q, sc, *q.p.prevWin, !q.p.prevAgg, prev); err != nil {
+		spiking := map[string]bool{}
+		for k, n := range cur {
+			if k != "" && k != "0" && n >= sp.minRequests && float64(n) >= sp.share*float64(total) {
+				spiking[k] = true
+			}
+		}
+		if len(spiking) == 0 {
+			continue
+		}
+		prev, prevOther, err := sp.sums(*q.p.prevWin, !q.p.prevAgg, spiking)
+		if err != nil {
 			return err
 		}
-		for k, g := range cur.m {
-			if k == "" || k == "0" || g.a < sp.minRequests || float64(g.a) < sp.share*float64(total) {
-				continue
-			}
-			was := int64(0)
-			if p, ok := prev.m[k]; ok {
-				was = p.a
-			}
-			if was*3 > g.a {
+		for k := range spiking {
+			n, was := cur[k], prev[k]
+			if was*3 > n || prevOther.hides(k) {
 				continue
 			}
 			label := k
@@ -377,13 +398,175 @@ func (s *Server) spikes(ctx context.Context, q *query, add func(insight.Fact)) e
 				name, _ := s.networkName(asns[k])
 				label += " (" + name + ")"
 			}
-			add(insight.Fact{ID: sp.id + k, Kind: "automation", Figure: num(float64(g.a)), Unit: "requests from",
+			add(insight.Fact{ID: sp.id + k, Kind: "automation", Figure: num(float64(n)), Unit: "requests from",
 				Text:   label,
-				Detail: []string{fmt.Sprintf("%s %% of all requests, %s in the %s", num(round1(pct(float64(g.a), float64(total)))), num(float64(was)), q.p.prevL)},
-				Score:  600 + float64(g.a)/float64(max(total, 1))*100, Target: target})
+				Detail: []string{fmt.Sprintf("%s %% of all requests, %s in the %s", num(round1(pct(float64(n), float64(total)))), num(float64(was)), q.p.prevL)},
+				Score:  600 + float64(n)/float64(max(total, 1))*100, Target: target})
 		}
 	}
 	return nil
+}
+
+// spikeTop is the rows of an aggregate day an address spike is looked for in: an address with a quarter of a span's
+// requests has a quarter of some day's, so one of its parts (people, automated) an eighth: among the day's top 8.
+const spikeTop = 8
+
+// addrRequests sums the server requests of addresses over w. Raw days list every address; an aggregate day names
+// its spikeTop rows by requests (agg_addr_requests). The candidates (keys, or when nil those names and the addresses
+// with a quarter of a raw day's requests) then get their aggregate days' sums on agg_addr_key: exact, and every
+// address with a quarter of w's requests is among them.
+func (s *Server) addrRequests(ctx context.Context, q *query, w window, short bool, keys map[string]bool) (map[string]int64, error) {
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	raw := map[string]int64{}
+	cands := map[string]bool{}
+	var aggDays []int64
+	for _, pc := range pieces(w.From, w.End) {
+		day := ms(pc[0]) / dayMS
+		if err := pl.read(ctx, pc[0], pc[1], readSpan, short, func() (bool, error) {
+			rows, err := s.query(ctx, `SELECT d.ok, t.ip_key FROM (SELECT frozen = 1 AND dirty = 0 AS ok FROM agg_day
+				WHERE site_id = ?1 AND day = ?2) AS d LEFT JOIN agg_addr t INDEXED BY agg_addr_requests
+				ON t.site_id = ?1 AND t.day = ?2 ORDER BY t.requests DESC LIMIT `+strconv.Itoa(spikeTop), q.site.ID, day)
+			if err != nil {
+				return false, err
+			}
+			defer func() { _ = rows.Close() }()
+			ok, top := false, []string{}
+			for rows.Next() {
+				var key sql.NullString
+				if err := rows.Scan(&ok, &key); err != nil {
+					return false, err
+				}
+				if key.Valid {
+					top = append(top, key.String)
+				}
+			}
+			if err := rows.Err(); err != nil || !ok {
+				return false, err
+			}
+			for _, k := range top {
+				cands[k] = true
+			}
+			aggDays = append(aggDays, day)
+			return true, nil
+		}, func() error {
+			rows, err := s.query(ctx, `SELECT ip_key, COUNT(*) FROM event WHERE site_id = ? AND ts >= ? AND ts < ?
+				AND source = 'server' GROUP BY ip_key`, q.site.ID, ms(pc[0]), ms(pc[1]))
+			if err != nil {
+				return err
+			}
+			defer func() { _ = rows.Close() }()
+			piece := map[string]int64{}
+			var total int64
+			for rows.Next() {
+				var k string
+				var n int64
+				if err := rows.Scan(&k, &n); err != nil {
+					return err
+				}
+				piece[k] += n
+				raw[k] += n
+				total += n
+			}
+			for k, n := range piece {
+				if n*4 >= total {
+					cands[k] = true
+				}
+			}
+			return rows.Err()
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if len(aggDays) == 0 {
+		return raw, nil
+	}
+	if keys != nil {
+		cands = keys
+	}
+	agg, err := s.addrAggRequests(ctx, q, slices.Sorted(maps.Keys(cands)), aggDays)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]int64{}
+	for k := range cands {
+		out[k] = raw[k] + agg[k]
+	}
+	return out, nil
+}
+
+// spanDays is the most days one statement over a run of aggregate days spans: a month, as classDays.
+const spanDays = 31
+
+// addrAggRequests is the addresses' server requests on the given aggregate days (oldest first): every address in one
+// statement on the key index per month of days, each day's state read with it. A day rebuilt since the plan is
+// counted raw (SourceAgg: an error).
+func (s *Server) addrAggRequests(ctx context.Context, q *query, keys []string, days []int64) (map[string]int64, error) {
+	out := map[string]int64{}
+	if len(keys) == 0 {
+		return out, nil
+	}
+	want := map[int64]bool{}
+	for _, d := range days {
+		want[d] = true
+	}
+	in := strings.TrimSuffix(strings.Repeat("?, ", len(keys)), ", ")
+	stale := map[int64]bool{}
+	for i := 0; i < len(days); {
+		lo, hi := days[i], days[i]
+		for i < len(days) && days[i] < lo+spanDays {
+			hi = days[i]
+			i++
+		}
+		args := make([]any, 0, len(keys)+3)
+		for _, k := range keys {
+			args = append(args, k)
+		}
+		rows, err := s.query(ctx, `SELECT d.day, d.frozen = 1 AND d.dirty = 0, t.ip_key, COALESCE(t.requests, 0)
+			FROM agg_day d LEFT JOIN agg_addr t INDEXED BY agg_addr_key ON t.site_id = d.site_id AND t.ip_key IN (`+in+`)
+			AND t.day = d.day WHERE d.site_id = ? AND d.day >= ? AND d.day <= ?`, append(args, q.site.ID, lo, hi)...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var day, n int64
+			var ok bool
+			var key sql.NullString
+			if err := rows.Scan(&day, &ok, &key, &n); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			switch {
+			case !want[day]:
+			case !ok:
+				stale[day] = true
+			case key.Valid:
+				out[key.String] += n
+			}
+		}
+		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	pl, _ := s.planOf(ctx, q)
+	for day := range stale {
+		if pl.src == SourceAgg {
+			return nil, fmt.Errorf("%w: site %d, %s rebuilt while read", ErrNoAggregates, q.site.ID,
+				time.UnixMilli(day*dayMS).UTC().Format(time.DateOnly))
+		}
+		for _, key := range keys {
+			var n int64
+			if err := s.row(ctx, `SELECT COUNT(*) FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?
+				AND source = 'server'`, q.site.ID, key, day*dayMS, (day+1)*dayMS).Scan(&n); err != nil {
+				return nil, err
+			}
+			out[key] += n
+		}
+	}
+	return out, nil
 }
 
 // requestsIn is the server requests over w, a piece at a time from its source.
