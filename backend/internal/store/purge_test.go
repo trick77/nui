@@ -413,7 +413,7 @@ func TestPurgeRaw_PartCutThenBump(t *testing.T) {
 	}
 }
 
-// A site whose oldest raw day Cover cannot build (from 00:00 to 02:00 UTC the next day is not due) ends only its own
+// A site whose oldest raw day Cover does not build (and does not say it is not due yet: no wait) ends only its own
 // raw step: the other site's raw before the tail goes, the aggregate steps run, and neither touches the stalled
 // site's days from the stalled one on. The stall is warned once across rounds.
 func TestEnforceCap_StallOneSite(t *testing.T) {
@@ -444,7 +444,7 @@ func TestEnforceCap_StallOneSite(t *testing.T) {
 	cover := o.Cover
 	o.Cover = func(ctx context.Context, site, day int64) error {
 		if site == a {
-			return nil // not due
+			return nil // builds nothing
 		}
 		return cover(ctx, site, day)
 	}
@@ -470,6 +470,92 @@ func TestEnforceCap_StallOneSite(t *testing.T) {
 	}
 	if n := strings.Count(logs.String(), "its raw from there stays"); n != 1 {
 		t.Errorf("stall warned %d times:\n%s", n, logs.String())
+	}
+}
+
+// A site whose oldest raw day only waits for the day after it to fall due (Cover: ErrNotDue) makes the round wait,
+// over every site: no aggregate goes (that raw, freed hours later, does), the wait warned once across rounds, no
+// step claiming a delete. A second site with no raw to free does not change that. A site stalled for another reason
+// (the day after's figures missing, Cover builds nothing) does not make the round wait: the aggregate steps run as
+// before; that case pins the unchanged behaviour, it passes without the wait too.
+func TestEnforceCap_Wait(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		notDue, other bool // Cover's answer for the day after (else nil, building nothing); a site b without raw
+		wait          bool
+	}{
+		{"not due", true, false, true},
+		{"missing for good", false, false, false},
+		{"not due, another site with nothing to free", true, true, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := open(t)
+			list := []Site{{Domain: "a.example.com", Kind: "site", PathRules: "[]"}}
+			if c.other {
+				list = append(list, Site{Domain: "b.example.com", Kind: "site", PathRules: "[]"})
+			}
+			sites, err := st.SyncSites(t.Context(), list)
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now()
+			today := now.UnixMilli() / dayMS
+			stuck := today - CapTail // the cap's oldest day
+			a := sites["a.example.com"].ID
+			purgeDays(t, st, a, stuck, today, 60)
+			if _, err := st.DB.Exec(`DELETE FROM agg_day WHERE site_id = ? AND day = ?`, a, stuck+1); err != nil {
+				t.Fatal(err)
+			}
+			// Older days: aggregates only, their raw gone; large per-address rows.
+			for _, s := range sites {
+				for d := today - 12; d < stuck; d++ {
+					addrs := aggAddrs(s.ID, d, 100)
+					for i := range addrs {
+						addrs[i].UA = strings.Repeat("u", 400)
+					}
+					write(t, st, AggBuild{Site: s.ID, Day: d, Builder: 1, Dims: []string{"pages"},
+						Hours: []AggHour{{Hour: d * 24, Cls: 1}}, Lists: []AggList{{Dim: "pages", Part: 1, Key: "/"}},
+						Addrs: slices.Values(addrs)})
+				}
+			}
+			aggs := func() [3]int {
+				return [3]int{countRows(t, st, `SELECT COUNT(*) FROM agg_addr`),
+					countRows(t, st, `SELECT COUNT(*) FROM agg_list`), countRows(t, st, `SELECT COUNT(*) FROM agg_hour`)}
+			}
+			kept, events := aggs(), countRows(t, st, `SELECT COUNT(*) FROM event`)
+			var logs bytes.Buffer
+			o := RetentionOptions{Months: 25, Builder: 1, Log: slog.New(slog.NewTextHandler(&logs, nil)),
+				capStalls: map[int64]int64{},
+				Cover: func(_ context.Context, _, day int64) error {
+					if c.notDue && day == stuck+1 {
+						return ErrNotDue
+					}
+					return nil
+				}}
+			used, _ := st.UsedBytes(t.Context())
+			o.MaxBytes = used * 3 / 4
+			for range 3 {
+				if _, err := st.EnforceCap(t.Context(), o, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out := logs.String()
+			if !c.wait {
+				if aggs()[0] >= kept[0] || strings.Contains(out, "Size cap waits") ||
+					strings.Count(out, "its raw from there stays") != 1 || !strings.Contains(out, "per-address") {
+					t.Errorf("aggregates %v, before %v; warnings:\n%s", aggs(), kept, out)
+				}
+				return
+			}
+			if got := aggs(); got != kept || countRows(t, st, `SELECT COUNT(*) FROM event`) != events {
+				t.Errorf("aggregates %v, before %v; events %d of %d", got, kept,
+					countRows(t, st, `SELECT COUNT(*) FROM event`), events)
+			}
+			if strings.Count(out, "Size cap waits") != 1 || strings.Contains(out, "deleting") ||
+				strings.Contains(out, "exceed") {
+				t.Errorf("warnings:\n%s", out)
+			}
+		})
 	}
 }
 

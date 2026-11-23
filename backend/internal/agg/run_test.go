@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -697,8 +698,10 @@ func TestCover(t *testing.T) {
 	}
 	cover := Cover(st, Options{Months: 1, Now: func() time.Time { return anchor }})
 	for _, d := range []int64{floor - 1, floor, today - 2, today - 1} {
-		if err := cover(t.Context(), id, d); err != nil {
-			t.Fatal(err)
+		// Not due yet is the cap's to wait for; before the floor is never built, no wait.
+		err := cover(t.Context(), id, d)
+		if notDue := d == today-1; errors.Is(err, store.ErrNotDue) != notDue || !notDue && err != nil {
+			t.Fatalf("day %d: %v", d-today, err)
 		}
 	}
 	days, err := st.AggDays(t.Context(), id, floor-1, today)
@@ -891,5 +894,124 @@ func TestPurge_CapCutThenBump(t *testing.T) {
 	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE ts < ?`, store.RawCutDay(anchor, 3)*dayMS).
 		Scan(&old); err != nil || old != 0 {
 		t.Errorf("%d raw events older than the raw days stay (%v)", old, err)
+	}
+}
+
+// The cap's wait for a day not due ends by itself: the cap asks Cover for days before its tail and the day after
+// each, and at every minute of a day lastDue is at least the day before the tail, from 02:00 UTC the tail's first.
+// Only the tail's first day is ever not due to the cap, and only from 00:00 to 02:00.
+func TestCover_WaitBounded(t *testing.T) {
+	midnight := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
+	for m := range 24 * 60 {
+		now := midnight.Add(time.Duration(m) * time.Minute)
+		tail := now.UnixMilli()/dayMS - (store.CapTail - 1)
+		if due := lastDue(now); due < tail-1 || (due >= tail) != (now.Hour() >= 2) {
+			t.Fatalf("%s: last due day %d, the tail from %d", now.Format(time.TimeOnly), due, tail)
+		}
+	}
+}
+
+// From 00:00 to 02:00 UTC the cap's oldest raw day waits for the day after it, not due yet: the rounds delete no
+// aggregate (that day's raw can go two hours later; here it is enough) and warn once. At 02:01 the next round's Cover builds
+// the day after and the raw goes, every aggregate row kept. The real Cover, through RunRetention, no job running.
+func TestRetention_CapWaitsForDue(t *testing.T) {
+	st := openStore(t)
+	id := site(t, st)
+	discard := slog.New(slog.DiscardHandler)
+	night := time.Date(2026, 11, 23, 1, 0, 0, 0, time.UTC)
+	today := night.UnixMilli() / dayMS
+	wait := today - store.CapTail // the cap's oldest day: built, the day after it due at 02:00
+	padded(t, st, id, today-12, today, 1000)
+	if _, err := (&job{b: &Builder{Store: st}, log: discard}).passes(t.Context(), lastDue(night), 0); err != nil {
+		t.Fatal(err)
+	}
+	// The older days' raw purged: their aggregates alone stand for them.
+	if _, err := st.ArmRawPurge(t.Context(), night.Add(-store.PurgeGrace)); err != nil {
+		t.Fatal(err)
+	}
+	if _, waits, err := st.PurgeRaw(t.Context(), store.RetentionOptions{Months: 25, RawDays: store.CapTail,
+		Builder: Version, Log: discard}, night); err != nil || len(waits) != 0 {
+		t.Fatalf("purge: waits %v, %v", waits, err)
+	}
+	raw := func(d int64) (n int) {
+		_ = st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE ts >= ? AND ts < ?`, d*dayMS, (d+1)*dayMS).Scan(&n)
+		return n
+	}
+	// The aggregate rows up to that day (02:01's Cover builds the next).
+	aggs := func() (n [3]int) {
+		_ = st.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM agg_addr WHERE day <= ?1),
+			(SELECT COUNT(*) FROM agg_list WHERE day <= ?1), (SELECT COUNT(*) FROM agg_hour WHERE hour < (?1 + 1) * 24)`,
+			wait).Scan(&n[0], &n[1], &n[2])
+		return n
+	}
+	if raw(wait-1) != 0 || raw(wait) != 1000 || aggs()[0] == 0 {
+		t.Fatalf("fixture: raw %d before the day, %d on it, aggregates %v", raw(wait-1), raw(wait), aggs())
+	}
+	kept := aggs()
+	if err := st.Vacuum(t.Context()); err != nil { // the purge's free pages back: a round's vacuum would shrink used
+		t.Fatal(err)
+	}
+	used, _ := st.UsedBytes(t.Context())
+	var clock atomic.Int64
+	clock.Store(night.UnixMilli())
+	now := func() time.Time { return time.UnixMilli(clock.Load()).UTC() }
+	cover := Cover(st, Options{Months: 25, Now: now})
+	var asked atomic.Int64 // the rounds that asked for the day after, not due
+	var logs bytes.Buffer
+	var mu sync.Mutex
+	o := store.RetentionOptions{Months: 25, Builder: Version, MaxBytes: used - 1, CapEvery: 10 * time.Millisecond,
+		Now: now, Log: slog.New(slog.NewTextHandler(writerFunc(func(p []byte) (int, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return logs.Write(p)
+		}), nil)),
+		Cover: func(ctx context.Context, site, day int64) error {
+			if day == wait+1 && clock.Load() == night.UnixMilli() {
+				asked.Add(1)
+			}
+			return cover(ctx, site, day)
+		}}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		st.RunRetention(ctx, o)
+		close(done)
+	}()
+	defer func() { cancel(); <-done }()
+	until := func(what string, ok func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(20 * time.Second); !ok(); time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				mu.Lock()
+				defer mu.Unlock()
+				t.Fatalf("timed out waiting for %s:\n%s", what, logs.String())
+			}
+		}
+	}
+	until("three rounds at 01:00", func() bool { return asked.Load() >= 3 || aggs() != kept })
+	if got := aggs(); got != kept || raw(wait) != 1000 {
+		t.Errorf("at 01:00: aggregates %v, before %v; the day's raw %d of 1000", got, kept, raw(wait))
+	}
+	clock.Store(night.Add(61 * time.Minute).UnixMilli())
+	until("the day's raw to go at 02:01", func() bool { return raw(wait) == 0 })
+	cancel()
+	<-done
+	if got := aggs(); got != kept {
+		t.Errorf("at 02:01: aggregates %v, before %v", got, kept)
+	}
+	for d := wait + 1; d <= today; d++ {
+		if raw(d) != 1000 {
+			t.Errorf("tail day %d: %d events", d-today, raw(d))
+		}
+	}
+	if after, _ := st.UsedBytes(t.Context()); after > o.MaxBytes*9/10 {
+		t.Errorf("used %d after 02:01, target %d", after, o.MaxBytes*9/10)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	out := logs.String()
+	if strings.Count(out, "Size cap waits") != 1 || strings.Count(out, "deleting the oldest raw events") != 1 ||
+		strings.Contains(out, "aggregates stay") || strings.Contains(out, "alone exceed") {
+		t.Errorf("warnings:\n%s", out)
 	}
 }
