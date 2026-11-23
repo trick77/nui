@@ -30,7 +30,8 @@ import (
 // actors sums every address key over the range, a piece (a UTC day at most) at a time from its source. Visits are
 // distinct sessions over the whole range: a session crossing a piece boundary is one visit. Raw pieces count (key,
 // session) pairs, never per piece; an aggregate day counts its sessions less those carried from the day before
-// (when that day is in the range). A raw day after an aggregate one first learns the day before's pairs, uncounted.
+// (when that day is in the range). A raw day after an aggregate one first learns the day before's pairs, uncounted;
+// with that raw gone, it counts its sessions less the carried ones its own stored rows hold (carriedOn).
 func (s *Server) actors(ctx context.Context, q *query, from, to time.Time) (map[string]*actor, error) {
 	pl, err := s.planOf(ctx, q)
 	if err != nil {
@@ -39,28 +40,96 @@ func (s *Server) actors(ctx context.Context, q *query, from, to time.Time) (map[
 	out := map[string]*actor{}
 	// A hash per (key, session) seen: a few bytes each, not the strings.
 	sessions := map[uint64]struct{}{}
-	prevAgg := false // the piece before was an aggregate day
+	var counted time.Time // where the last piece read ends
+	prevAgg := false      // that piece was an aggregate day
 	for i, pc := range pieces(from, to) {
-		wasAgg := false
+		wasAgg, wasRaw := false, false
 		raw := func() error {
-			if prevAgg {
+			wasRaw = true
+			if !prevAgg || !counted.Equal(pc[0]) {
+				return s.actorPiece(ctx, q, pc[0], pc[1], sessions, out)
+			}
+			if pl.rawOK(ms(pc[0])/dayMS - 1) {
 				if err := s.actorSessions(ctx, q, pc[0].Add(-readSpan), pc[0], sessions, nil); err != nil {
 					return err
 				}
+				return s.actorPiece(ctx, q, pc[0], pc[1], sessions, out)
 			}
-			return s.actorPiece(ctx, q, pc[0], pc[1], sessions, out)
+			carried, err := s.carriedOn(ctx, q, ms(pc[0])/dayMS, "")
+			if err != nil {
+				return err
+			}
+			piece := map[string]*actor{}
+			if err := s.actorPiece(ctx, q, pc[0], pc[1], sessions, piece); err != nil {
+				return err
+			}
+			for k, a := range piece {
+				a.visits -= min(carried[k], a.visits)
+				actorOf(out, k).add(a)
+			}
+			return nil
 		}
-		err = pl.read(ctx, pc[0], pc[1], readSpan, !q.p.agg, func() (bool, error) {
-			ok, err := s.actorDay(ctx, q, ms(pc[0])/dayMS, i > 0, out)
-			wasAgg = ok
-			return ok, err
-		}, raw)
+		if i == 1 && headCut(from, pl) {
+			err = raw()
+		} else {
+			err = pl.read(ctx, pc[0], pc[1], readSpan, !q.p.agg, func() (bool, error) {
+				ok, err := s.actorDay(ctx, q, ms(pc[0])/dayMS, stitch(counted, pc[0]), out)
+				wasAgg = ok
+				return ok, err
+			}, raw)
+		}
 		if err != nil {
 			return nil, err
 		}
-		prevAgg = wasAgg
+		if wasAgg || wasRaw {
+			counted, prevAgg = pc[1], wasAgg
+		}
 	}
 	return out, nil
+}
+
+// carriedOn is the sessions a day's stored rows carry from the day before, per address key (key's alone, or every
+// key's for ""), the audience's parts: what a raw read of the day cannot learn once the day before's raw is gone.
+// Only from complete rows (built, not mid-write or cut by the cap), their state read in the same statement; a day
+// without them (unbuilt: the size cap's last days) counts a session crossing its midnight on both days.
+func (s *Server) carriedOn(ctx context.Context, q *query, day int64, key string) (map[string]int64, error) {
+	cond, args := "", []any{q.site.ID, day}
+	if key != "" {
+		cond, args = " AND t.ip_key = ?3", append(args, key)
+	}
+	rows, err := s.query(ctx, `SELECT t.ip_key, SUM(t.carried) FROM agg_day d JOIN agg_addr t ON t.site_id = d.site_id
+		AND t.day = d.day WHERE d.site_id = ?1 AND d.day = ?2 AND d.frozen = 1 AND d.dirty != `+
+		strconv.Itoa(store.AggWriting)+` AND t.carried > 0`+cond+partCond(q.aud)+` GROUP BY t.ip_key`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]int64{}
+	for rows.Next() {
+		var k string
+		var n int64
+		if err := rows.Scan(&k, &n); err != nil {
+			return nil, err
+		}
+		out[k] = n
+	}
+	return out, rows.Err()
+}
+
+// stitch: an aggregate day's visits leave out the sessions carried from the day before only when that day was
+// counted, read right before it; a day before not read (no raw, no build) counted none of them.
+func stitch(counted, lo time.Time) bool { return !counted.IsZero() && counted.Equal(lo) }
+
+// headCut: a span starting off a UTC midnight (24h, 7d outside UTC) reads its first whole day raw under every
+// source. That day's carried sessions may have begun before the span, uncounted, and the aggregates cannot tell
+// which: subtracting them all undercounts visits.
+func headCut(from time.Time, pl *plan) bool {
+	day := ms(from)/dayMS + 1
+	if from.Equal(from.Truncate(readSpan)) || !pl.rawOK(day) {
+		return false
+	}
+	pl.s.traced(false, false)
+	return true
 }
 
 // actorPiece adds one raw piece's sums per key to out.
@@ -1426,9 +1495,9 @@ func (s *Server) actorIn(ctx context.Context, q *query, key string, from, to tim
 		return nil, err
 	}
 	var parts []actorPart
-	for _, pc := range pieces(from, to) {
+	for i, pc := range pieces(from, to) {
 		h := readRaw
-		if !rawOnly {
+		if !rawOnly && (i != 1 || !headCut(from, pl)) {
 			if h, err = pl.pick(ctx, pc[0], pc[1], readSpan, !q.p.agg); err != nil {
 				return nil, err
 			}
@@ -1452,18 +1521,30 @@ func (s *Server) actorIn(ctx context.Context, q *query, key string, from, to tim
 	seen := map[string]bool{}
 	var rawLast int64 // the latest raw event's time, when the latest event is raw
 	for i, pt := range parts {
+		var counted time.Time // where the part before ends: parts are the pieces read
+		if i > 0 {
+			counted = parts[i-1].hi
+		}
 		if pt.agg {
 			if day, ok := days[pt.day]; ok {
-				stitch := i > 0 && parts[i-1].hi.Equal(pt.lo)
-				a.add(dayActor(day, stitch))
+				a.add(dayActor(day, stitch(counted, pt.lo)))
 			}
 			continue
 		}
-		if i > 0 && parts[i-1].agg && parts[i-1].hi.Equal(pt.lo) {
+		var carried int64
+		switch {
+		case i == 0 || !parts[i-1].agg || !stitch(counted, pt.lo):
+		case pl.rawOK(pt.day - 1):
 			// The day before was counted from the aggregates: its sessions are not new here.
 			if err := s.actorSids(ctx, q.site.ID, key, pt.lo.Add(-readSpan), pt.lo, seen, nil); err != nil {
 				return nil, err
 			}
+		default: // its raw gone: the sessions this day's stored rows carry from it
+			c, err := s.carriedOn(ctx, q, pt.day, key)
+			if err != nil {
+				return nil, err
+			}
+			carried = c[key]
 		}
 		var r actor
 		var first, last *int64
@@ -1480,6 +1561,7 @@ func (s *Server) actorIn(ctx context.Context, q *query, key string, from, to tim
 		if err := s.actorSids(ctx, q.site.ID, key, pt.lo, pt.hi, seen, &r.visits); err != nil {
 			return nil, err
 		}
+		r.visits -= min(carried, r.visits)
 		r.first, r.last = *first, *last
 		if r.last >= a.last {
 			rawLast = r.last
