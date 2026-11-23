@@ -20,7 +20,7 @@ const KIND: Record<FindingKind, { label: string; color: string }> = {
   people: { label: "people", color: "var(--color-s1)" },
 };
 
-// The briefing: one headline, at most five one-line findings. The figure
+// The briefing: one headline, at most five one-row findings. The figure
 // is computed, the statement the model's (✦) or the computed text; the
 // whole line jumps to where the finding leads, the detail is on hover.
 export function Noteworthy() {
