@@ -61,7 +61,8 @@ func dump(t testing.TB, st *store.Store) string {
 	h := sha256.New()
 	for _, q := range []string{
 		`SELECT id, site_id, ts, source, kind, name, visitor, sid, ip, ip_key, ua, path, template, url, ref, ref_host,
-			method, status, dur_ms, asn, country, account, cls, props FROM event ORDER BY id`,
+			method, status, dur_ms, asn, country, account, op, err, unrouted, cls, props FROM event
+			ORDER BY id`,
 		`SELECT site_id, hour, accepted, accepted_server, rate_limited, rejected, dropped, unknown_domain
 			FROM ingest_stat ORDER BY site_id, hour`,
 		`SELECT site_id, ip_key, day, class, reasons FROM actor_class ORDER BY site_id, ip_key, day`,

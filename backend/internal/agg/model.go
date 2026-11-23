@@ -10,4 +10,7 @@ type raw struct {
 	status                                                int
 	asn                                                   int64
 	cls                                                   int
+	dur                                                   int64
+	account, op, err                                      string
+	unrouted                                              bool
 }

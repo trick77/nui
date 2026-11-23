@@ -60,7 +60,7 @@ func (s *Store) Sites(ctx context.Context) (map[string]Site, error) {
 }
 
 const eventColumns = `site_id, ts, source, kind, name, visitor, sid, ip, ip_key, ua, path, template, url, ref,
-	ref_host, method, status, dur_ms, asn, country, account, cls, props`
+	ref_host, method, status, dur_ms, asn, country, account, op, err, unrouted, cls, props`
 
 // InsertEvents writes one batch in one transaction: the batch writer's only statement.
 func (s *Store) InsertEvents(ctx context.Context, events []Event) error {
@@ -73,7 +73,7 @@ func (s *Store) InsertEvents(ctx context.Context, events []Event) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO event (`+eventColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func (s *Store) InsertEvents(ctx context.Context, events []Event) error {
 		}
 		if _, err := stmt.ExecContext(ctx, e.SiteID, e.TS, e.Source, e.Kind, e.Name, e.Visitor, e.SID, e.IP,
 			e.IPKey, e.UA, e.Path, e.Template, e.URL, e.Ref, e.RefHost, e.Method, e.Status, e.DurMS, e.ASN,
-			e.Country, e.Account, e.Cls, props); err != nil {
+			e.Country, e.Account, e.Op, e.Err, e.Unrouted, e.Cls, props); err != nil {
 			return err
 		}
 		days[[2]int64{e.SiteID, e.TS / dayMS}] = true

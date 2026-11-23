@@ -586,9 +586,9 @@ func TestSources_ListsTopThree(t *testing.T) {
 	from, to := r.end.AddDate(0, 0, -8).Truncate(24*time.Hour), r.end.AddDate(0, 0, -4).Truncate(24*time.Hour)
 	for _, back := range []int{30, 90, 365} {
 		if _, err := r.s.DB.DB.Exec(`INSERT INTO event (site_id, ts, source, kind, name, visitor, sid, ip, ip_key, ua,
-			path, template, url, ref, ref_host, method, status, dur_ms, asn, country, account, cls, props)
+			path, template, url, ref, ref_host, method, status, dur_ms, asn, country, account, op, err, unrouted, cls, props)
 			SELECT site_id, ts - ?, source, kind, name, visitor, sid, ip, ip_key, ua, path, template, url, ref, ref_host,
-			method, status, dur_ms, asn, country, account, cls, props FROM event WHERE ts >= ? AND ts < ?`,
+			method, status, dur_ms, asn, country, account, op, err, unrouted, cls, props FROM event WHERE ts >= ? AND ts < ?`,
 			int64(back)*dayMS, from.UnixMilli(), to.UnixMilli()); err != nil {
 			t.Fatal(err)
 		}

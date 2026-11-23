@@ -18,8 +18,8 @@ under `/dashboard`. `backend/`: Go on ship's kit, embeds `ui/` (React, Vite, Tai
 - Migrations: never edit an applied one; the next number, DDL only, data steps are background jobs (0004 copies two
   tables: a CHECK changes no other way, owner's OK). `docs/schema.md` is generated: `SCHEMADOC_UPDATE=1 go test ./... -run TestSchemaDoc` in `backend/`.
 - Aggregates (owner): every raw change (writes, restamps, retention's cuts) bumps a built day's version in the same
-  transaction, or figures drift unseen. Permanent once raw is gone: the sketch format and the dimension
-  definitions; change either only with a builder version bump. The last 3 days are unbuilt: raw lost there is lost
+  transaction, or figures drift unseen. Permanent once raw is gone: the sketch and the
+  duration-histogram formats and the dimension definitions; change either only with a builder version bump. The last 3 days are unbuilt: raw lost there is lost
   for good. Known: aud=all visits count a session with rows in both parts twice; a classified day has none.
 - Raw purge: a day loses raw only once its aggregate rows are complete (days up to the months' cutoff excepted),
   else its figures read empty for good. 7 days' grace from a purging release's first start: figures checked against

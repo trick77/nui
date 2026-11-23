@@ -162,9 +162,10 @@ const (
 	insAggCarried = `INSERT INTO agg_carried (site_id, day, ip_key, part, carried) VALUES (?, ?, ?, ?, ?)`
 
 	insAggHour = `INSERT INTO agg_hour (site_id, hour, cls, events, views, actions, starts, requests, refused, errors,
-		browser_ids, addrs, server_addrs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		browser_ids, addrs, server_addrs, failed, durations, callers, accounts)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	insAggList = `INSERT INTO agg_list (site_id, dim, day, part, other, parent, key, sub, a, b, n, addr_n, ids, addrs,
-		entries, keys) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		entries, keys, durations) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	insAggAddr = `INSERT INTO agg_addr (site_id, day, ip_key, part, events, views, actions, requests, refused,
 		sessions, carried, browser, human, first_ts, last_ts, ua, asn, country, cls)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -322,13 +323,14 @@ func (s *Store) WriteAggDay(ctx context.Context, b AggBuild) (bool, error) {
 	}
 	for _, h := range b.Hours {
 		if err := c.ins(insAggHour, b.Site, h.Hour, h.Cls, h.Events, h.Views, h.Actions, h.Starts, h.Requests,
-			h.Refused, h.Errors, h.BrowserIDs, h.Addrs, h.ServerAddrs); err != nil {
+			h.Refused, h.Errors, h.BrowserIDs, h.Addrs, h.ServerAddrs, h.Failed, h.Durations,
+			h.Callers, h.Accounts); err != nil {
 			return false, err
 		}
 	}
 	for _, l := range b.Lists {
 		if err := c.ins(insAggList, b.Site, l.Dim, b.Day, l.Part, l.Other, l.Parent, l.Key, l.Sub, l.A, l.B, l.N,
-			l.AddrN, l.IDs, l.Addrs, l.Entries, l.Keys); err != nil {
+			l.AddrN, l.IDs, l.Addrs, l.Entries, l.Keys, l.Durations); err != nil {
 			return false, err
 		}
 	}

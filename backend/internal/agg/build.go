@@ -20,8 +20,9 @@ import (
 const (
 	// Version is the build code's version, stored per day. Raise it with any change to what a day's rows hold: the
 	// job then rebuilds every day whose raw still exists (older days keep what they were built with). 2: events'
-	// Other per sub, Other's address counts.
-	Version = 2
+	// Other per sub, Other's address counts. 3: the API figures (endpoints, accounts, failures; the hours' failed,
+	// durations and accounts).
+	Version = 3
 	// TopK is the entries a list part keeps per day: the dashboard's "Show all" (maxLimit).
 	TopK = 500
 	// otherKeysMax bounds an Other row's key hashes; past it the row says only how many keys it holds.
@@ -34,13 +35,46 @@ const (
 // Dims are the list dimensions agg_list holds. A rebuild clears these from the day, so a dimension dropped here
 // stays listed until its rows are gone.
 var Dims = []string{"pages", "entry", "events", "outbound", "referrers", "networks", "countries", "probed", "errors",
-	"status", "clients"}
+	"status", "clients", "endpoints", "accounts", "failures", "agents"}
+
+// Called reports whether a server request counts as a call of an endpoint: a 404 does not (a probe's and an
+// endpoint's own look alike, a route with placeholders catches both), nor does one refused without a route (a scanner's
+// path behind a key check; an MCP client's GET of a POST-only path, answered 405 as its protocol wants). "probed" has
+// them.
+func Called(status int, unrouted bool) bool {
+	switch status {
+	case 401, 403, 405:
+		return !unrouted
+	}
+	return status != 404
+}
+
+// Endpoint is a call's endpoint: its route's template, and the operation inside it when the product names one.
+func Endpoint(tmpl, op string) string {
+	if op == "" {
+		return tmpl
+	}
+	return tmpl + " " + op
+}
+
+// Failure is why a call failed, "" when it did not: the product's own name for it, else its status. The status alone
+// is not enough (a JSON-RPC error is answered 200). Only a call has one.
+func Failure(status int, err string) string {
+	switch {
+	case err != "":
+		return err
+	case status >= 400:
+		return "HTTP " + strconv.Itoa(status)
+	}
+	return ""
+}
 
 // fullDims keep every entry: closed key spaces the server derives (ISO codes, status classes, ParseUA's names).
 var fullDims = map[string]bool{"countries": true, "status": true, "clients": true}
 
 // idByAddr count addresses under every audience: their ids are the address keys already, they store no addrs.
-var idByAddr = map[string]bool{"networks": true, "probed": true, "status": true}
+var idByAddr = map[string]bool{"networks": true, "probed": true, "status": true, "endpoints": true, "accounts": true,
+	"failures": true, "agents": true}
 
 // otherBySub keep an Other row per sub: the dashboard filters them by it (events' sub=auto|custom).
 var otherBySub = map[string]bool{"events": true}
@@ -178,8 +212,9 @@ type hourKey struct {
 }
 
 type hourAcc struct {
-	events, views, actions, starts, requests, refused, errors int64
-	ids, addrs, server                                        set
+	events, views, actions, starts, requests, refused, errors, failed int64
+	ids, addrs, server, callers, accounts                             set
+	durations                                                         Hist
 }
 
 type listKey struct {
@@ -193,6 +228,7 @@ type entry struct {
 	sub       string
 	a, b      int64
 	ids, addr set
+	durations Hist
 }
 
 // addrAcc is one address key's sums in one part. A busy day has hundreds of thousands, most with one session or
@@ -262,11 +298,12 @@ type dayBuild struct {
 	keep      map[store.AggAddrKey]int64
 	keepSaved bool
 	clients   map[string][3]string
+	agents    map[string]string // classify.Client by user agent
 }
 
 func newDayBuild(site, day int64) *dayBuild {
 	return &dayBuild{site: site, day: day, hours: map[hourKey]*hourAcc{}, lists: map[listKey]*entry{},
-		addrs: map[store.AggAddrKey]*addrAcc{}, clients: map[string][3]string{}}
+		addrs: map[store.AggAddrKey]*addrAcc{}, clients: map[string][3]string{}, agents: map[string]string{}}
 }
 
 func sessionHash(ipKey string, part int, sid string) string {
@@ -327,7 +364,8 @@ func (d *dayBuild) prevSessions(ctx context.Context, q store.Queryer, noRaw, wri
 // read streams the day's rows once, in time order (id breaks a tie: the latest row is the one written last).
 func (d *dayBuild) read(ctx context.Context, db store.Queryer) error {
 	rows, err := query(ctx, db, `SELECT ts, source, kind, name, visitor, sid, ip, ip_key, ua, template, ref_host,
-		status, asn, country, cls FROM event WHERE site_id = ? AND ts >= ? AND ts < ? ORDER BY ts, id`,
+		status, asn, country, cls, dur_ms, account, op, err, unrouted FROM event WHERE site_id = ? AND ts >= ? AND ts < ?
+		ORDER BY ts, id`,
 		d.site, d.day*dayMS, (d.day+1)*dayMS)
 	if err != nil {
 		return err
@@ -336,7 +374,7 @@ func (d *dayBuild) read(ctx context.Context, db store.Queryer) error {
 	var e raw
 	for rows.Next() {
 		if err := rows.Scan(&e.ts, &e.source, &e.kind, &e.name, &e.visitor, &e.sid, &e.ip, &e.ipKey, &e.ua, &e.tmpl,
-			&e.refHost, &e.status, &e.asn, &e.country, &e.cls); err != nil {
+			&e.refHost, &e.status, &e.asn, &e.country, &e.cls, &e.dur, &e.account, &e.op, &e.err, &e.unrouted); err != nil {
 			return err
 		}
 		d.add(&e)
@@ -379,6 +417,16 @@ func (d *dayBuild) add(e *raw) {
 		h.server.add(e.ipKey)
 		if e.status >= 400 {
 			h.refused++
+		}
+		if Called(e.status, e.unrouted) {
+			h.durations.Add(e.dur, 1)
+			h.callers.add(e.ipKey)
+			if Failure(e.status, e.err) != "" {
+				h.failed++
+			}
+			if e.account != "" {
+				h.accounts.add(e.account)
+			}
 		}
 	}
 	if isErr {
@@ -474,6 +522,24 @@ func (d *dayBuild) addLists(e *raw, part int, browser, server, action, isErr boo
 		}
 		d.entry("errors", part, "", k, sub, 1, 0, actor, addr)
 	}
+	if server && Called(e.status, e.unrouted) {
+		var failed int64
+		reason := Failure(e.status, e.err)
+		if reason != "" {
+			failed = 1
+			d.entry("failures", part, "", reason, "", 1, 0, e.ipKey, "")
+		}
+		d.entry("endpoints", part, "", Endpoint(e.tmpl, e.op), e.op, 1, failed, e.ipKey, "").durations.Add(e.dur, 1)
+		name, ok := d.agents[e.ua]
+		if !ok {
+			name = classify.Client(e.ua)
+			d.agents[e.ua] = name
+		}
+		d.entry("agents", part, "", name, "", 1, failed, e.ipKey, "")
+		if e.account != "" {
+			d.entry("accounts", part, "", e.account, "", 1, failed, e.ipKey, "")
+		}
+	}
 	if server && e.status > 0 {
 		d.entry("status", part, "", strconv.Itoa(e.status/100)+"xx", "", 1, 0, "", "")
 	}
@@ -496,7 +562,7 @@ func (d *dayBuild) addLists(e *raw, part int, browser, server, action, isErr boo
 	}
 }
 
-func (d *dayBuild) entry(dim string, part int, parent, key, sub string, a, b int64, id, addr string) {
+func (d *dayBuild) entry(dim string, part int, parent, key, sub string, a, b int64, id, addr string) *entry {
 	k := listKey{dim, part, parent, key}
 	g := d.lists[k]
 	if g == nil {
@@ -512,6 +578,7 @@ func (d *dayBuild) entry(dim string, part int, parent, key, sub string, a, b int
 	if addr != "" {
 		g.addr.add(addr)
 	}
+	return g
 }
 
 // rows turns the day's sums into table rows, each list part cut to the union of its top k by every measure. The
@@ -523,7 +590,9 @@ func (d *dayBuild) rows(k int) store.AggBuild {
 	for hk, h := range d.hours {
 		out.Hours = append(out.Hours, store.AggHour{SiteID: d.site, Hour: hk.hour, Cls: hk.cls, Events: h.events,
 			Views: h.views, Actions: h.actions, Starts: h.starts, Requests: h.requests, Refused: h.refused,
-			Errors: h.errors, BrowserIDs: h.ids.sketch(), Addrs: h.addrs.sketch(), ServerAddrs: h.server.sketch()})
+			Errors: h.errors, BrowserIDs: h.ids.sketch(), Addrs: h.addrs.sketch(), ServerAddrs: h.server.sketch(),
+			Failed: h.failed, Durations: h.durations.Marshal(), Callers: h.callers.sketch(),
+			Accounts: h.accounts.sketch()})
 	}
 	d.hours = nil
 	slices.SortFunc(out.Hours, func(a, b store.AggHour) int {
@@ -613,7 +682,7 @@ func (d *dayBuild) listPart(g listKey, keys []listKey, k int) []store.AggList {
 		e := d.lists[lk]
 		if keep[lk] {
 			row := store.AggList{SiteID: d.site, Dim: g.dim, Day: d.day, Part: g.part, Parent: lk.parent, Key: lk.key,
-				Sub: e.sub, A: e.a, B: e.b, N: int64(len(e.ids)), IDs: e.ids.sketch()}
+				Sub: e.sub, A: e.a, B: e.b, N: int64(len(e.ids)), IDs: e.ids.sketch(), Durations: e.durations.Marshal()}
 			if g.part == 2 {
 				row.Addrs = e.addr.sketch()
 			}

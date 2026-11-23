@@ -137,6 +137,10 @@ Go types:
 | `browser_ids` | BLOB | yes |  |  |
 | `addrs` | BLOB | yes |  |  |
 | `server_addrs` | BLOB | yes |  |  |
+| `failed` | INTEGER | no | `0` |  |
+| `durations` | BLOB | yes |  |  |
+| `callers` | BLOB | yes |  |  |
+| `accounts` | BLOB | yes |  |  |
 
 Foreign keys:
 
@@ -170,6 +174,7 @@ Go types:
 | `addrs` | BLOB | yes |  |  |
 | `entries` | INTEGER | no | `0` |  |
 | `keys` | BLOB | yes |  |  |
+| `durations` | BLOB | yes |  |  |
 
 Foreign keys:
 
@@ -227,6 +232,9 @@ Go types:
 | `account` | TEXT | no | `''` |  |
 | `cls` | INTEGER | no | `0` |  |
 | `props` | TEXT | no | `'{}'` |  |
+| `op` | TEXT | no | `''` |  |
+| `err` | TEXT | no | `''` |  |
+| `unrouted` | INTEGER | no | `0` |  |
 
 Foreign keys:
 
@@ -349,6 +357,7 @@ In `internal/dash`. bucketStats is one bucket's overview figures, sums over even
 
 | Field | Type | Doc |
 | --- | --- | --- |
+| `missing` | `bool` | part of it holds no figures (plan.older) |
 | `visitors` | `uniq` | visitor ids (aud bots: address keys) |
 | `views` | `float64` |  |
 | `events` | `float64` |  |
@@ -356,6 +365,7 @@ In `internal/dash`. bucketStats is one bucket's overview figures, sums over even
 | `unknown` | `float64` | unknown automated requests, over all requests whatever aud |
 | `allReq` | `float64` |  |
 | `errors` | `float64` |  |
+| `api` | `apiStats` | a site of kind api only |
 
 ### dash.live
 
@@ -432,6 +442,10 @@ erDiagram
         BLOB browser_ids
         BLOB addrs
         BLOB server_addrs
+        INTEGER failed
+        BLOB durations
+        BLOB callers
+        BLOB accounts
     }
     agg_list {
         INTEGER site_id PK, FK
@@ -450,6 +464,7 @@ erDiagram
         BLOB addrs
         INTEGER entries
         BLOB keys
+        BLOB durations
     }
     agg_meta {
         TEXT key PK
@@ -480,6 +495,9 @@ erDiagram
         TEXT account
         INTEGER cls
         TEXT props
+        TEXT op
+        TEXT err
+        INTEGER unrouted
     }
     ingest_stat {
         INTEGER site_id PK

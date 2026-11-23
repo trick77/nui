@@ -179,8 +179,11 @@ func TestSourcesAgreeFeedGaps(t *testing.T) {
 			for _, s := range w.Sites {
 				for _, rng := range []string{"7d", "30d"} {
 					for _, ask := range [][]string{{"overview"}, {"classes"}, {"status"}, {"noteworthy", "findings", "all"},
-						{"list", "dim", "pages"}, {"list", "dim", "probed"}, {"list", "dim", "networks"}} {
-						if !s.Feed && (ask[0] == "classes" || ask[0] == "status" || len(ask) > 2 && ask[2] == "probed") {
+						{"list", "dim", "pages"}, {"list", "dim", "probed"}, {"list", "dim", "networks"},
+						{"list", "dim", "endpoints"}, {"list", "dim", "accounts"}, {"list", "dim", "failures"},
+						{"list", "dim", "agents"}} {
+						if !s.Feed && (ask[0] == "classes" || ask[0] == "status" || len(ask) > 2 &&
+							slices.Contains([]string{"probed", "endpoints", "accounts", "failures", "agents"}, ask[2])) {
 							continue // the server feed's panels
 						}
 						params := map[string]string{"site": s.Domain, "range": rng, "tz": "UTC"}
@@ -195,7 +198,7 @@ func TestSourcesAgreeFeedGaps(t *testing.T) {
 						// Requests stop with the history: the last three days froze empty.
 						var series []any
 						for _, x := range gb["tiles"].([]any) {
-							if m := x.(map[string]any); m["key"] == "requests" {
+							if m := x.(map[string]any); m["key"] == "requests" || m["key"] == "calls" {
 								series = m["series"].([]any)
 							}
 						}

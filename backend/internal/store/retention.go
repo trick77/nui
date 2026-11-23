@@ -482,7 +482,7 @@ func (s *Store) capFloor(ctx context.Context, sites map[string]Site, rawFrom map
 				+ octet_length(name) + octet_length(visitor) + octet_length(sid) + octet_length(ip) + 2 * octet_length(ip_key)
 				+ octet_length(ua) + octet_length(path) + octet_length(template) + octet_length(url) + octet_length(ref)
 				+ octet_length(ref_host) + octet_length(method) + octet_length(country) + octet_length(account)
-				+ octet_length(props)), 0) FROM event WHERE site_id = ? AND ts >= ? AND ts < ?`,
+				+ octet_length(op) + octet_length(err) + octet_length(props)), 0) FROM event WHERE site_id = ? AND ts >= ? AND ts < ?`,
 				st.ID, d*dayMS, (d+1)*dayMS).Scan(&n, &text); err != nil {
 				return 0, err
 			}

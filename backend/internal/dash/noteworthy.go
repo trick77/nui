@@ -33,6 +33,10 @@ const (
 	minProbes           = 3
 	minReferrerVisitors = 2
 	autoShareSwingPP    = 5.0
+	minCallsForTrend    = 100
+	failedSwingPP       = 5.0
+	minNewEndpointCalls = 5
+	minNewFailures      = 3
 )
 
 type noteItem struct {
@@ -50,7 +54,8 @@ type noteItem struct {
 
 // summable are the units whose figures add up across findings: counts of events. Visitors from several referrers
 // may be the same people, shares and changes do not add at all.
-var summable = map[string]bool{"requests from": true, "probes of": true, "times": true, "events refused": true}
+var summable = map[string]bool{"requests from": true, "probes of": true, "times": true, "events refused": true,
+	"calls of": true, "calls failed with": true}
 
 // mergedItem is one briefing line over several findings of one kind: the figure describes the group (the sum when
 // the findings count the same events, none otherwise), the detail names every finding with its own figure.
@@ -191,6 +196,9 @@ func (s *Server) briefingInput(ctx context.Context, q *query) (insight.BriefingI
 	closed := q.p.closedN()
 	tiles := s.tiles(q, cur, prev, cur[:closed], prev[:closed], gaps)
 	for _, t := range tiles {
+		if math.IsNaN(t.Value) { // no such figure: nothing to write about
+			continue
+		}
 		pv := ""
 		if t.Prev != nil {
 			pv = num(*t.Prev) + t.Unit
@@ -249,23 +257,55 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insigh
 						num(math.Abs(pp))), Score: 400 + math.Abs(pp), Target: insight.Target{Panel: "log",
 						Filter: map[string]string{"class": "unknown"}}})
 			}
+		case t.Key == "calls" && t.Change != nil && t.Change["pct"] != nil && t.Value >= minCallsForTrend:
+			if p := t.Change["pct"].(float64); math.Abs(p) >= trendPct {
+				add(insight.Fact{ID: "trend:calls:" + upDown(p), Kind: "automation", Figure: signed(p) + " %", Unit: "calls",
+					Text:  fmt.Sprintf("Calls %s against the %s (%s, was %s)", upDown(p), q.p.prevL, num(t.Value), num(*t.Prev)),
+					Score: 100 + math.Abs(p), Target: insight.Target{Panel: "endpoints"}})
+			}
+		case t.Key == "failed" && t.Change != nil && t.Change["pp"] != nil && enoughCalls(tiles):
+			if pp := t.Change["pp"].(float64); math.Abs(pp) >= failedSwingPP {
+				f := insight.Fact{ID: "trend:failed:" + upDown(pp), Kind: "problem", Figure: num(t.Value) + " %",
+					Unit: "of calls failed", Text: fmt.Sprintf("Failed share %s by %s pp", upDown(pp), num(math.Abs(pp))),
+					Score: 700 + pp, Target: insight.Target{Panel: "failures"}}
+				if pp < 0 { // good news, not a problem
+					f.Kind, f.Score = "automation", 100-pp
+				}
+				add(f)
+			}
 		}
 	}
 	// The lists' findings: the closed part of the daily span against the comparison's.
-	if err := s.newKeys(ctx, q, "referrers", minReferrerVisitors, func(k string, v int64) {
+	if q.api() {
+		if err := s.newKeys(ctx, q, "endpoints", minNewEndpointCalls, func(k string, v int64, g *keySums) {
+			if g.b == g.a && g.sub == "" { // nothing but failures of no known operation: somebody tries a path
+				return
+			}
+			add(insight.Fact{ID: "endpoint:" + k, Kind: "automation", Figure: num(float64(v)), Unit: "calls of",
+				Text: "New endpoint: " + truncate(k, 120), Score: 160 + float64(v), Target: insight.Target{Panel: "endpoints"}})
+		}); err != nil {
+			return nil, err
+		}
+		if err := s.newKeys(ctx, q, "failures", minNewFailures, func(k string, v int64, _ *keySums) {
+			add(insight.Fact{ID: "failure:" + k, Kind: "problem", Figure: num(float64(v)), Unit: "calls failed with",
+				Text: "New failure: " + k, Score: 950 + float64(v), Target: insight.Target{Panel: "failures"}})
+		}); err != nil {
+			return nil, err
+		}
+	} else if err := s.newKeys(ctx, q, "referrers", minReferrerVisitors, func(k string, v int64, _ *keySums) {
 		add(insight.Fact{ID: "ref:" + k, Kind: "people", Figure: num(float64(v)), Unit: "visitors from",
 			Text: "New referrer: " + k, Score: 150 + float64(v), Target: insight.Target{Panel: "referrers"}})
 	}); err != nil {
 		return nil, err
 	}
-	if err := s.newKeys(ctx, q, "errors", 1, func(k string, v int64) {
+	if err := s.newKeys(ctx, q, "errors", 1, func(k string, v int64, _ *keySums) {
 		add(insight.Fact{ID: "err:" + k, Kind: "problem", Figure: num(float64(v)), Unit: "times",
 			Text: "New error: " + truncate(k, 120), Score: 1000 + float64(v), Target: insight.Target{Panel: "errors"}})
 	}); err != nil {
 		return nil, err
 	}
 	if q.site.HasFeed {
-		if err := s.newKeys(ctx, q, "probed", minProbes, func(k string, v int64) {
+		if err := s.newKeys(ctx, q, "probed", minProbes, func(k string, v int64, _ *keySums) {
 			add(insight.Fact{ID: "probe:" + k, Kind: "automation", Figure: num(float64(v)), Unit: "probes of",
 				Text: "New probed path: " + k, Score: 500 + float64(v), Target: insight.Target{Panel: "probed"}})
 		}); err != nil {
@@ -302,9 +342,20 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insigh
 // closedPart is a window's closed part.
 func closedPart(w window) window { return closedWin(w.From, w.Closed) }
 
+// enoughCalls: both periods have the calls a share of them needs to say anything.
+func enoughCalls(tiles []tile) bool {
+	for _, t := range tiles {
+		if t.Key == "calls" {
+			return t.Value >= minCallsForTrend && t.Prev != nil && *t.Prev >= minCallsForTrend
+		}
+	}
+	return false
+}
+
 // newKeys reports the keys of a list dimension that have at least min in the closed part and nothing in the
-// comparison: not among its rows, and not maybe collapsed into one of its days' Other rows.
-func (s *Server) newKeys(ctx context.Context, q *query, dim string, minValue int64, fn func(string, int64)) error {
+// comparison: not among its rows, and not maybe collapsed into one of its days' Other rows. fn also gets the key's
+// sums.
+func (s *Server) newKeys(ctx context.Context, q *query, dim string, minValue int64, fn func(k string, v int64, g *keySums)) error {
 	pl, err := s.planOf(ctx, q)
 	if err != nil {
 		return err
@@ -324,12 +375,13 @@ func (s *Server) newKeys(ctx context.Context, q *query, dim string, minValue int
 	type kv struct {
 		k string
 		v int64
+		g *keySums
 	}
 	var out []kv
 	for k, g := range cur.m {
 		v := sc.figure(g)
 		if _, seen := prev.m[k]; !seen && !prev.other.hides(k) && v >= minValue && k != "" {
-			out = append(out, kv{k, v})
+			out = append(out, kv{k, v, g})
 		}
 	}
 	slices.SortFunc(out, func(a, b kv) int {
@@ -339,7 +391,7 @@ func (s *Server) newKeys(ctx context.Context, q *query, dim string, minValue int
 		return cmp.Compare(a.k, b.k)
 	})
 	for _, x := range out[:min(len(out), 10)] {
-		fn(x.k, x.v)
+		fn(x.k, x.v, x.g)
 	}
 	return nil
 }

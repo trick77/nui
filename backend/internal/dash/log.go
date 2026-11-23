@@ -15,6 +15,7 @@ import (
 	"github.com/trick77/ship/kit/ratelimit"
 	"github.com/trick77/ship/kit/version"
 
+	"github.com/trick77/stakeout/backend/internal/agg"
 	"github.com/trick77/stakeout/backend/internal/apix"
 	"github.com/trick77/stakeout/backend/internal/classify"
 	"github.com/trick77/stakeout/backend/internal/ingest"
@@ -34,6 +35,9 @@ type logRow struct {
 	What   string `json:"what"`
 	Client string `json:"client"`
 	Source string `json:"source"`
+	// Account and DurMS are a server request's, the account "" without one.
+	Account string `json:"account"`
+	DurMS   *int64 `json:"dur_ms"`
 }
 
 // handleLog is the raw event log, newest first, keyset-paginated on (ts, id): the time index walks it without a
@@ -69,6 +73,19 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 	if p := v.Get("path"); p != "" {
 		where = append(where, "(instr(template, ?) > 0 OR instr(path, ?) > 0 OR instr(name, ?) > 0)")
 		args = append(args, p, p, p)
+	}
+	// Exact: an account, an operation, a call's endpoint (a row of the endpoints list), a failure's reason (of the
+	// failures list).
+	for _, f := range []struct{ param, cond string }{{"account", "account = ?"}, {"op", "op = ?"},
+		{"endpoint", callWhere + " AND " + endpointSQL + " = ?"},
+		{"failure", callWhere + " AND " + failedSQL + " AND " + failureSQL + " = ?"}} {
+		if x := v.Get(f.param); x != "" {
+			where, args = append(where, f.cond), append(args, x)
+		}
+	}
+	// The calls among the events (an account's row of the accounts list).
+	if v.Get("calls") != "" {
+		where = append(where, callWhere)
 	}
 	if c := v.Get("class"); c != "" {
 		if !slices.Contains(classOrder, c) {
@@ -195,7 +212,8 @@ type cursorRow struct {
 
 // logRows reads up to limit log rows matching cond from table (event, pinned to an index or not), newest first.
 func (s *Server) logRows(ctx context.Context, table, cond string, args []any, limit int) ([]cursorRow, error) {
-	rows, err := s.query(ctx, `SELECT id, ts, ip, cls, source, kind, name, template, status, ua, `+vitalValue+`
+	rows, err := s.query(ctx, `SELECT id, ts, ip, cls, source, kind, name, template, status, ua, account, dur_ms, op,
+		err, `+vitalValue+`
 		FROM `+table+` WHERE `+cond+` ORDER BY ts DESC, id DESC LIMIT `+strconv.Itoa(limit), args...)
 	if err != nil {
 		return nil, err
@@ -207,13 +225,23 @@ func (s *Server) logRows(ctx context.Context, table, cond string, args []any, li
 		var ip, source, kind, name, tmpl, ua string
 		var cls, status int
 		var value sql.NullFloat64
-		if err := rows.Scan(&id, &ts, &ip, &cls, &source, &kind, &name, &tmpl, &status, &ua, &value); err != nil {
+		var account, op, failure string
+		var dur int64
+		if err := rows.Scan(&id, &ts, &ip, &cls, &source, &kind, &name, &tmpl, &status, &ua, &account, &dur, &op,
+			&failure, &value); err != nil {
 			return nil, err
 		}
-		what, k := describe(source, kind, name, tmpl, status)
+		what, k := describe(source, kind, name, agg.Endpoint(tmpl, op), status)
 		what = withValue(what, name, value)
-		out = append(out, cursorRow{row: logRow{T: iso(time.UnixMilli(ts)), Addr: ip, Class: classOf(cls), Kind: k,
-			What: what, Client: classify.Client(ua), Source: source}, at: cursor{ts, id}})
+		row := logRow{T: iso(time.UnixMilli(ts)), Addr: ip, Class: classOf(cls), Kind: k, What: what,
+			Client: classify.Client(ua), Source: source, Account: account}
+		if source == "server" {
+			row.DurMS = &dur
+			if failure != "" {
+				row.What += ", " + failure
+			}
+		}
+		out = append(out, cursorRow{row: row, at: cursor{ts, id}})
 	}
 	return out, rows.Err()
 }
