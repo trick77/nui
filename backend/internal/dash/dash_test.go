@@ -1042,10 +1042,10 @@ func TestVisitsAcrossBuckets(t *testing.T) {
 		return store.Event{SiteID: site.ID, TS: r.end.Add(-ago).UnixMilli(), Source: "browser", Kind: "page_view",
 			Visitor: "v1", SID: sid, IP: "192.0.2.40", IPKey: "192.0.2.40", Template: "/", Cls: store.ClsHuman}
 	}
-	// s1 runs from 12:50 to 13:10 UTC, across the 13:00 hour; s2 is a second visit; s3 crosses midnight in Zurich
-	// (23:00 UTC), where the 12-month range's day pieces meet.
+	// s1 runs from 12:50 to 13:10 UTC, across the 13:00 hour; s2 is a second visit; s3 crosses UTC midnight, where
+	// every range's day pieces meet.
 	evs := []store.Event{ev(40*time.Minute, "s1"), ev(20*time.Minute, "s1"), ev(5*time.Minute, "s2"),
-		ev(14*time.Hour+40*time.Minute, "s3"), ev(14*time.Hour+20*time.Minute, "s3")}
+		ev(13*time.Hour+40*time.Minute, "s3"), ev(13*time.Hour+20*time.Minute, "s3")}
 	if err := r.s.DB.InsertEvents(t.Context(), evs); err != nil {
 		t.Fatal(err)
 	}
@@ -1368,8 +1368,92 @@ func TestPeriod(t *testing.T) {
 	if p.labels[11] != "Mar" || p.Bounds[0].Month() != time.April || p.prevL != "prior 12 mo" {
 		t.Errorf("12mo %v", p.labels)
 	}
-	if newPeriod("30d", "off", now, time.UTC).Prev != nil {
+	// 12mo: the prior period is last year, both comparisons the same whole months, 29 February 2028 in the range.
+	leap := time.Date(2028, 11, 23, 12, 0, 0, 0, time.UTC)
+	prev, yoy := newPeriod("12mo", "prev", leap, time.UTC), newPeriod("12mo", "yoy", leap, time.UTC)
+	if *prev.prevWin != *yoy.prevWin || prev.prevWin.From != time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC) ||
+		prev.prevWin.Closed != time.Date(2027, 11, 1, 0, 0, 0, 0, time.UTC) {
+		t.Errorf("12mo: prev %+v, yoy %+v", *prev.prevWin, *yoy.prevWin)
+	}
+	if p := newPeriod("30d", "off", now, time.UTC); p.Prev != nil || p.prevWin != nil {
 		t.Error("off has a prev")
+	}
+	day := func(s string) time.Time { d, _ := time.Parse(time.DateOnly, s); return d }
+
+	// New York at 20:00 on 21 November is 01:00 UTC on the 22nd: 30d reads whole UTC days from 23 October to the
+	// 21st, closed, the 21st on as the open part; its buckets stay on local midnight, a whole hour.
+	ny, _ := time.LoadLocation("America/New_York")
+	nyNow := time.Date(2026, 11, 22, 1, 0, 0, 0, time.UTC)
+	p = newPeriod("30d", "prev", nyNow, ny)
+	if p.win != (window{day("2026-10-23"), day("2026-11-21"), day("2026-11-23")}) ||
+		*p.prevWin != (window{day("2026-09-23"), day("2026-10-22"), day("2026-10-22")}) ||
+		!p.Bounds[0].Equal(time.Date(2026, 10, 23, 4, 0, 0, 0, time.UTC)) || p.labels[29] != "21.11." {
+		t.Errorf("New York 30d: %+v %+v %v", p.win, p.prevWin, p.Bounds[0])
+	}
+	// 7d stays local and exact; against last year it reads whole days, 24h compares no list.
+	p = newPeriod("7d", "yoy", nyNow, ny)
+	if p.agg || !p.prevAgg || !p.win.From.Equal(time.Date(2026, 11, 15, 5, 0, 0, 0, time.UTC)) ||
+		*p.prevWin != (window{day("2025-11-15"), day("2025-11-21"), day("2025-11-21")}) {
+		t.Errorf("New York 7d yoy: %+v %+v", p.win, p.prevWin)
+	}
+	if p = newPeriod("24h", "yoy", nyNow, ny); p.prevWin != nil {
+		t.Errorf("24h yoy compares lists: %+v", p.prevWin)
+	}
+	// Kolkata, +5:30: an aggregate period's buckets move to the UTC hour before, its days are the local dates'.
+	kol, _ := time.LoadLocation("Asia/Kolkata")
+	p = newPeriod("30d", "yoy", time.Date(2026, 11, 22, 13, 30, 0, 0, time.UTC), kol)
+	if !p.Bounds[0].Equal(time.Date(2026, 10, 23, 18, 0, 0, 0, time.UTC)) ||
+		!p.Prev[1].Equal(time.Date(2025, 10, 24, 18, 0, 0, 0, time.UTC)) ||
+		p.win != (window{day("2026-10-24"), day("2026-11-22"), day("2026-11-23")}) ||
+		*p.prevWin != (window{day("2025-10-24"), day("2025-11-22"), day("2025-11-22")}) {
+		t.Errorf("Kolkata 30d: %v %v %+v %+v", p.Bounds[0], p.Prev[1], p.win, p.prevWin)
+	}
+	p = newPeriod("7d", "prev", time.Date(2026, 11, 22, 13, 30, 0, 0, time.UTC), kol)
+	if !p.Bounds[0].Equal(time.Date(2026, 11, 15, 18, 30, 0, 0, time.UTC)) {
+		t.Errorf("Kolkata 7d moved: %v", p.Bounds[0])
+	}
+	// Zurich just after local midnight: today's date has not begun in UTC, so the closed part ends at the UTC day
+	// now is in, and the comparison is as long.
+	p = newPeriod("30d", "prev", time.Date(2026, 11, 22, 23, 30, 0, 0, time.UTC), zh)
+	if p.win != (window{day("2026-10-25"), day("2026-11-22"), day("2026-11-23")}) ||
+		*p.prevWin != (window{day("2026-09-25"), day("2026-10-23"), day("2026-10-23")}) {
+		t.Errorf("Zurich after midnight: %+v %+v", p.win, p.prevWin)
+	}
+	// East of UTC after local midnight, every range and comparison: the comparison's closed part is as long as the
+	// current one, in days (7d: local ones), in hours at 24h; 24h against last year compares no list.
+	tokyo, _ := time.LoadLocation("Asia/Tokyo")
+	days := func(w window) int { return int(w.Closed.Sub(w.From).Round(time.Hour) / time.Hour) }
+	for _, z := range []struct {
+		loc *time.Location
+		now time.Time
+	}{{zh, time.Date(2026, 11, 22, 23, 30, 0, 0, time.UTC)}, {tokyo, time.Date(2026, 11, 22, 16, 0, 0, 0, time.UTC)}} {
+		for _, rng := range []string{"24h", "7d", "30d"} {
+			for _, cmp := range []string{"prev", "yoy"} {
+				p := newPeriod(rng, cmp, z.now, z.loc)
+				if rng == "24h" && cmp == "yoy" {
+					if p.prevWin != nil {
+						t.Errorf("%s 24h yoy compares lists", z.loc)
+					}
+					continue
+				}
+				// Hours, so a 23- or 25-hour local day counts as the day it is.
+				cur, prev := (days(p.win)+12)/24, (days(*p.prevWin)+12)/24
+				if rng == "24h" {
+					cur, prev = days(p.win), days(*p.prevWin)
+				}
+				if cur != prev || cur == 0 {
+					t.Errorf("%s %s %s: %d closed against %d: %+v %+v", z.loc, rng, cmp, cur, prev, p.win, *p.prevWin)
+				}
+			}
+		}
+	}
+	p = newPeriod("7d", "yoy", time.Date(2026, 11, 22, 23, 30, 0, 0, time.UTC), zh)
+	if *p.prevWin != (window{day("2025-11-17"), day("2025-11-23"), day("2025-11-23")}) {
+		t.Errorf("Zurich 7d yoy after midnight: %+v", *p.prevWin)
+	}
+	if ps := pieces(time.Date(2026, 10, 1, 22, 0, 0, 0, time.UTC), time.Date(2026, 10, 3, 1, 0, 0, 0, time.UTC)); len(ps) != 3 ||
+		!ps[0][1].Equal(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)) || !ps[2][0].Equal(time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("pieces not cut at UTC midnight: %v", ps)
 	}
 	for _, tt := range []struct {
 		c     change

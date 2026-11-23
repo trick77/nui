@@ -377,6 +377,31 @@ func TestExact_LatestClient(t *testing.T) {
 	}
 }
 
+// From 30 days on, the split counts every client a visitor used (days do not add up to "the latest"), shares of the
+// sum; 7d keeps the latest.
+func TestExact_EveryClient(t *testing.T) {
+	r, insert := exactRig(t)
+	const chrome, firefox = "Mozilla/5.0 (Macintosh) Chrome/142 Safari/537.36", "Mozilla/5.0 (Windows) Firefox/140"
+	insert(pageLoad(at("2026-11-19T10:00:00Z"), "a", "192.0.2.9", "CH", chrome, 0)...)
+	insert(pageLoad(at("2026-11-20T10:00:00Z"), "a", "192.0.2.9", "CH", firefox, 0)...)
+	insert(pageLoad(at("2026-11-20T11:00:00Z"), "b", "192.0.2.8", "CH", chrome, 0)...)
+	browsers := func(rng string) map[string][2]float64 {
+		_, c := r.get(t, "clients", p(feedSite, "range", rng))
+		out := map[string][2]float64{}
+		for _, x := range c["browsers"].([]any) {
+			m := x.(map[string]any)
+			out[m["key"].(string)] = [2]float64{num64(m["value"]), num64(m["share"])}
+		}
+		return out
+	}
+	if got := browsers("30d"); len(got) != 2 || got["Chrome"] != [2]float64{2, 67} || got["Firefox"] != [2]float64{1, 33} {
+		t.Errorf("30d browsers %v", got)
+	}
+	if got := browsers("7d"); len(got) != 2 || got["Chrome"] != [2]float64{1, 50} || got["Firefox"] != [2]float64{1, 50} {
+		t.Errorf("7d browsers %v", got)
+	}
+}
+
 // A person types a client with ordinary spaces, the table shows it with en spaces: any spacing finds it.
 func TestExact_SearchFoldsSpaces(t *testing.T) {
 	r, insert := exactRig(t)

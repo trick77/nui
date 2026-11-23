@@ -136,26 +136,39 @@ func (s *Server) classOne(ctx context.Context, site int64, key string, from, to 
 	return ci, nil
 }
 
-// classes is each key's latest stored class and reasons within the range.
+// classDays is the days one read of actor_class spans: a year of a busy site's rows in one statement is a long read.
+const classDays = 31
+
+// classes is each key's latest stored class and reasons within the range, read a month at a time, oldest first.
 func (s *Server) classes(ctx context.Context, site int64, from, to time.Time) (map[string]classInfo, error) {
+	out := map[string]classInfo{}
+	last := ms(to) / dayMS
+	for lo := ms(from) / dayMS; lo <= last; lo += classDays {
+		if err := s.classPiece(ctx, site, lo, min(lo+classDays-1, last), out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (s *Server) classPiece(ctx context.Context, site, first, last int64, out map[string]classInfo) error {
 	rows, err := s.query(ctx, `SELECT ip_key, class, reasons FROM actor_class
-		WHERE site_id = ? AND day >= ? AND day <= ? ORDER BY day`, site, ms(from)/dayMS, ms(to)/dayMS)
+		WHERE site_id = ? AND day >= ? AND day <= ? ORDER BY day`, site, first, last)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer func() { _ = rows.Close() }()
-	out := map[string]classInfo{}
 	for rows.Next() {
 		var k, c, reasons string
 		if err := rows.Scan(&k, &c, &reasons); err != nil {
-			return nil, err
+			return err
 		}
 		ci := classInfo{class: c}
 		_ = json.Unmarshal([]byte(reasons), &ci.signals)
 		ci.signals = respace(ci.signals)
 		out[k] = ci
 	}
-	return out, rows.Err()
+	return rows.Err()
 }
 
 const dayMS = int64(24 * time.Hour / time.Millisecond)
@@ -223,7 +236,7 @@ func (s *Server) handleVisitors(w http.ResponseWriter, r *http.Request, q *query
 	}
 	// The first page freezes the span [range start, now); every later page reads the same span (its cursor says
 	// which) from the same snapshot, so rows neither move between pages nor repeat.
-	span := visitorCursor{From: ms(q.p.From()), To: ms(q.p.Now)}
+	span := visitorCursor{From: ms(q.p.win.From), To: ms(q.p.Now)}
 	if after != nil {
 		span.From, span.To = after.From, after.To
 	}
@@ -1150,13 +1163,13 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		apix.Error(w, http.StatusNotFound, "no events from this address in the range")
 		return
 	}
-	ci, err := s.classOne(ctx, q.site.ID, key, q.p.From(), q.p.Now)
+	ci, err := s.classOne(ctx, q.site.ID, key, q.p.win.From, q.p.Now)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	row := s.visitorRow(q, a, ci)
-	tr, err := s.trail(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()], before)
+	tr, err := s.trail(ctx, q.site.ID, key, q.p.win.From, q.p.win.End, before)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -1166,7 +1179,7 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		s.fail(w, r, err)
 		return
 	}
-	counts, tmpls, err := s.actions(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()])
+	counts, tmpls, err := s.actions(ctx, q.site.ID, key, q.p.win.From, q.p.win.End)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -1184,12 +1197,12 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		// The reading reads the newest trail page, whatever page the user is on.
 		latest := tr
 		if before.ts > 0 {
-			if latest, err = s.trail(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()], cursor{}); err != nil {
+			if latest, err = s.trail(ctx, q.site.ID, key, q.p.win.From, q.p.win.End, cursor{}); err != nil {
 				s.fail(w, r, err)
 				return
 			}
 		}
-		if row.values, err = s.variety(ctx, q.site.ID, key, q.p.From(), q.p.Bounds[q.p.n()], counts, tmpls); err != nil {
+		if row.values, err = s.variety(ctx, q.site.ID, key, q.p.win.From, q.p.win.End, counts, tmpls); err != nil {
 			s.fail(w, r, err)
 			return
 		}
@@ -1225,7 +1238,7 @@ func (s *Server) actorOne(ctx context.Context, q *query, key string) (*actor, er
 		COALESCE(SUM(source = 'server' AND status >= 400), 0), COALESCE(SUM(source = 'browser' AND `+eventKinds+`), 0),
 		MIN(ts), MAX(ts), COALESCE(SUM(source = 'browser'), 0) > 0, COALESCE(SUM(cls = 1), 0) > 0
 		FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?`,
-		q.site.ID, key, ms(q.p.From()), ms(q.p.Bounds[q.p.n()])).Scan(&a.visits, &a.views, &a.requests, &a.refused,
+		q.site.ID, key, ms(q.p.win.From), ms(q.p.win.End)).Scan(&a.visits, &a.views, &a.requests, &a.refused,
 		&a.events, &first, &last, &a.browser, &a.human)
 	if err != nil || last == nil {
 		return nil, err
@@ -1242,7 +1255,7 @@ func (s *Server) actorOne(ctx context.Context, q *query, key string) (*actor, er
 // hours is the actor's activity per hour of the viewer's day, as levels 0-4, and its distinct addresses.
 func (s *Server) hours(ctx context.Context, q *query, key string) ([]int, int64, error) {
 	rows, err := s.query(ctx, `SELECT ts / 3600000, COUNT(*) FROM event
-		WHERE site_id = ? AND ip_key = ? AND ts >= ? GROUP BY 1`, q.site.ID, key, ms(q.p.From()))
+		WHERE site_id = ? AND ip_key = ? AND ts >= ? GROUP BY 1`, q.site.ID, key, ms(q.p.win.From))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1265,7 +1278,7 @@ func (s *Server) hours(ctx context.Context, q *query, key string) ([]int, int64,
 	}
 	var addrs int64
 	err = s.row(ctx, `SELECT COUNT(DISTINCT ip) FROM event WHERE site_id = ? AND ip_key = ?
-		AND ts >= ?`, q.site.ID, key, ms(q.p.From())).Scan(&addrs)
+		AND ts >= ?`, q.site.ID, key, ms(q.p.win.From)).Scan(&addrs)
 	return levels, addrs, err
 }
 
@@ -1277,7 +1290,7 @@ func (s *Server) related(ctx context.Context, q *query, key, class string) ([]st
 		return []string{}, nil
 	}
 	rows, err := s.query(ctx, `SELECT DISTINCT ip_key FROM actor_class WHERE site_id = ? AND day >= ?
-		AND class = ? AND ip_key != ? LIMIT 5000`, q.site.ID, ms(q.p.From())/dayMS, class, key)
+		AND class = ? AND ip_key != ? LIMIT 5000`, q.site.ID, ms(q.p.win.From)/dayMS, class, key)
 	if err != nil {
 		return nil, err
 	}
