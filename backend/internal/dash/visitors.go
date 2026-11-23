@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"math"
 	"net/http"
 	"net/netip"
@@ -483,12 +484,14 @@ func (s *Server) handleVisitors(w http.ResponseWriter, r *http.Request, q *query
 // visitorRows is the table over a span: every actor, filtered and sorted (by the sort value, then the key).
 func (s *Server) visitorRows(ctx context.Context, q *query, span visitorCursor, sortBy, class, needle string) ([]visitorRow, error) {
 	from, to := time.UnixMilli(span.From), time.UnixMilli(span.To)
+	// The classes beside the sums: they need nothing of each other.
+	var cls map[string]classInfo
+	var clsErr error
+	var wg sync.WaitGroup
+	wg.Go(func() { cls, clsErr = s.classes(ctx, q.site.ID, from, to) })
 	all, err := s.actors(ctx, q, from, to)
-	if err != nil {
-		return nil, err
-	}
-	cls, err := s.classes(ctx, q.site.ID, from, to)
-	if err != nil {
+	wg.Wait()
+	if err = cmp.Or(err, clsErr); err != nil {
 		return nil, err
 	}
 	labelled, err := s.labelMatches(ctx, needle)
@@ -496,8 +499,9 @@ func (s *Server) visitorRows(ctx context.Context, q *query, span visitorCursor, 
 		return nil, err
 	}
 	rows := make([]visitorRow, 0, len(all))
+	names := map[string]string{}
 	for _, a := range all {
-		row := s.visitorRow(q, a, cls[a.key])
+		row := s.visitorRow(q, a, cls[a.key], names)
 		if class != "" && row.Class != class {
 			continue
 		}
@@ -685,8 +689,20 @@ func actorClass(a *actor) string {
 	return classOf(a.cls)
 }
 
-func (s *Server) visitorRow(q *query, a *actor, ci classInfo) visitorRow {
-	row := visitorRow{Key: a.key, Display: a.key, Country: a.country, Client: classify.Client(a.ua),
+// clientName is classify.Client, a variable for the tests that count its calls.
+var clientName = classify.Client
+
+// visitorRow is an actor's table row. names holds the client name per user agent already derived (nil: none kept):
+// classify.Client's patterns took about 40 µs a call, 2.3 s for a year's 59k rows sharing 18 user agents.
+func (s *Server) visitorRow(q *query, a *actor, ci classInfo, names map[string]string) visitorRow {
+	client, ok := names[a.ua]
+	if !ok {
+		client = clientName(a.ua)
+		if names != nil {
+			names[a.ua] = client
+		}
+	}
+	row := visitorRow{Key: a.key, Display: a.key, Country: a.country, Client: client,
 		Views: a.views, Events: a.events, Last: iso(time.UnixMilli(a.last)), Signals: ci.signals,
 		Class: ci.class, ua: a.ua}
 	if row.Class == "" {
@@ -719,10 +735,26 @@ func (s *Server) readRows(ctx context.Context, q *query, span visitorCursor, row
 	}
 	// What it does and the reading are raw events: the span from detail_since on.
 	since := pl.rawFrom(from)
+	// Every row's month windows share one limiter: the rows' actions read side by side, the rest in turn.
+	type acts struct {
+		counts map[string]int64
+		tmpls  map[string]string
+		err    error
+	}
+	got := make([]acts, len(rows))
+	lim := make(limiter, rawReaders)
+	var wg sync.WaitGroup
+	for i := range rows {
+		wg.Go(func() {
+			a := &got[i]
+			a.counts, a.tmpls, a.err = s.actions(ctx, lim, q.site.ID, rows[i].Key, since, to, nil)
+		})
+	}
+	wg.Wait()
 	ins := make([]insight.ReadingInput, 0, len(rows))
 	shown := map[string]map[string]string{}
 	for i := range rows {
-		counts, tmpls, err := s.actions(ctx, q.site.ID, rows[i].Key, since, to)
+		counts, tmpls, err := got[i].counts, got[i].tmpls, got[i].err
 		if err != nil {
 			continue
 		}
@@ -747,9 +779,9 @@ func (s *Server) readRows(ctx context.Context, q *query, span visitorCursor, row
 	if s.Model == nil || !s.Model.Configured() {
 		return
 	}
-	got := s.Model.Readings(ctx, ins, false)
+	readings := s.Model.Readings(ctx, ins, false)
 	for i := range rows {
-		if rd, ok := got[rows[i].Key]; ok && rd.Summary != "" {
+		if rd, ok := readings[rows[i].Key]; ok && rd.Summary != "" {
 			if _, ok := resolve(rd, shown[rows[i].Key]); ok {
 				sum := rd.Summary
 				rows[i].Does.Gen = &sum
@@ -799,35 +831,106 @@ func resolve(rd insight.Reading, facts map[string]string) ([]string, bool) {
 // a month of a busy scraper is still a long read.
 const actorSpan = 31 * 24 * time.Hour
 
-// actions counts an actor's events per action ("GET /x → 401", "view /a") over the whole span, and names each
-// server request action's template.
-func (s *Server) actions(ctx context.Context, site int64, key string, from, to time.Time) (map[string]int64, map[string]string, error) {
-	out, tmpls := map[string]int64{}, map[string]string{}
-	for _, win := range windows(ms(from), ms(to), actorSpan) {
-		rows, err := s.query(ctx, `SELECT source, kind, name, template, status, COUNT(*) FROM event
-			WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ? GROUP BY source, kind, name, template, status`,
-			site, key, win[0], win[1])
+// byActor pins a key's events read newest first to the actor index. Unpinned, the planner walks the site's time
+// index (it holds the same order) and tests every event of the span for the key: a year for a key with few events
+// in it took 1.3 s warm, a month of the site per variety read.
+const byActor = "INDEXED BY event_site_actor"
+
+// rawReaders is how many statements over single actors' month windows one request runs side by side. A year of a
+// busy scraper is 350k events, each a lookup into the event table: the table page's actions one window after another
+// took 1.6 s warm and 22 of a cold call's 26 s. Cold, the reads wait on the disk: 6 side by side took 5.1-6.3 s, 8
+// 4.9-5.3 s, 12 3.7 s (warm alike); each holds a connection of the pool.
+const rawReaders = 8
+
+// limiter bounds a request's month-window statements run side by side (each holds a connection of the pool). Not
+// the request's every statement: the detail reads its hours beside them, so it holds up to rawReaders+1 connections;
+// the table's classes run beside its sums, before the windows.
+type limiter chan struct{}
+
+// each runs f(0) … f(n-1) side by side, as many at a time as lim allows, and returns the first error by index.
+func (lim limiter) each(n int, f func(i int) error) error {
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			lim <- struct{}{}
+			defer func() { <-lim }()
+			errs[i] = f(i)
+		})
+	}
+	wg.Wait()
+	for _, err := range errs {
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
+	}
+	return nil
+}
+
+// actions counts an actor's events per action ("GET /x → 401", "view /a") over the whole span, and names each
+// server request action's template. The month windows are independent statements, read side by side under lim.
+// addrs, when not nil, is set to the key's distinct addresses: the same lookups into the event table (the actor index
+// holds no address), so one pass, not a second one (a busy scraper's year: 0.37 s warm).
+func (s *Server) actions(ctx context.Context, lim limiter, site int64, key string, from, to time.Time,
+	addrs *int64) (map[string]int64, map[string]string, error) {
+	type part struct {
+		whats []string
+		ns    []int64
+		tmpls map[string]string
+		ips   []string
+	}
+	cols := "source, kind, name, template, status"
+	if addrs != nil {
+		cols += ", ip"
+	}
+	wins := windows(ms(from), ms(to), actorSpan)
+	parts := make([]part, len(wins))
+	err := lim.each(len(wins), func(i int) error {
+		p := &parts[i]
+		p.tmpls = map[string]string{}
+		rows, err := s.query(ctx, `SELECT `+cols+`, COUNT(*) FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ?
+			AND ts < ? GROUP BY `+cols, site, key, wins[i][0], wins[i][1])
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
 		for rows.Next() {
-			var source, kind, name, tmpl string
+			var source, kind, name, tmpl, ip string
 			var status int
 			var n int64
-			if err := rows.Scan(&source, &kind, &name, &tmpl, &status, &n); err != nil {
-				_ = rows.Close()
-				return nil, nil, err
+			dest := []any{&source, &kind, &name, &tmpl, &status, &n}
+			if addrs != nil {
+				dest = []any{&source, &kind, &name, &tmpl, &status, &ip, &n}
+			}
+			if err := rows.Scan(dest...); err != nil {
+				return err
 			}
 			what, _ := describe(source, kind, name, tmpl, status)
-			out[what] += n
+			p.whats, p.ns = append(p.whats, what), append(p.ns, n)
 			if source == "server" { // a request's action is its template and status: one template each
-				tmpls[what] = tmpl
+				p.tmpls[what] = tmpl
+			}
+			if addrs != nil {
+				p.ips = append(p.ips, ip)
 			}
 		}
-		_ = rows.Close()
-		if err := rows.Err(); err != nil {
-			return nil, nil, err
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	out, tmpls := map[string]int64{}, map[string]string{}
+	var ips []string
+	for _, p := range parts {
+		for j, what := range p.whats {
+			out[what] += p.ns[j]
 		}
+		maps.Copy(tmpls, p.tmpls)
+		ips = append(ips, p.ips...)
+	}
+	if addrs != nil {
+		slices.Sort(ips)
+		*addrs = int64(len(slices.Compact(ips)))
 	}
 	return out, tmpls, nil
 }
@@ -856,8 +959,8 @@ func (s *Server) variety(ctx context.Context, site int64, key string, from, to t
 	if span := to.Add(-actorSpan); span.After(from) {
 		from = span // the newest month at most: one statement on the actor index
 	}
-	rows, err := s.query(ctx, `SELECT path FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?
-		AND source = 'server' AND template = ? ORDER BY ts DESC LIMIT `+strconv.Itoa(valuesSample), site, key,
+	rows, err := s.query(ctx, `SELECT path FROM event `+byActor+` WHERE site_id = ? AND ip_key = ? AND ts >= ?
+		AND ts < ? AND source = 'server' AND template = ? ORDER BY ts DESC LIMIT `+strconv.Itoa(valuesSample), site, key,
 		ms(from), ms(to), tmpl)
 	if err != nil {
 		return valueFact{}, err
@@ -1062,7 +1165,7 @@ func (s *Server) trail(ctx context.Context, site int64, key string, from, to tim
 	// One event past the bound: whether more follow, and whether the last run goes on into them.
 	limit := maxTrailEvents
 	rows, err := s.query(ctx, `SELECT id, ts, source, kind, name, template, status, `+vitalValue+` FROM event
-		WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?`+cond+` ORDER BY ts DESC, id DESC LIMIT `+
+		`+byActor+` WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?`+cond+` ORDER BY ts DESC, id DESC LIMIT `+
 		strconv.Itoa(limit+1), args...)
 	if err != nil {
 		return tr, err
@@ -1385,7 +1488,7 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		s.fail(w, r, err)
 		return
 	}
-	row := s.visitorRow(q, a, ci)
+	row := s.visitorRow(q, a, ci, nil)
 	// The sums cover the range; the trail, the hours, the addresses, the actions and the reading are raw events,
 	// which reach back to detail_since.
 	pl, err := s.planOf(ctx, q)
@@ -1399,13 +1502,15 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		s.fail(w, r, err)
 		return
 	}
-	hours, addrs, err := s.hours(ctx, q, key, since, q.p.win.End)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	counts, tmpls, err := s.actions(ctx, q.site.ID, key, since, q.p.win.End)
-	if err != nil {
+	// The hours beside the actions and addresses.
+	var hours []int
+	var addrs int64
+	var hoursErr error
+	var wg sync.WaitGroup
+	wg.Go(func() { hours, hoursErr = s.hours(ctx, q, key, since, q.p.win.End) })
+	counts, tmpls, err := s.actions(ctx, make(limiter, rawReaders), q.site.ID, key, since, q.p.win.End, &addrs)
+	wg.Wait()
+	if err = cmp.Or(hoursErr, err); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -1478,7 +1583,7 @@ func (s *Server) readingRow(ctx context.Context, q *query, row visitorRow, a *ac
 	if err != nil || ra == nil {
 		return row, a, err
 	}
-	rr := s.visitorRow(q, ra, ci)
+	rr := s.visitorRow(q, ra, ci, nil)
 	rr.Class, rr.Signals = row.Class, row.Signals
 	return rr, ra, nil
 }
@@ -1683,20 +1788,20 @@ func (s *Server) actorDays(ctx context.Context, q *query, key string, parts []ac
 	return out, nil
 }
 
-// hours is the actor's activity per hour of the viewer's day over [from, to), as levels 0-4, and its distinct
-// addresses.
-func (s *Server) hours(ctx context.Context, q *query, key string, from, to time.Time) ([]int, int64, error) {
+// hours is the actor's activity per hour of the viewer's day over [from, to), as levels 0-4: index only, one
+// statement.
+func (s *Server) hours(ctx context.Context, q *query, key string, from, to time.Time) ([]int, error) {
 	rows, err := s.query(ctx, `SELECT ts / 3600000, COUNT(*) FROM event
 		WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ? GROUP BY 1`, q.site.ID, key, ms(from), ms(to))
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	counts := make([]int64, 24)
 	for rows.Next() {
 		var h, n int64
 		if err := rows.Scan(&h, &n); err != nil {
 			_ = rows.Close()
-			return nil, 0, err
+			return nil, err
 		}
 		counts[time.Unix(h*3600, 0).In(q.loc).Hour()] += n
 	}
@@ -1708,10 +1813,7 @@ func (s *Server) hours(ctx context.Context, q *query, key string, from, to time.
 			levels[i] = int(math.Ceil(float64(n) / float64(top) * 4))
 		}
 	}
-	var addrs int64
-	err = s.row(ctx, `SELECT COUNT(DISTINCT ip) FROM event WHERE site_id = ? AND ip_key = ?
-		AND ts >= ? AND ts < ?`, q.site.ID, key, ms(from), ms(to)).Scan(&addrs)
-	return levels, addrs, err
+	return levels, nil
 }
 
 // related are other keys of the same class in the same network block (/24, /48) within the range: the operator's
