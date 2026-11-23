@@ -163,6 +163,30 @@ func TestAggDayStates(t *testing.T) {
 		t.Errorf("next day not requeued: %+v", d)
 	}
 
+	// Retention cuts day+1 after a build read it: the build's rows are its whole raw, written but not clean; with the
+	// raw gone the job clears them to stand.
+	if err := st.InsertEvents(t.Context(), []Event{{SiteID: id, TS: (day+1)*dayMS + 1000, Source: "server",
+		Kind: "request", IP: "192.0.2.1", IPKey: "192.0.2.1"}}); err != nil {
+		t.Fatal(err)
+	}
+	pre = dayState(t, st, id, day+1)
+	if _, err := st.deleteEvents(t.Context(), `site_id = ? AND ts < ?`, id, (day+2)*dayMS); err != nil {
+		t.Fatal(err)
+	}
+	if d := dayState(t, st, id, day+1); d.Raw || d.Version != pre.Version+1 {
+		t.Errorf("a cut day's version did not move: %+v", d)
+	}
+	if clean, err := st.WriteAggDay(t.Context(), AggBuild{Site: id, Day: day + 1, Version: pre.Version,
+		Hours: []AggHour{{Hour: (day + 1) * 24, Cls: 1, Events: 9}}}); err != nil || clean {
+		t.Fatalf("write after a cut: clean %v, %v", clean, err)
+	}
+	if err := st.ClearAggDirty(t.Context(), id, day+1); err != nil {
+		t.Fatal(err)
+	}
+	if d := dayState(t, st, id, day+1); d.Dirty != AggClean || !d.Frozen {
+		t.Errorf("a cut day's complete rows do not stand: %+v", d)
+	}
+
 	// A write cut short (a shutdown) after its first chunk: AggWriting, part of its rows.
 	if err := st.BeginAggDay(t.Context(), id, day+2); err != nil {
 		t.Fatal(err)
@@ -186,13 +210,25 @@ func TestAggDayStates(t *testing.T) {
 	if d := dayState(t, st, id, day+2); d.Dirty != AggWriting || written == 0 || written >= 4000 {
 		t.Fatalf("a write cut short: %+v, %d rows", d, written)
 	}
-	// A raw write keeps the mark.
+	// A raw write keeps the mark; a cut then makes the day unrebuildable, and the clear leaves it out of reading.
 	if err := st.InsertEvents(t.Context(), []Event{{SiteID: id, TS: (day+2)*dayMS + 1000, Source: "server",
 		Kind: "request", IP: "192.0.2.1", IPKey: "192.0.2.1"}}); err != nil {
 		t.Fatal(err)
 	}
 	if d := dayState(t, st, id, day+2); d.Dirty != AggWriting {
 		t.Errorf("a raw write cleared the write mark: %+v", d)
+	}
+	if _, err := st.deleteEvents(t.Context(), `site_id = ? AND ts < ?`, id, (day+3)*dayMS); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ClearAggDirty(t.Context(), id, day+2); err != nil {
+		t.Fatal(err)
+	}
+	if d := dayState(t, st, id, day+2); d.Dirty != AggWriting || d.Raw {
+		t.Errorf("partial rows cleared to clean: %+v", d)
+	}
+	if _, ok, err := st.OldestEventDay(t.Context(), id); ok || err != nil {
+		t.Errorf("oldest day without events: %v, %v", ok, err)
 	}
 }
 

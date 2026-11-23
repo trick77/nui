@@ -49,9 +49,10 @@ func (s *Store) Prune(ctx context.Context, before time.Time, maxBytes int64) (in
 	return total, s.Vacuum(ctx)
 }
 
-// PruneAge deletes what is older than before.
+// PruneAge deletes what is older than before. Events go by whole UTC days (the cutoff floored to midnight): an
+// aggregate day is built from all of its raw or none of it.
 func (s *Store) PruneAge(ctx context.Context, before time.Time) (int64, error) {
-	cut := before.UnixMilli()
+	cut := before.UnixMilli() / dayMS * dayMS
 	var total int64
 	// Per site: event_site_ts finds the old rows; ts alone has no index and would scan the table.
 	sites, err := s.Sites(ctx)
@@ -107,13 +108,11 @@ func (s *Store) EnforceCap(ctx context.Context, maxBytes int64) (int64, error) {
 		if oldest < 0 {
 			break
 		}
-		res, err := s.DB.ExecContext(ctx, `DELETE FROM event WHERE id IN (SELECT id FROM event WHERE site_id = ?
-			ORDER BY ts LIMIT ?)`, site, retentionChunk)
+		n, err := s.deleteEvents(ctx, `site_id = ? ORDER BY ts`, site)
+		total += n
 		if err != nil {
 			return total, err
 		}
-		n, _ := res.RowsAffected()
-		total += n
 		if !run.Sleep(ctx, retentionYield) {
 			return total, ctx.Err()
 		}
@@ -177,14 +176,11 @@ func (s *Store) Vacuum(ctx context.Context) error {
 func (s *Store) deleteChunks(ctx context.Context, where string, args ...any) (int64, error) {
 	var total int64
 	for {
-		//nolint:gosec // where is this file's own constant; values are bound
-		res, err := s.DB.ExecContext(ctx, `DELETE FROM event WHERE id IN (SELECT id FROM event WHERE `+where+
-			` LIMIT `+strconv.Itoa(retentionChunk)+`)`, args...)
+		n, err := s.deleteEvents(ctx, where, args...)
+		total += n
 		if err != nil {
 			return total, err
 		}
-		n, _ := res.RowsAffected()
-		total += n
 		if n < retentionChunk {
 			return total, nil
 		}
@@ -192,6 +188,45 @@ func (s *Store) deleteChunks(ctx context.Context, where string, args ...any) (in
 			return total, ctx.Err()
 		}
 	}
+}
+
+// deleteEvents deletes one chunk of the events matching where and, in the same transaction, marks every site-day it
+// deleted from as without raw (raw = 0, the row made if missing) and bumps its version: the aggregate job never
+// builds such a day, a build that read it before finds its version moved, so a half-deleted day cannot replace
+// figures built from all of it, and the dashboard stops reading its raw.
+func (s *Store) deleteEvents(ctx context.Context, where string, args ...any) (int64, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	//nolint:gosec // where is this file's own constant; values are bound
+	rows, err := tx.QueryContext(ctx, `DELETE FROM event WHERE id IN (SELECT id FROM event WHERE `+where+
+		` LIMIT `+strconv.Itoa(retentionChunk)+`) RETURNING site_id, ts`, args...)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	days := map[[2]int64]bool{}
+	for rows.Next() {
+		var site, ts int64
+		if err := rows.Scan(&site, &ts); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		n++
+		days[[2]int64{site, ts / dayMS}] = true
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	for d := range days {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO agg_day (site_id, day, raw, version) VALUES (?, ?, 0, 1)
+			ON CONFLICT (site_id, day) DO UPDATE SET raw = 0, version = version + 1`, d[0], d[1]); err != nil {
+			return 0, err
+		}
+	}
+	return n, tx.Commit()
 }
 
 // RetentionOptions configures RunRetention.
