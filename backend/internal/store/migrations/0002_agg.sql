@@ -1,11 +1,12 @@
--- Figures kept after raw events are purged: built per site and UTC day by internal/agg two days after the day
--- ended, read for a day only while frozen = 1 and dirty = 0 (raw otherwise). This file only creates tables; the
--- backfill is a background job.
+-- Figures kept after raw events are purged (agg_addr goes with them by age, the size cap may cut any): built per
+-- site and UTC day by internal/agg two days after the day ended, read for a day only while frozen = 1 and dirty = 0
+-- (raw otherwise). This file only creates tables; the backfill is a background job.
 
 -- One row per site and UTC day the job built. version counts raw changes to the day (store.InsertEvents,
 -- store.SetActorClass, retention's deletes): a build comes out clean only if version is still what its read saw.
 -- dirty: 0 clean; 1 raw changed since the rows were written; 2 the day before changed the sessions it carries; 3 a
--- write in progress (rows maybe partial: never read, never cleared without a rebuild). builder is the build code's
+-- write in progress, or with frozen = 0 rows the size cap cut (rows maybe partial: never read, never cleared; rebuilt
+-- only while the day's raw is whole). builder is the build code's
 -- version: a release with a higher one rebuilds the days whose raw still exists. raw = 0 once any of the day's events
 -- are purged.
 CREATE TABLE agg_day (

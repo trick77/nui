@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -311,7 +313,12 @@ func TestAggPlans(t *testing.T) {
 		if err := st.ClearAggDirtyBefore(ctx, id, day); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := st.EnforceCap(ctx, 1); err != nil {
+		// Half the size: within reach of the aggregate steps (one byte is not: the tail's raw alone exceeds it).
+		used, err := st.UsedBytes(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.EnforceCap(ctx, used/2, now, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
 			t.Fatal(err)
 		}
 	})

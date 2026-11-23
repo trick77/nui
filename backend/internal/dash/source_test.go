@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"math"
 	"net/http"
@@ -484,21 +485,38 @@ func TestSources_HeadCut(t *testing.T) {
 	}
 }
 
-// Where raw is gone (retention cut it), the sums still come from the aggregates, while the trail, the log and a
-// reading reach back to detail_since only; the footer says since when figures go back.
+// Where raw is gone (the size cap cut it, the aggregates kept), the sums still come from the aggregates, while the
+// trail, the log and a reading reach back to detail_since only; the footer says since when figures go back. (Age
+// retention takes the per-address rows with the raw.)
 func TestSources_RawSpan(t *testing.T) {
 	t.Parallel()
 	r := copyRig(t, &fakeModel{})
-	_, before := r.get(t, "visitors", p(feedSite, "range", "30d", "tz", "UTC", "limit", "500"))
-	cut := r.end.AddDate(0, 0, -5)
-	if _, err := r.s.DB.PruneAge(t.Context(), cut); err != nil {
+	code, before := r.get(t, "visitors", p(feedSite, "range", "30d", "tz", "UTC", "limit", "500"))
+	if code != 200 {
+		t.Fatalf("visitors before the cut: %d %v", code, before)
+	}
+	addrRows := func() (n int) {
+		_ = r.s.DB.DB.QueryRow(`SELECT COUNT(*) FROM agg_addr`).Scan(&n)
+		return n
+	}
+	addrs := addrRows()
+	used, _ := r.s.DB.UsedBytes(t.Context())
+	if _, err := r.s.DB.EnforceCap(t.Context(), used*95/100, r.end, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
-	since := cut.Truncate(24 * time.Hour)
-	_, after := r.get(t, "visitors", p(feedSite, "range", "30d", "tz", "UTC", "limit", "500"))
+	if addrRows() != addrs {
+		t.Fatal("the cap cut per-address rows: the history is too small for the test")
+	}
+	// A fresh server: the first answer's table is cached for its cursor.
+	r = rigOver(t, r.s.DB, r.world, &fakeModel{})
+	code, after := r.get(t, "visitors", p(feedSite, "range", "30d", "tz", "UTC", "limit", "500"))
+	if code != 200 {
+		t.Fatalf("visitors after the cut: %d %v", code, after)
+	}
 	detailSince := after["detail_since"]
-	if d, _ := time.Parse(time.RFC3339, detailSince.(string)); d.Before(since) {
-		t.Errorf("detail_since %v before the cut %v", detailSince, since)
+	since, _ := time.Parse(time.RFC3339, detailSince.(string))
+	if !since.After(r.end.AddDate(0, 0, -19)) {
+		t.Fatalf("the cap cut no raw: detail_since %v", detailSince)
 	}
 	delete(before, "detail_since")
 	delete(after, "detail_since")
@@ -933,6 +951,176 @@ func TestSources_DetailSince(t *testing.T) {
 	}
 	if s := since("7d", "UTC"); s != nil {
 		t.Errorf("7d after the cut: detail_since %v", s)
+	}
+}
+
+// A day the size cap cut aggregate rows of (marked unbuilt with partial rows) has no figure anywhere: not its hours
+// left in the tiles, not an address in the table; the footer's figures begin on the next day. A site without raw
+// says raw begins now.
+func TestSources_CapCutDay(t *testing.T) {
+	r, insert := exactRig(t)
+	view := func(ts int64, ip string) store.Event {
+		return store.Event{TS: ts, Source: "browser", Kind: "page_view", Visitor: ip, SID: ip, IP: ip, IPKey: ip,
+			Template: "/", Path: "/", Cls: store.ClsHuman}
+	}
+	insert(view(at("2026-11-10T08:00:00Z"), "192.0.2.80"), view(at("2026-11-11T10:00:00Z"), "192.0.2.81"))
+	r.build(t)
+	// As the cap leaves them: raw gone from both days, the 10th's per-address rows cut, its hours and lists not yet.
+	for _, q := range []string{`DELETE FROM event`, `UPDATE agg_day SET raw = 0`,
+		`UPDATE agg_day SET frozen = 0, dirty = 3 WHERE day = ` + fmt.Sprint(at("2026-11-10T00:00:00Z")/dayMS),
+		`DELETE FROM agg_addr WHERE day = ` + fmt.Sprint(at("2026-11-10T00:00:00Z")/dayMS)} {
+		if _, err := r.s.DB.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	params := p(feedSite, "range", "30d", "tz", "UTC")
+	for _, src := range []Source{SourceAgg, SourceAuto} {
+		code, ov := r.getFrom(t, src, "overview", params)
+		var views float64 = -1
+		for _, x := range ov["tiles"].([]any) {
+			if m := x.(map[string]any); m["key"] == "views" {
+				views = num64(m["value"])
+			}
+		}
+		_, vis := r.getFrom(t, src, "visitors", params)
+		var keys []string
+		for _, row := range listRows(vis) {
+			keys = append(keys, row["key"].(string))
+		}
+		if code != 200 || views != 1 || !slices.Equal(keys, []string{"192.0.2.81"}) {
+			t.Errorf("%v: %d, %v views, visitors %v; want the 11th's only", src, code, views, keys)
+		}
+		for _, ask := range [][]string{{"visitors"}, {"log"}, {"visitor", "key", "192.0.2.81"},
+			{"list", "dim", "pages", "within", "/"}} {
+			code, body := r.getFrom(t, src, ask[0], p(feedSite, append([]string{"range", "30d", "tz", "UTC"}, ask[1:]...)...))
+			if code != 200 || body["detail_since"] != iso(r.s.now()) {
+				t.Errorf("%v %v: %d, detail_since %v without raw, want now", src, ask, code, body["detail_since"])
+			}
+		}
+	}
+	_, dom := r.get(t, "domain", params)
+	if st := dom["storage"].(map[string]any); st["figures_since"] != "2026-11-11T10:00:00Z" || st["oldest"] != nil {
+		t.Errorf("storage %v", st)
+	}
+}
+
+// A built day age retention cut (raw and per-address rows gone) keeps its tiles, classes, lists and the footer's
+// figures from the aggregates; it stays frozen and clean, and the job builds nothing. Its addresses are simply gone:
+// no row, no error, no raw read in their place. A session crossing into the next day is a visit there: the cut day
+// counted no address.
+func TestSources_AgeCutDay(t *testing.T) {
+	r, insert := exactRig(t)
+	ev := func(ts int64, ip, sid string) store.Event {
+		return store.Event{TS: ts, Source: "browser", Kind: "page_view", Visitor: ip, SID: sid, IP: ip, IPKey: ip,
+			Template: "/", Path: "/", Country: "CH", Cls: store.ClsHuman}
+	}
+	insert(ev(at("2026-10-10T10:00:00Z"), "192.0.2.70", "a1"), ev(at("2026-10-10T23:50:00Z"), "192.0.2.71", "b1"),
+		ev(at("2026-10-11T00:10:00Z"), "192.0.2.71", "b1"), ev(at("2026-11-10T10:00:00Z"), "192.0.2.72", "c1"))
+	r.build(t)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	day := at("2026-10-10T00:00:00Z") / dayMS
+	params := p(feedSite, "range", "90d", "tz", "UTC")
+	figures := func() ([]map[string]any, pieceCount) {
+		t.Helper()
+		var out []map[string]any
+		n := countPieces(r, func(r *rig) {
+			for _, ask := range [][]string{{"overview"}, {"classes"}, {"list", "dim", "pages"},
+				{"list", "dim", "countries"}} {
+				code, body := r.getFrom(t, SourceAuto, ask[0], p(feedSite, append([]string{"range", "90d", "tz", "UTC"},
+					ask[1:]...)...))
+				if code != 200 {
+					t.Fatalf("%v: %d %v", ask, code, body)
+				}
+				delete(body, "detail_since")
+				out = append(out, body)
+			}
+		})
+		_, dom := r.get(t, "domain", params)
+		out = append(out, map[string]any{"figures_since": dom["storage"].(map[string]any)["figures_since"]})
+		return out, n
+	}
+	before, _ := figures()
+	if _, err := r.s.DB.PruneAge(t.Context(), time.UnixMilli(at("2026-10-11T00:00:00Z"))); err != nil {
+		t.Fatal(err)
+	}
+	var addrs int
+	if err := r.s.DB.DB.QueryRow(`SELECT COUNT(*) FROM agg_addr WHERE day = ?`, day).Scan(&addrs); err != nil ||
+		addrs != 0 {
+		t.Fatalf("per-address rows of the cut day: %d, %v", addrs, err)
+	}
+	state := func() store.AggDay {
+		t.Helper()
+		days, err := r.s.DB.AggDays(t.Context(), site.ID, day, day)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return days[day]
+	}
+	if d := state(); !d.Frozen || d.Dirty != store.AggClean || d.Raw {
+		t.Fatalf("cut day: %+v, want frozen, clean, without raw", d)
+	}
+	if n, err := agg.BuildThrough(t.Context(), r.s.DB, r.end, agg.TopK); err != nil || n != 0 {
+		t.Errorf("job after the cut built %d, %v", n, err)
+	}
+	if d := state(); !d.Frozen || d.Dirty != store.AggClean {
+		t.Errorf("cut day after the job: %+v", d)
+	}
+	after, n := figures()
+	if n.agg == 0 {
+		t.Errorf("pieces %+v: nothing from the aggregates", n)
+	}
+	if before[len(before)-1]["figures_since"] != "2026-10-10T10:00:00Z" {
+		t.Errorf("figures_since before the cut: %v", before[len(before)-1])
+	}
+	for i := range before {
+		agree(t, fmt.Sprint("after the cut ", i), before[i], after[i], nil)
+	}
+	for _, src := range []Source{SourceAuto, SourceAgg} {
+		for _, aud := range []string{"all", "humans"} {
+			code, vis := r.getFrom(t, src, "visitors", p(feedSite, "range", "90d", "tz", "UTC", "aud", aud))
+			got := map[string]float64{}
+			for _, row := range listRows(vis) {
+				got[row["key"].(string)] = num64(row["visits"])
+			}
+			if code != 200 || len(got) != 2 || got["192.0.2.71"] != 1 || got["192.0.2.72"] != 1 {
+				t.Errorf("%v %s visitors: %d %v, want .71 and .72 with a visit each", src, aud, code, got)
+			}
+			q := &query{site: site, aud: aud, p: newPeriod("90d", "off", r.s.now(), time.UTC)}
+			if a, err := r.server(src).actorOne(t.Context(), q, "192.0.2.71"); err != nil || a == nil || a.visits != 1 {
+				t.Errorf("%v %s detail of .71: %+v %v, want 1 visit", src, aud, a, err)
+			}
+		}
+		for _, key := range []string{"192.0.2.70", "192.0.2.99"} {
+			if code, body := r.getFrom(t, src, "visitor", p(feedSite, "range", "90d", "tz", "UTC", "key", key)); code !=
+				http.StatusNotFound {
+				t.Errorf("%v visitor %s: %d %v, want 404", src, key, code, body)
+			}
+		}
+		code, ref := r.getFrom(t, src, "list", p(feedSite, "range", "90d", "tz", "UTC", "dim", "refused"))
+		for _, row := range listRows(ref) {
+			if row["key"] == "192.0.2.70" {
+				t.Errorf("%v refused lists the cut day's address", src)
+			}
+		}
+		if code != 200 {
+			t.Errorf("%v refused: %d %v", src, code, ref)
+		}
+		if code, body := r.getFrom(t, src, "noteworthy", p(feedSite, "range", "90d", "tz", "UTC", "findings", "all")); code != 200 ||
+			strings.Contains(fmt.Sprint(body), "192.0.2.70") {
+			t.Errorf("%v noteworthy: %d %v", src, code, body)
+		}
+	}
+	// A raw write makes the day after dirty: read raw, it subtracts no session carried from the cut day either.
+	insert(ev(at("2026-10-11T12:00:00Z"), "192.0.2.73", "d1"))
+	_, vis := r.getFrom(t, SourceAuto, "visitors", params)
+	q := &query{site: site, aud: "all", p: newPeriod("90d", "off", r.s.now(), time.UTC)}
+	for _, row := range listRows(vis) {
+		if row["key"] == "192.0.2.71" && num64(row["visits"]) != 1 {
+			t.Errorf("raw day after the cut: .71 has %v visits in the table, want 1", row["visits"])
+		}
+	}
+	if a, err := r.server(SourceAuto).actorOne(t.Context(), q, "192.0.2.71"); err != nil || a == nil || a.visits != 1 {
+		t.Errorf("raw day after the cut: detail of .71 %+v %v, want 1 visit", a, err)
 	}
 }
 

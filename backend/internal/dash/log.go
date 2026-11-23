@@ -280,15 +280,15 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 		s.fail(w, r, err)
 		return
 	}
-	// The first figure: the oldest built hour or the oldest raw event, whichever is older.
-	var firstHour sql.NullInt64
-	if err := s.row(ctx, `SELECT MIN(hour) FROM agg_hour WHERE site_id = ?`, q.site.ID).Scan(&firstHour); err != nil {
+	// The first figure: the oldest readable built hour or the oldest raw event, whichever is older.
+	firstHour, ok, err := s.firstFigure(ctx, q.site.ID)
+	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	figures := first
-	if firstHour.Valid && (figures == 0 || firstHour.Int64*hourMS < figures) {
-		figures = firstHour.Int64 * hourMS
+	if ok && (figures == 0 || firstHour*hourMS < figures) {
+		figures = firstHour * hourMS
 	}
 	// feed: the site has a server feed configured, so a null server source is one that has not delivered yet.
 	sources := map[string]any{"browser": source(browser, s.now()), "server": nil, "feed": q.site.HasFeed,
