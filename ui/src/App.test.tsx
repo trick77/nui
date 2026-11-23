@@ -533,13 +533,19 @@ describe("dashboard on a domain with a server feed", () => {
         .closest("li") as HTMLElement;
     expect(run()).toHaveTextContent("page_view × 3+");
     expect(run()).toHaveTextContent("every 10 s, continues earlier");
+    // A web vital's abbreviation explained behind an (i).
+    const hint = within(d).getByRole("button", { name: "What is CLS?" });
+    const pop = document.getElementById(hint.getAttribute("popovertarget")!)!;
+    expect(pop).toHaveAttribute("popover", "auto");
+    within(pop).getByText(`CLS${SEP}Cumulative Layout Shift`, asIs);
+    expect(pop).toHaveTextContent("good up to 0.1, poor over 0.25");
     fireEvent.click(within(d).getByRole("button", { name: "Load earlier →" }));
     await waitFor(() =>
       expect(lastCall("/api/dash/visitor").get("cursor")).toBe(TRAIL_NEXT),
     );
     // Its older part joins it: one run, both parts' intervals.
     await waitFor(() =>
-      expect(d.querySelectorAll("ol.trail > li")).toHaveLength(5),
+      expect(d.querySelectorAll("ol.trail > li")).toHaveLength(6),
     );
     expect(within(d).getAllByText(/^view \/:text/)).toHaveLength(1);
     expect(run()).toHaveTextContent("page_view × 5");
@@ -1126,6 +1132,9 @@ describe("log page", () => {
     start("/dashboard/log?site=lens.example.com&range=30d");
     const log = await screen.findByRole("region", { name: "Log" });
     await within(log).findByText("100 of 250 events in this range");
+    expect(
+      within(log).getAllByRole("button", { name: "What is LCP?" }).length,
+    ).toBeGreaterThan(0);
     expect(screen.queryByRole("group", { name: "Audience" })).toBeNull();
     expect(screen.queryByRole("group", { name: "Compare" })).toBeNull();
     expect(lastCall("/api/dash/log").get("range")).toBe("30d");

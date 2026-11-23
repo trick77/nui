@@ -34,6 +34,7 @@ import {
   Skeleton,
   Tabs,
   useDash,
+  VitalHint,
 } from "./ui";
 
 type Sort = "requests" | "refused" | "events" | "views";
@@ -490,6 +491,7 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
                     </span>
                     <span className="font-mono text-[12.5px] wrap-anywhere">
                       {trailText(t)}
+                      <VitalHint kind={t.kind} what={t.what} />
                     </span>
                   </li>
                 ))}
