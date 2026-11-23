@@ -3,14 +3,19 @@ package store
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
+
+	"github.com/trick77/ship/kit/migrate"
 )
 
 // Open opens a fresh database in t's temp dir.
@@ -313,6 +318,59 @@ func TestVacuum_WrongModeAndStall(t *testing.T) {
 	<-done
 	if !strings.Contains(logs.String(), "not in incremental auto-vacuum mode") {
 		t.Errorf("no word on the mode: %s", logs.String())
+	}
+}
+
+// TestUpgrade_0002 opens a database that 0.1 left (0001 only, with events): Open adds the aggregate tables, empty,
+// and every event stays.
+func TestUpgrade_0002(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nui.db")
+	init, err := fs.ReadFile(migrations(), "0001_init.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite3", dsn(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := migrate.Up(t.Context(), db, fstest.MapFS{"0001_init.sql": {Data: init}},
+		migrate.Options{Dialect: migrate.SQLite}); err != nil {
+		t.Fatal(err)
+	}
+	id := seed(t, &Store{DB: db})
+	day := time.Now().UnixMilli()/dayMS - 30
+	// As 0.1 wrote them: plain inserts, no aggregate table to touch.
+	for i := range 50 {
+		if _, err := db.Exec(`INSERT INTO event (site_id, ts, source, kind, ip, ip_key)
+			VALUES (?, ?, 'browser', 'page_view', '192.0.2.1', '192.0.2.1')`, id, day*dayMS+int64(i)*60_000); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = db.Close()
+
+	st, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	var events, migrated int
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event`).Scan(&events); err != nil || events != 50 {
+		t.Errorf("events after upgrade = %d, %v", events, err)
+	}
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 2 {
+		t.Errorf("migrations = %d, %v", migrated, err)
+	}
+	for _, tbl := range []string{"agg_day", "agg_hour", "agg_list", "agg_addr"} {
+		var n int
+		//nolint:gosec // the test's own table names
+		if err := st.DB.QueryRow(`SELECT COUNT(*) FROM ` + tbl).Scan(&n); err != nil || n != 0 {
+			t.Errorf("%s: %d rows, %v", tbl, n, err)
+		}
+	}
+	// Writes go on as before.
+	if err := st.InsertEvents(t.Context(), []Event{{SiteID: id, TS: day * dayMS, Source: "browser",
+		Kind: "page_view", IP: "192.0.2.1", IPKey: "192.0.2.1"}}); err != nil {
+		t.Fatal(err)
 	}
 }
 

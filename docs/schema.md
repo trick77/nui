@@ -2,7 +2,7 @@
 
 # Database schema
 
-8 tables; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.
+12 tables; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.
 
 ## actor_class
 
@@ -31,6 +31,132 @@ Indexes:
 Checks:
 
 - `CHECK (class IN ('human', 'bot', 'monitor', 'unknown'))`
+
+## agg_addr
+
+Go types:
+
+- `store.AggAddr` (internal/store): AggAddr is one address key's sums for one site, UTC day and part.
+
+| Column | Type | Null | Default | PK |
+| --- | --- | --- | --- | --- |
+| `site_id` | INTEGER | no |  | 1 |
+| `day` | INTEGER | no |  | 2 |
+| `ip_key` | TEXT | no |  | 3 |
+| `part` | INTEGER | no |  | 4 |
+| `events` | INTEGER | no | `0` |  |
+| `views` | INTEGER | no | `0` |  |
+| `actions` | INTEGER | no | `0` |  |
+| `requests` | INTEGER | no | `0` |  |
+| `refused` | INTEGER | no | `0` |  |
+| `sessions` | INTEGER | no | `0` |  |
+| `carried` | INTEGER | no | `0` |  |
+| `browser` | INTEGER | no | `0` |  |
+| `human` | INTEGER | no | `0` |  |
+| `first_ts` | INTEGER | no |  |  |
+| `last_ts` | INTEGER | no |  |  |
+| `ua` | TEXT | no | `''` |  |
+| `asn` | INTEGER | no | `0` |  |
+| `country` | TEXT | no | `''` |  |
+| `cls` | INTEGER | no | `0` |  |
+
+Foreign keys:
+
+- `site_id` → `site` (`id`)
+
+Indexes:
+
+- `agg_addr_key` (`site_id`, `ip_key`, `day`)
+- `agg_addr_requests` (`site_id`, `day`, `requests`)
+
+Checks:
+
+- `CHECK (part IN (1, 2))`
+
+## agg_day
+
+Go types:
+
+- `store.AggDay` (internal/store): AggDay is one site-day's aggregate build state: the dashboard reads the day's aggregates only while it is frozen and clean, raw otherwise.
+
+| Column | Type | Null | Default | PK |
+| --- | --- | --- | --- | --- |
+| `site_id` | INTEGER | no |  | 1 |
+| `day` | INTEGER | no |  | 2 |
+| `frozen` | INTEGER | no | `0` |  |
+| `dirty` | INTEGER | no | `0` |  |
+| `version` | INTEGER | no | `0` |  |
+| `builder` | INTEGER | no | `0` |  |
+| `raw` | INTEGER | no | `1` |  |
+| `events` | INTEGER | no | `0` |  |
+| `built_at` | INTEGER | no | `0` |  |
+
+Foreign keys:
+
+- `site_id` → `site` (`id`)
+
+## agg_hour
+
+Go types:
+
+- `store.AggHour` (internal/store): AggHour is one site's sums and sketches for one UTC hour and class.
+
+| Column | Type | Null | Default | PK |
+| --- | --- | --- | --- | --- |
+| `site_id` | INTEGER | no |  | 1 |
+| `hour` | INTEGER | no |  | 2 |
+| `cls` | INTEGER | no |  | 3 |
+| `events` | INTEGER | no | `0` |  |
+| `views` | INTEGER | no | `0` |  |
+| `actions` | INTEGER | no | `0` |  |
+| `starts` | INTEGER | no | `0` |  |
+| `requests` | INTEGER | no | `0` |  |
+| `refused` | INTEGER | no | `0` |  |
+| `errors` | INTEGER | no | `0` |  |
+| `browser_ids` | BLOB | yes |  |  |
+| `addrs` | BLOB | yes |  |  |
+| `server_addrs` | BLOB | yes |  |  |
+
+Foreign keys:
+
+- `site_id` → `site` (`id`)
+
+Checks:
+
+- `CHECK (cls BETWEEN 1 AND 4)`
+
+## agg_list
+
+Go types:
+
+- `store.AggList` (internal/store): AggList is one list entry, or a part's Other row, for one site, dimension and UTC day.
+
+| Column | Type | Null | Default | PK |
+| --- | --- | --- | --- | --- |
+| `site_id` | INTEGER | no |  | 1 |
+| `dim` | TEXT | no |  | 2 |
+| `day` | INTEGER | no |  | 3 |
+| `part` | INTEGER | no |  | 4 |
+| `other` | INTEGER | no | `0` | 5 |
+| `parent` | TEXT | no | `''` | 6 |
+| `key` | TEXT | no |  | 7 |
+| `sub` | TEXT | no | `''` | 8 |
+| `a` | INTEGER | no | `0` |  |
+| `b` | INTEGER | no | `0` |  |
+| `n` | INTEGER | no | `0` |  |
+| `addr_n` | INTEGER | no | `0` |  |
+| `ids` | BLOB | yes |  |  |
+| `addrs` | BLOB | yes |  |  |
+| `entries` | INTEGER | no | `0` |  |
+| `keys` | BLOB | yes |  |  |
+
+Foreign keys:
+
+- `site_id` → `site` (`id`)
+
+Checks:
+
+- `CHECK (part IN (1, 2))`
 
 ## event
 
@@ -219,6 +345,71 @@ erDiagram
         TEXT reasons
         INTEGER updated_at
     }
+    agg_addr {
+        INTEGER site_id PK, FK
+        INTEGER day PK
+        TEXT ip_key PK
+        INTEGER part PK
+        INTEGER events
+        INTEGER views
+        INTEGER actions
+        INTEGER requests
+        INTEGER refused
+        INTEGER sessions
+        INTEGER carried
+        INTEGER browser
+        INTEGER human
+        INTEGER first_ts
+        INTEGER last_ts
+        TEXT ua
+        INTEGER asn
+        TEXT country
+        INTEGER cls
+    }
+    agg_day {
+        INTEGER site_id PK, FK
+        INTEGER day PK
+        INTEGER frozen
+        INTEGER dirty
+        INTEGER version
+        INTEGER builder
+        INTEGER raw
+        INTEGER events
+        INTEGER built_at
+    }
+    agg_hour {
+        INTEGER site_id PK, FK
+        INTEGER hour PK
+        INTEGER cls PK
+        INTEGER events
+        INTEGER views
+        INTEGER actions
+        INTEGER starts
+        INTEGER requests
+        INTEGER refused
+        INTEGER errors
+        BLOB browser_ids
+        BLOB addrs
+        BLOB server_addrs
+    }
+    agg_list {
+        INTEGER site_id PK, FK
+        TEXT dim PK
+        INTEGER day PK
+        INTEGER part PK
+        INTEGER other PK
+        TEXT parent PK
+        TEXT key PK
+        TEXT sub PK
+        INTEGER a
+        INTEGER b
+        INTEGER n
+        INTEGER addr_n
+        BLOB ids
+        BLOB addrs
+        INTEGER entries
+        BLOB keys
+    }
     event {
         INTEGER id PK
         INTEGER site_id FK
@@ -292,6 +483,10 @@ erDiagram
         INTEGER created_at
     }
     actor_class }o--|| site : "site_id"
+    agg_addr }o--|| site : "site_id"
+    agg_day }o--|| site : "site_id"
+    agg_hour }o--|| site : "site_id"
+    agg_list }o--|| site : "site_id"
     event }o--|| site : "site_id"
     llm_briefing }o--|| site : "site_id"
 ```
