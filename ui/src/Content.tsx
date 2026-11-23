@@ -1,6 +1,8 @@
+import { Endpoints } from "./Calls";
 import type { ListRow } from "./api";
 import { num, pct } from "./format";
 import { type Col, TopList } from "./lists";
+import { NetworksPanel } from "./Origin";
 import { Delta, SectionHead, useDash } from "./ui";
 
 const mono = (s: string) => (
@@ -13,7 +15,7 @@ const change: Col = {
 };
 
 export function Content() {
-  const { openLog, scope } = useDash();
+  const { feed, openLog, scope } = useDash();
   const cmp = scope.cmp !== "off";
   const pageCols: Col[] = [
     { head: "Path", cell: (r) => mono(r.label) },
@@ -90,13 +92,13 @@ export function Content() {
           tabs={[{ key: "referrers", label: "Referrers", dim: "referrers" }]}
           empty="No referrers in this range yet."
         />
-        <TopList
-          id="networks-panel"
-          title="Networks"
-          tabs={[{ key: "networks", label: "Networks", dim: "networks" }]}
-          empty="No networks in this range yet."
-        />
+        <NetworksPanel />
       </div>
+      {feed && (
+        <div className="mt-3">
+          <Endpoints />
+        </div>
+      )}
     </>
   );
 }

@@ -111,6 +111,37 @@ function Pick({
   );
 }
 
+// The exact filters a row elsewhere sets.
+const EXACT = ["endpoint", "account", "op", "failure"] as const;
+
+// A filter set by a link, not typed: shown so it can be seen and dropped on
+// its own.
+function SetFilter({
+  label,
+  value,
+  onClear,
+}: {
+  label: string;
+  value: string;
+  onClear: () => void;
+}) {
+  return (
+    <span className="pill wrap-anywhere">
+      <span>
+        {label[0].toUpperCase() + label.slice(1)} {value}
+      </span>
+      <button
+        type="button"
+        className="link ml-1.5 !text-[13px]"
+        aria-label={`Clear the ${label} filter`}
+        onClick={onClear}
+      >
+        ×
+      </button>
+    </span>
+  );
+}
+
 // Single events, newest first, filtered; domain and range from the filter
 // bar, keyset pagination backwards.
 export function LogPage({
@@ -170,19 +201,29 @@ export function LogPage({
               onChange={(v) => set("addr", v)}
             />
             {filter.asn && (
-              // Set by a link (a network spike), not typed: shown so it
-              // can be seen and dropped on its own.
-              <span className="pill">
-                Network AS{filter.asn.replace(/^as/i, "")}
-                <button
-                  type="button"
-                  className="link ml-1.5 !text-[13px]"
-                  aria-label="Clear the network filter"
-                  onClick={() => set("asn", "")}
-                >
-                  ×
-                </button>
-              </span>
+              <SetFilter
+                label="network"
+                value={`AS${filter.asn.replace(/^as/i, "")}`}
+                onClear={() => set("asn", "")}
+              />
+            )}
+            {filter.calls && (
+              <SetFilter
+                label="calls"
+                value="only"
+                onClear={() => set("calls", "")}
+              />
+            )}
+            {EXACT.map(
+              (k) =>
+                filter[k] && (
+                  <SetFilter
+                    key={k}
+                    label={k}
+                    value={filter[k]}
+                    onClear={() => set(k, "")}
+                  />
+                ),
             )}
             <TextFilter
               key={`path${cleared}`}
@@ -247,6 +288,8 @@ export function LogPage({
                   <th>Kind</th>
                   <th>What</th>
                   <th>Client</th>
+                  {feed && <th>Account</th>}
+                  {feed && <th className="n">Duration</th>}
                   {both && <th>Source</th>}
                 </tr>
               </thead>
@@ -279,6 +322,25 @@ export function LogPage({
                     <td className="text-[12px] whitespace-nowrap text-muted">
                       {r.client}
                     </td>
+                    {feed && (
+                      <td>
+                        {r.account && (
+                          <button
+                            type="button"
+                            className="link font-mono !text-[12.5px] !text-ink"
+                            title="Only this account"
+                            onClick={() => set("account", r.account)}
+                          >
+                            {r.account}
+                          </button>
+                        )}
+                      </td>
+                    )}
+                    {feed && (
+                      <td className="n whitespace-nowrap">
+                        {r.dur_ms != null && `${num(r.dur_ms)} ms`}
+                      </td>
+                    )}
                     {both && (
                       <td>
                         <span

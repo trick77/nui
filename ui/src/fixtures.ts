@@ -32,6 +32,7 @@ export const SITES: SiteInfo[] = [
     kind: "site",
     browser: { last: "2026-11-22T13:12:00Z" },
     server: { last: "2026-11-22T13:20:00Z" },
+    feed: true,
   },
   {
     site: "console.example.com",
@@ -39,6 +40,7 @@ export const SITES: SiteInfo[] = [
     kind: "site",
     browser: { last: "2026-11-22T12:58:00Z" },
     server: null,
+    feed: false,
   },
   // Nothing delivered yet, its server feed configured (FEEDS).
   {
@@ -47,6 +49,7 @@ export const SITES: SiteInfo[] = [
     kind: "site",
     browser: null,
     server: null,
+    feed: true,
   },
   // A server feed only: the script never loaded.
   {
@@ -55,6 +58,7 @@ export const SITES: SiteInfo[] = [
     kind: "api",
     browser: null,
     server: { last: "2026-11-22T13:19:00Z" },
+    feed: true,
   },
 ];
 
@@ -216,7 +220,7 @@ function overview(
     return {
       key,
       label,
-      unit: opt.rate ? "%" : "",
+      unit: opt.unit ?? (opt.rate ? "%" : ""),
       kind: opt.rate ? "rate" : "sum",
       value,
       prev: cmp === "off" ? null : prev,
@@ -230,22 +234,42 @@ function overview(
       server: opt.server ?? false,
     };
   };
-  const tiles: Tile[] = [
-    mk("visitors", aud === "bots" ? "Addresses" : "Unique visitors", base, 1),
-    mk("views", "Page views", base * 2.34, 2),
-    mk("events", "Events", base * 0.43, 3),
-    mk("requests", "Requests", base * 9.2, 4, { server: true }),
-    mk("auto_share", "Unknown automated", base, 5, {
-      rate: true,
-      lowerBetter: true,
-      server: true,
-      spike: 2.5,
-    }),
-    mk("errors", "Errors", base * 0.12, 6, {
-      lowerBetter: true,
-      spike: 3,
-    }),
-  ].filter((t) => feed || !t.server);
+  const isApi = SITES.find((s) => s.site === site)?.kind === "api";
+  const tiles: Tile[] = isApi
+    ? [
+        mk("calls", "Calls", base * 9.2, 4, { server: true }),
+        mk("accounts", "Accounts", base * 0.05, 1, { server: true }),
+        mk("callers", "Addresses", base * 0.2, 2, { server: true }),
+        mk("failed", "Failed", base, 5, {
+          rate: true,
+          lowerBetter: true,
+          server: true,
+        }),
+        mk("p95", "95th percentile", base * 0.3, 6, {
+          lowerBetter: true,
+          server: true,
+          unit: "ms",
+        }),
+      ]
+    : siteTiles();
+  function siteTiles() {
+    return [
+      mk("visitors", aud === "bots" ? "Addresses" : "Unique visitors", base, 1),
+      mk("views", "Page views", base * 2.34, 2),
+      mk("events", "Events", base * 0.43, 3),
+      mk("requests", "Requests", base * 9.2, 4, { server: true }),
+      mk("auto_share", "Unknown automated", base, 5, {
+        rate: true,
+        lowerBetter: true,
+        server: true,
+        spike: 2.5,
+      }),
+      mk("errors", "Errors", base * 0.12, 6, {
+        lowerBetter: true,
+        spike: 3,
+      }),
+    ].filter((t) => feed || !t.server);
+  }
   const ls = labels(range);
   return {
     period: {
@@ -261,6 +285,7 @@ function overview(
             ? "last year"
             : `prior ${range.replace(/(\d+)/, "$1 ")}`,
       last_bucket_open: range !== "24h",
+      since: null,
     },
     live: { humans: 7, automated: feed ? 3 : 1 },
     tiles,
@@ -602,6 +627,40 @@ const LISTS: Record<string, ListRow[]> = {
       sub: "AS64501 ExampleNet Fiber",
     }),
   ],
+  // A template, with the operation after it (and as sub).
+  endpoints: [
+    row("POST /mcp whois", 1840, 41, { pct: 12 }, "good", {
+      sub: "whois",
+      failed: 2.4,
+      p50: 18,
+      p95: 96,
+    }),
+    row("POST /mcp search", 610, 23, { pct: -4 }, "bad", {
+      sub: "search",
+      failed: 11.1,
+      p50: 210,
+      p95: 1480,
+    }),
+    row("POST /api/v1/whois/batch", 96, 4, { new: true }, "good", {
+      failed: 0,
+      p50: 130,
+      p95: 620,
+    }),
+  ],
+  accounts: [
+    row("a91k2m4p", 1620, 6, { pct: 8 }, "good", { failed: 1.2 }),
+    row("b03x7q1z", 730, 3, { pct: 40 }, "good", { failed: 14.5 }),
+  ],
+  agents: [
+    row("lens-cli/2.0.1", 1480, 8, { pct: 6 }, "good", { failed: 3.1 }),
+    row("python-httpx/0.28.1", 870, 5, { new: true }, "good", { failed: 9.4 }),
+  ],
+  // The product's code, or the status where it says it all.
+  failures: [
+    row("HTTP 429", 61, 2, { pct: 20 }, "bad", {}),
+    row("invalid_params", 44, 5, { new: true }, "bad", {}),
+    row("HTTP 401", 12, 7, { pct: 0 }, "flat", {}),
+  ],
   errors: [
     // A script error by its message, a server one by its request.
     row('TypeError: cannot read "prefixes"', 84, 14, { new: true }, "bad", {
@@ -661,9 +720,19 @@ const WITHIN: Record<string, string[]> = {
   "/:ipv6": ["/2001:db8::1"],
 };
 
+const SERVER_DIMS: Dim[] = [
+  "probed",
+  "refused",
+  "endpoints",
+  "accounts",
+  "failures",
+  "agents",
+];
+
 function list(q: URLSearchParams, feed: boolean): List | null {
   const dim = q.get("dim") as Dim;
-  if ((dim === "probed" || dim === "refused") && !feed) return null;
+  const server = SERVER_DIMS.includes(dim);
+  if (server && !feed) return null;
   const limit = Number(q.get("limit") || 6);
   const term = (q.get("q") || "").toLowerCase();
   const within = q.get("within");
@@ -712,7 +781,7 @@ function list(q: URLSearchParams, feed: boolean): List | null {
     rows: shown,
     other: { count: rest.length, value: sum(rest.map((r) => r.value)) },
     total: rows.length,
-    server: dim === "probed" || dim === "refused",
+    server,
     // A template's paths only, as the backend answers.
     ...(within ? { detail_since: detailSince(q.get("range")) } : {}),
   };
@@ -1184,6 +1253,8 @@ function log(q: URLSearchParams, feed: boolean, script: boolean): Log | null {
       what,
       client: CLIENT_NAME[addr],
       source,
+      account: i % (2 * LOG_CLIENTS.length) === 1 ? "a91k2m4p" : "",
+      dur_ms: source === "server" ? 3 + (i % 90) : null,
     };
   });
   if (!feed) rows = rows.filter((r) => r.source === "browser");
@@ -1214,6 +1285,23 @@ function log(q: URLSearchParams, feed: boolean, script: boolean): Log | null {
     );
   const status = q.get("status");
   if (status) rows = rows.filter((r) => r.what.includes(`→ ${status[0]}`));
+  // Exact filters.
+  const account = q.get("account");
+  if (account) rows = rows.filter((r) => r.account === account);
+  const endpoint = q.get("endpoint");
+  if (endpoint)
+    rows = rows.filter(
+      (r) => r.kind === "request" && r.what.startsWith(`${endpoint} → `),
+    );
+  const failure = q.get("failure");
+  if (failure)
+    rows = rows.filter(
+      (r) =>
+        r.what.endsWith(`→ ${failure.replace("HTTP ", "")}`) ||
+        r.what.endsWith(`, ${failure}`),
+    );
+  const op = q.get("op");
+  if (op) rows = rows.filter((r) => r.what.includes(` ${op} → `));
   // Row i's id counts down from the newest.
   const id = (r: LogRow) => `${Date.parse(r.t)}.${48211 - rows.indexOf(r)}`;
   const cursor = q.get("cursor") || "";

@@ -1611,6 +1611,209 @@ describe("log page", () => {
   });
 });
 
+describe("an API", () => {
+  it("shows calls instead of visits, and nothing only a browser reports", async () => {
+    start("/dashboard/?site=api.example.com&aud=humans");
+    expect(
+      await screen.findByRole("button", { name: /^Calls/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.queryByRole("button", { name: /^Unique visitors/ }),
+    ).toBeNull();
+    for (const name of [
+      "Endpoints",
+      "Accounts",
+      "Failures",
+      "Clients",
+      "Networks",
+    ])
+      expect(panel(name)).toBeInTheDocument();
+    for (const name of ["Pages", "Events", "Referrers"])
+      expect(screen.queryByRole("region", { name })).toBeNull();
+    expect(screen.getByRole("link", { name: "API" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Content" })).toBeNull();
+    const row = (
+      await within(panel("Endpoints")).findByText("POST /mcp search")
+    ).closest("tr")!;
+    expect(row).toHaveTextContent("210 ms");
+    expect(row).toHaveTextContent("1'480 ms");
+    expect(row).toHaveTextContent("11");
+    // Its callers are programs: no audience to pick, the remembered one
+    // ignored, and where they are counts addresses.
+    expect(screen.queryByRole("group", { name: "Audience" })).toBeNull();
+    expect(lastCall("/api/dash/overview").get("aud")).toBe("all");
+    expect(panel("Where callers are")).toBeInTheDocument();
+    expect(calls.find((c) => c.includes("dim=countries"))).toContain(
+      "aud=bots",
+    );
+    expect(calls.find((c) => c.includes("dim=networks"))).toContain("aud=all");
+    expect(
+      await within(panel("Clients")).findByText("lens-cli/2.0.1"),
+    ).toBeInTheDocument();
+    expect(calls.some((c) => c.startsWith("/api/dash/clients"))).toBe(false);
+    for (const dim of ["endpoints", "accounts", "failures", "agents"])
+      expect(calls.find((c) => c.includes(`dim=${dim}`))).toContain("aud=all");
+  });
+
+  it.each([
+    ["Endpoints", "POST /mcp whois", "endpoint", "POST /mcp whois"],
+    ["Accounts", "a91k2m4p", "account", "a91k2m4p"],
+    ["Failures", "HTTP 429", "failure", "HTTP 429"],
+  ])("opens the log on a row of %s", async (title, text, key, value) => {
+    start("/dashboard/?site=api.example.com");
+    await screen.findByRole("button", { name: /^Calls/ });
+    fireEvent.click(await within(panel(title)).findByText(text));
+    const log = await screen.findByRole("region", { name: "Log" });
+    expect(lastCall("/api/dash/log").get(key)).toBe(value);
+    expect(new URLSearchParams(window.location.search).get(key)).toBe(value);
+    // It can be seen and dropped on its own.
+    fireEvent.click(
+      within(log).getByRole("button", { name: `Clear the ${key} filter` }),
+    );
+    await waitFor(() => expect(lastCall("/api/dash/log").get(key)).toBeNull());
+  });
+
+  it("opens an account's calls, not its every request", async () => {
+    start("/dashboard/?site=api.example.com");
+    await screen.findByRole("button", { name: /^Calls/ });
+    fireEvent.click(await within(panel("Accounts")).findByText("a91k2m4p"));
+    const log = await screen.findByRole("region", { name: "Log" });
+    expect(lastCall("/api/dash/log").get("calls")).toBe("1");
+    fireEvent.click(
+      within(log).getByRole("button", { name: "Clear the calls filter" }),
+    );
+    await waitFor(() =>
+      expect(lastCall("/api/dash/log").get("calls")).toBeNull(),
+    );
+    expect(lastCall("/api/dash/log").get("account")).toBe("a91k2m4p");
+  });
+
+  // Answers with what the backend sends changed by edit.
+  const startEdited = (
+    url: string,
+    path: string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    edit: (body: any) => void,
+  ) => {
+    window.history.replaceState(null, "", url);
+    calls = [];
+    const fx = fixtureFetch();
+    setFetcher(async (u, i) => {
+      calls.push(u);
+      const r = await fx(u, i);
+      if (!u.startsWith(path)) return r;
+      const body = await r.json();
+      edit(body);
+      return new Response(JSON.stringify(body), { status: r.status });
+    });
+    return render(<App />);
+  };
+
+  it("is shown as one before its feed delivered", async () => {
+    startEdited(
+      "/dashboard/?site=api.example.com&aud=humans",
+      "/api/dash/sites",
+      (b) => {
+        for (const s of b.sites) s.server = null;
+      },
+    );
+    await screen.findByRole("button", { name: /^Calls/ });
+    expect(panel("Endpoints")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Pages" })).toBeNull();
+    expect(lastCall("/api/dash/overview").get("aud")).toBe("all");
+  });
+
+  it("says where the figures begin, and shows no figure as none", async () => {
+    startEdited(
+      "/dashboard/?site=api.example.com",
+      "/api/dash/overview",
+      (b) => {
+        b.period.since = "2026-11-19T23:00:00Z";
+        const t = b.tiles.find((x: { key: string }) => x.key === "p95");
+        Object.assign(t, { value: null, prev: null, change: null });
+        t.series = t.series.map((v: number, i: number) => (i < 3 ? null : v));
+      },
+    );
+    const tile = await screen.findByRole("button", {
+      name: /^95th percentile/,
+    });
+    expect(tile).toHaveTextContent("–");
+    expect(tile).not.toHaveTextContent("ms");
+    fireEvent.click(tile);
+    expect(screen.getByText(/figures since/)).toHaveTextContent("2026");
+    // The median on the chart has the unit.
+    expect(screen.getByText(/^median .* ms$/)).toBeInTheDocument();
+  });
+
+  it("draws a series broken where it has no figure", () => {
+    const { container } = render(
+      <MainChart
+        labels={["a", "b", "c", "d", "e"]}
+        cur={[null, 4, null, 6, 8]}
+        prev={[1, null, null, 2, 3]}
+        median={null}
+        kind="sum"
+        open={false}
+        title="T"
+        prevLabel="before"
+      />,
+    );
+    const line = container.querySelector("path.chart-line:last-of-type");
+    expect(line!.getAttribute("d")).toMatch(/^M\S+ \S+h0M\S+ \S+L\S+ \S+$/);
+    expect(container.innerHTML).not.toMatch(/NaN|null/);
+    // Nothing at all.
+    const none = render(
+      <MainChart
+        labels={["a", "b"]}
+        cur={[null, null]}
+        prev={null}
+        median={null}
+        kind="sum"
+        open={false}
+        title="T"
+        prevLabel="before"
+      />,
+    );
+    expect(none.container.innerHTML).not.toMatch(/NaN|Infinity/);
+    const rate = render(
+      <MainChart
+        labels={["a", "b"]}
+        cur={[null, null]}
+        prev={null}
+        median={null}
+        kind="rate"
+        open={false}
+        title="T"
+        prevLabel="before"
+      />,
+    );
+    expect(rate.container.innerHTML).not.toMatch(/NaN|Infinity/);
+  });
+
+  it("shows a request's account and duration in the log", async () => {
+    start("/dashboard/log?site=api.example.com");
+    const log = await screen.findByRole("region", { name: "Log" });
+    const acc = await within(log).findAllByRole("button", { name: "a91k2m4p" });
+    expect(acc[0].closest("tr")).toHaveTextContent(/\d ms/);
+    fireEvent.click(acc[0]);
+    await waitFor(() =>
+      expect(lastCall("/api/dash/log").get("account")).toBe("a91k2m4p"),
+    );
+  });
+
+  it("gives a website with a feed its endpoints, one without none", async () => {
+    const { unmount } = start("/dashboard/?site=lens.example.com");
+    await screen.findByRole("region", { name: "Endpoints" });
+    expect(panel("Pages")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Accounts" })).toBeNull();
+    unmount();
+    start("/dashboard/?site=console.example.com");
+    await screen.findByRole("region", { name: "Pages" });
+    expect(screen.queryByRole("region", { name: "Endpoints" })).toBeNull();
+    expect(calls.some((c) => c.includes("dim=endpoints"))).toBe(false);
+  });
+});
+
 describe("vital hint", () => {
   it("explains only a line the backend wrote for a vital", () => {
     const hint = (kind: string, what: string) => {

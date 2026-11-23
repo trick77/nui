@@ -16,6 +16,11 @@ export const LOG_KEYS = [
   "class",
   "kind",
   "status",
+  "calls",
+  "endpoint",
+  "account",
+  "op",
+  "failure",
 ] as const;
 
 export type Page = "dash" | "log";
