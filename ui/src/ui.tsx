@@ -12,6 +12,7 @@ import {
 import type {
   Change,
   ClassKey,
+  Classes,
   LogFilter,
   Audience,
   Panel as PanelKey,
@@ -29,6 +30,8 @@ export type Dash = {
   feed: boolean;
   // Both sources: only then do panels say where their data comes from.
   both: boolean;
+  // The class of API clients is shown (showsApiClients).
+  apiClients: boolean;
   openLog: (f: LogFilter) => void;
   goPanel: (p: PanelKey, filter?: Record<string, string>) => void;
   visitor: string | null;
@@ -88,6 +91,26 @@ export const CLASSES: { key: ClassKey; label: string; color: string }[] = [
   // (index.css).
   { key: "api", label: "API clients", color: "var(--color-other)" },
 ];
+
+// API clients are shown on an API, and where the range or its comparison has
+// some: a site whose product reports no account can have none, and their row
+// would always say 0. A fall to none is a figure, so it stays, as long as the
+// comparison knows it (with it off, only the range counts). Figures that
+// failed to load hide nothing.
+export function showsApiClients(
+  site: SiteInfo,
+  classes: { data: Classes | null; error: Error | null },
+): boolean {
+  if (!site.feed) return false;
+  if (site.kind === "api" || classes.error) return true;
+  const r = classes.data?.rows.find((x) => x.class === "api");
+  return !!r && (r.requests > 0 || r.change != null);
+}
+
+// The classes to list (useDash().apiClients).
+export function shownClasses(apiClients: boolean) {
+  return CLASSES.filter((c) => c.key !== "api" || apiClients);
+}
 
 const CLASS_ONE: Record<ClassKey, string> = {
   human: "Human",

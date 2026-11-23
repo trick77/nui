@@ -617,7 +617,9 @@ describe("dashboard on a domain with a server feed", () => {
       name: "Visitors by address",
     });
     await within(v).findByText("198.51.100.7");
-    fireEvent.click(within(v).getByRole("button", { name: "API clients" }));
+    fireEvent.click(
+      await within(v).findByRole("button", { name: "API clients" }),
+    );
     await waitFor(() =>
       expect(lastCall("/api/dash/visitors").get("class")).toBe("api"),
     );
@@ -1811,6 +1813,144 @@ describe("an API", () => {
     await screen.findByRole("region", { name: "Pages" });
     expect(screen.queryByRole("region", { name: "Endpoints" })).toBeNull();
     expect(calls.some((c) => c.includes("dim=endpoints"))).toBe(false);
+  });
+});
+
+describe("the class of API clients", () => {
+  // The sites' answer as the backend sends it, the API clients' row changed.
+  const startWith = (
+    url: string,
+    // null: the classes fail to load.
+    api: { requests: number; change: { pct: number } | null } | null,
+    // The visitors' table has an API client.
+    rows = false,
+  ) => {
+    window.history.replaceState(null, "", url);
+    calls = [];
+    const fx = fixtureFetch();
+    setFetcher(async (u, i) => {
+      calls.push(u);
+      const r = await fx(u, i);
+      if (u.startsWith("/api/dash/visitors")) {
+        const body = await r.json();
+        body.rows = body.rows.filter(
+          (v: { class: string }) => v.class !== "api",
+        );
+        if (rows) body.rows[0].class = "api";
+        return new Response(JSON.stringify(body), { status: r.status });
+      }
+      if (!u.startsWith("/api/dash/classes")) return r;
+      if (!api)
+        return new Response(JSON.stringify({ detail: "down" }), {
+          status: 500,
+        });
+      const body = await r.json();
+      body.series.api = body.series.api.map(() => 0);
+      for (const row of body.rows)
+        if (row.class === "api")
+          Object.assign(row, { share: 0, addresses: 0, ...api });
+      return new Response(JSON.stringify(body), { status: r.status });
+    });
+    return render(<App />);
+  };
+  const named = (region: string) =>
+    within(panel(region)).queryAllByText("API clients").length > 0;
+  const loaded = async () => {
+    const who = await screen.findByRole("region", { name: "Who is asking" });
+    await within(who).findAllByText("Uptime probes");
+  };
+
+  it("is left out where there are none and were none", async () => {
+    startWith("/dashboard/?site=lens.example.com&aud=all", {
+      requests: 0,
+      change: null,
+    });
+    await loaded();
+    for (const r of [
+      "Who is asking",
+      "Requests by class",
+      "Visitors by address",
+    ])
+      expect(named(r)).toBe(false);
+    const probes = screen.getAllByText("Uptime probes").length;
+    fireEvent.mouseMove(screen.getAllByTestId("stack-hit")[0]);
+    expect(screen.getAllByText("Uptime probes")).toHaveLength(probes + 1);
+    expect(screen.queryByText("API clients")).toBeNull();
+    expect(screen.queryByText(/signed-in API clients/)).toBeNull();
+    // The others say 0 when they have none.
+    expect(
+      within(panel("Who is asking")).getAllByText("Known bots").length,
+    ).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["some", "lens.example.com", { requests: 4, change: null }],
+    [
+      "a fall to none",
+      "lens.example.com",
+      { requests: 0, change: { pct: -100 } },
+    ],
+    ["an API", "api.example.com", { requests: 0, change: null }],
+  ] as const)("is shown for %s", async (_, site, row) => {
+    startWith(`/dashboard/?site=${site}&aud=all`, row);
+    await loaded();
+    for (const r of [
+      "Who is asking",
+      "Requests by class",
+      "Visitors by address",
+    ])
+      expect(named(r)).toBe(true);
+    expect(screen.getByText(/signed-in API clients/)).toBeInTheDocument();
+  });
+
+  it("stays a tab while picked, and is none without a feed", async () => {
+    const tab = () =>
+      within(panel("Visitors by address")).queryByRole("button", {
+        name: "API clients",
+      });
+    const site = (s: string) =>
+      fireEvent.change(screen.getByRole("combobox", { name: "Domain" }), {
+        target: { value: s },
+      });
+    start("/dashboard/?site=console.example.com&aud=all");
+    await screen.findByRole("region", { name: "Visitors by address" });
+    expect(tab()).toBeNull();
+    site("lens.example.com");
+    await waitFor(() => expect(tab()).not.toBeNull());
+    fireEvent.click(tab()!);
+    site("console.example.com");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "Who is asking" }),
+      ).toBeNull(),
+    );
+    expect(tab()).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("stays a tab where the table has some, or the figures failed", async () => {
+    const url = "/dashboard/?site=lens.example.com&aud=all";
+    const tab = { name: "API clients" };
+    const { unmount } = startWith(url, { requests: 0, change: null }, true);
+    await loaded();
+    expect(named("Who is asking")).toBe(false);
+    await within(panel("Visitors by address")).findByRole("button", tab);
+    unmount();
+    startWith(url, null);
+    const v = await screen.findByRole("region", {
+      name: "Visitors by address",
+    });
+    await within(v).findByRole("button", tab);
+  });
+
+  it("is always offered by the log's filter", async () => {
+    startWith("/dashboard/log?site=lens.example.com", {
+      requests: 0,
+      change: null,
+    });
+    const log = await screen.findByRole("region", { name: "Log" });
+    expect(
+      within(log).getByRole("option", { name: "API clients" }),
+    ).toBeInTheDocument();
   });
 });
 
