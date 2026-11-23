@@ -10,12 +10,16 @@ type uaDay struct {
 	browser, server int64
 	// docs are the page loads Sec-Fetch-Dest names; pages adds those of a client without it (a crawler).
 	docs, pages, assets int64
+	// delivered are the pages answered 200 or 304: only those carry the script. authed are the requests answered with
+	// the product's account on them (signedRequest).
+	delivered, authed int64
 	// beaconElsewhere: a beacon with the client's user agent for one of its pages came from another address key
 	// (dual stack, a relay that leaves per host).
 	beaconElsewhere   bool
 	refused           int64
 	webdriver         bool
 	noFetch, noLang   int64
+	noSite            int64
 	engaged, pageView int64
 	// first and last are the server requests' first and last time (unix ms), 0 without any.
 	first, last int64

@@ -30,7 +30,7 @@ Indexes:
 
 Checks:
 
-- `CHECK (class IN ('human', 'bot', 'monitor', 'unknown'))`
+- `CHECK (class IN ('human', 'bot', 'monitor', 'unknown', 'api'))`
 
 ## agg_addr
 
@@ -144,7 +144,7 @@ Foreign keys:
 
 Checks:
 
-- `CHECK (cls BETWEEN 1 AND 4)`
+- `CHECK (cls BETWEEN 1 AND 5)`
 
 ## agg_list
 

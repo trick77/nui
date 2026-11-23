@@ -401,6 +401,14 @@ const CLASS_ROWS: Classes["rows"] = [
     change: { pct: 64 },
     verdict: "bad",
   },
+  {
+    class: "api",
+    requests: 40,
+    share: 0.1,
+    addresses: 1,
+    change: { new: true },
+    verdict: "flat",
+  },
 ];
 
 function classes(range: string): Classes {
@@ -417,6 +425,7 @@ function classes(range: string): Classes {
       bot: s(1400, 12),
       monitor: s(700, 13),
       unknown: s(410, 14, 6.5),
+      api: s(6, 15),
     },
     rows: CLASS_ROWS,
   };
@@ -832,6 +841,25 @@ const VISITORS: VisitorRow[] = [
     },
   },
   {
+    key: "198.51.100.30",
+    display: "198.51.100.30",
+    network: "AS64511 Example Hosting",
+    network_kind: "hosting",
+    country: "NL",
+    class: "api",
+    client: "example-agent/0.14.8",
+    client_gen: null,
+    visits: null,
+    views: 0,
+    requests: 40,
+    refused: 0,
+    refused_share: 0,
+    events: 0,
+    last: "2026-11-22T13:18:02Z",
+    signals: ["signed-in API client"],
+    does: { gen: null, text: "API client, mostly POST /mcp → 200 (40×)" },
+  },
+  {
     key: "198.51.100.201",
     display: "198.51.100.201",
     network: "AS64511 Example Hosting",
@@ -980,7 +1008,7 @@ function visitor(key: string, feed: boolean, cursor: string): Visitor | null {
     requests: feed ? v.requests : null,
     addresses: v.key.endsWith("/64") ? 3 : 1,
     reading:
-      v.key === "203.0.113.9"
+      v.key === "203.0.113.9" || v.class === "api"
         ? null
         : {
             // One of the backend's fixed verdicts.
@@ -1018,9 +1046,23 @@ function visitor(key: string, feed: boolean, cursor: string): Visitor | null {
           },
           single("2026-11-22T10:02:17Z", "request", "GET / → 200"),
         ]
-      : PERSON_TRAIL[later ? 1 : 0],
+      : v.class === "api"
+        ? [
+            {
+              t: "2026-11-22T13:18:02Z",
+              kind: "request",
+              what: "POST /mcp → 200",
+              count: 40,
+              from: "2026-11-22T13:05:41Z",
+              to: "2026-11-22T13:18:02Z",
+              interval_s: 19,
+              continues: false,
+              continued: false,
+            },
+          ]
+        : PERSON_TRAIL[later ? 1 : 0],
     // The backend's keyset cursor, "<ms>.<row id>".
-    trail_next: scrape || later ? "" : TRAIL_NEXT,
+    trail_next: scrape || v.class === "api" || later ? "" : TRAIL_NEXT,
     from: Date.parse(FROM["7d"]),
     detail_since: DETAIL_SINCE,
   };

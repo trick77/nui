@@ -72,10 +72,14 @@ export const CLASSES: { key: ClassKey; label: string; color: string }[] = [
   { key: "bot", label: "Known bots", color: "var(--color-s2)" },
   { key: "monitor", label: "Uptime probes", color: "var(--color-s3)" },
   { key: "unknown", label: "Unknown automated", color: "var(--color-s4)" },
+  // The ramp has four hues; a fifth series is the grey, last in a stack
+  // (index.css).
+  { key: "api", label: "API clients", color: "var(--color-other)" },
 ];
 
 const CLASS_ONE: Record<ClassKey, string> = {
   human: "Human",
+  api: "API client",
   bot: "Known bot",
   monitor: "Uptime probe",
   unknown: "Unknown automated",

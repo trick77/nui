@@ -380,7 +380,7 @@ func TestPass_SharedAddressAndPace(t *testing.T) {
 		"192.0.2.84": "human|assets loaded,no script beacon",
 		"192.0.2.85": "human|assets loaded,no script beacon",
 		"192.0.2.86": "unknown|no sign of a browser",
-		"192.0.2.87": "unknown|no sign of a browser,API only, no page loaded,rapid requests",
+		"192.0.2.87": "unknown|API only, no page loaded,rapid requests",
 	} {
 		a := classes[key]
 		if got := a.Class + "|" + strings.Join(a.Reasons, ","); got != want {
@@ -557,6 +557,430 @@ func TestPass_FeedOnlyAndPageScraper(t *testing.T) {
 	}
 	if a := classes["192.0.2.122"]; a.Class != "unknown" || a.Reasons[0] != reasonMachinePace {
 		t.Errorf("page scraper: %+v", a)
+	}
+}
+
+// loomUA is an MCP client naming its repository: a contact URL, which marks automation in any other client.
+const loomUA = "loom/0.14.8 (+https://github.com/example/loom)"
+
+func account(e store.Event) store.Event {
+	e.Account = "acct_1"
+	return e
+}
+
+// A program the product signed in is an API client, whatever its address or user agent says: the account is the
+// product's word. A prober with one good key is none, and without an account nothing changes.
+func TestPass_APIClient(t *testing.T) {
+	r := newRig(t, true)
+	const listed = "66.249.66.7" // in Googlebot's authoritative range
+	mcp := func(ip, ua string, status int) store.Event { return req(ip, ua, "", "/mcp", status, `{}`) }
+	var evs []store.Event
+	for range 6 {
+		evs = append(evs, account(mcp(listed, loomUA, 200)), // a bot list's mistake
+			account(mcp("192.0.2.140", "claude-code/2.1 (cli)", 200)), // no contact URL
+			mcp("192.0.2.141", loomUA, 200),
+			mcp("66.249.66.8", "some-agent/1", 200))
+	}
+	// One good key, then refusals: their account is known, the request was not answered.
+	evs = append(evs, account(mcp("192.0.2.142", "prober/1", 200)))
+	for range 20 {
+		evs = append(evs, account(mcp("192.0.2.142", "prober/1", 429)))
+	}
+	// Lookups that found nothing, and one asset: an API client's all the same.
+	for range 6 {
+		evs = append(evs, account(mcp("66.249.66.10", loomUA, 404)))
+	}
+	evs = append(evs, account(req("66.249.66.10", loomUA, "", "/assets/x", 200, `{}`)))
+	// The account's client with a Googlebot beside it on the listed address: each its own.
+	evs = append(evs, account(mcp("66.249.66.9", loomUA, 200)), account(mcp("66.249.66.9", loomUA, 200)),
+		mcp("66.249.66.9", "Mozilla/5.0 (compatible; Googlebot/2.1)", 200))
+	// A browser's user agent on the API, no Sec-Fetch header: a script wearing it. With the headers: a browser.
+	evs = append(evs, account(mcp("192.0.2.143", browserUA, 200)),
+		account(req("192.0.2.144", browserUA, "empty", "/v1/x", 200, "")),
+		account(req("192.0.2.145", browserUA, "document", "/", 200, `{}`)))
+	// The docs read in a browser from the program's own address, on a site without the script.
+	evs = append(evs, account(mcp("192.0.2.146", loomUA, 200)), account(mcp("192.0.2.146", loomUA, 200)),
+		req("192.0.2.146", browserUA, "document", "/docs", 200, ""))
+	r.insert(t, evs...)
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	for key, want := range map[string]string{
+		listed:         "api|signed-in API client",
+		"192.0.2.140":  "api|signed-in API client",
+		"192.0.2.141":  "unknown|client loom/0.14.8",
+		"66.249.66.8":  "bot|Googlebot address range",
+		"66.249.66.9":  "api|signed-in API client,Googlebot address range",
+		"192.0.2.143":  "api|signed-in API client",
+		"192.0.2.146":  "api|signed-in API client",
+		"66.249.66.10": "api|signed-in API client",
+	} {
+		a := classes[key]
+		if got := a.Class + "|" + strings.Join(a.Reasons, ","); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	for key, not := range map[string]string{"192.0.2.142": "api", "192.0.2.144": "api", "192.0.2.145": "api"} {
+		if classes[key].Class == not {
+			t.Errorf("%s = %+v", key, classes[key])
+		}
+	}
+	for _, tt := range []struct {
+		ip, ua string
+		want   int
+	}{
+		{"66.249.66.9", "Mozilla/5.0 (compatible; Googlebot/2.1)", store.ClsBot},
+		{"66.249.66.9", loomUA, store.ClsAPI},
+		{"192.0.2.146", browserUA, store.ClsHuman},
+	} {
+		var cls int
+		if err := r.st.DB.QueryRow(`SELECT MAX(cls) FROM event WHERE ip = ? AND ua = ?`, tt.ip, tt.ua).Scan(&cls); err != nil ||
+			cls != tt.want {
+			t.Errorf("%s %q: cls %d, want %d, %v", tt.ip, tt.ua, cls, tt.want, err)
+		}
+	}
+}
+
+// A GET of an API outside /api/ is no page load: a key-holding script wearing a browser's user agent is a program on a
+// site with the script and on one without; without Sec-Fetch but with Accept-Language nobody's browser, never a person.
+// A headless browser rendering pages with a session is no program of the API's, nor is a program without an account
+// beside one with it a person or the API client.
+func TestPass_APIClientPages(t *testing.T) {
+	for _, script := range []bool{false, true} {
+		r := newRig(t, true)
+		if script {
+			if err := r.st.AddStats(t.Context(), []store.IngestStat{{SiteID: r.site.ID, Hour: r.now.Unix() / 3600,
+				Accepted: 5}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		get := func(ip, ua, props string, status int) store.Event {
+			e := req(ip, ua, "", "/v1/x", status, props)
+			e.Method = "GET"
+			return e
+		}
+		const headless = "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/141 Safari/537.36"
+		// The feed carries the fetch headers: somebody sends them.
+		evs := []store.Event{req("192.0.2.180", browserUA, "document", "/", 200, "")}
+		for range 20 {
+			evs = append(evs, account(get("192.0.2.181", browserUA, `{}`, 200)),
+				account(get("192.0.2.182", browserUA, `{"lang":"en"}`, 200)),
+				account(get("192.0.2.184", loomUA, `{}`, 200)))
+		}
+		for range 5 {
+			evs = append(evs, account(req("66.249.66.11", headless, "document", "/a", 200, "")),
+				account(req("66.249.66.11", headless, "script", "/assets/a.js", 200, "")),
+				get("192.0.2.184", "some-agent/1", `{}`, 401))
+		}
+		r.insert(t, evs...)
+		if err := r.c.Pass(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+		want := map[string]string{"192.0.2.181": "api", "66.249.66.11": "bot", "192.0.2.184": "api"}
+		if script {
+			want["192.0.2.182"] = "unknown"
+		}
+		for key, class := range want {
+			if a := classes[key]; a.Class != class {
+				t.Errorf("script %v, %s = %+v, want %s", script, key, a, class)
+			}
+		}
+		var cls int
+		if err := r.st.DB.QueryRow(`SELECT MAX(cls) FROM event WHERE ip = '192.0.2.184' AND ua = 'some-agent/1'`).
+			Scan(&cls); err != nil || cls != store.ClsUnknown {
+			t.Errorf("script %v: the program without an account: cls %d, %v", script, cls, err)
+		}
+	}
+}
+
+// Behind an API client's address only the clients the pass weighed are it: a scanner's many user agents past maxUAs are
+// unknown, on the pass and between passes.
+func TestPass_APIClientOverflow(t *testing.T) {
+	r := newRig(t, true)
+	var evs []store.Event
+	for range 300 {
+		evs = append(evs, account(req("192.0.2.190", loomUA, "", "/mcp", 200, `{}`)))
+	}
+	for i := range 2 * maxUAs {
+		evs = append(evs, req("192.0.2.190", fmt.Sprintf("curl/8.%d", i), "", "/.env", 404, `{}`))
+	}
+	r.insert(t, evs...)
+	for range 2 { // and the second pass changes nothing
+		if err := r.c.Pass(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		var api, unknown int
+		if err := r.st.DB.QueryRow(`SELECT SUM(cls = ?), SUM(cls = ?) FROM event WHERE ip = '192.0.2.190'`,
+			store.ClsAPI, store.ClsUnknown).Scan(&api, &unknown); err != nil || api != 300 || unknown != 2*maxUAs {
+			t.Errorf("%d API client, %d unknown, %v", api, unknown, err)
+		}
+		r.insert(t)
+	}
+	if a, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS); a["192.0.2.190"].Class != "api" {
+		t.Errorf("actor %+v", a["192.0.2.190"])
+	}
+}
+
+// An API client's builds each with their own user agent, more than the pass weighs: every signed-in request keeps its
+// class. Behind a bot list's address the clients nobody weighed stay the list's, and a signed-in person's new events
+// are the person's between passes.
+func TestPass_SignedInRest(t *testing.T) {
+	r := newRig(t, true)
+	var evs []store.Event
+	for i := range 2 * maxUAs {
+		evs = append(evs, account(req("192.0.2.195", fmt.Sprintf("sdk/1.0.%d", i), "", "/mcp", 200, `{}`)))
+	}
+	const listed = "66.249.66.20"
+	for range 300 {
+		evs = append(evs, account(req(listed, browserUA, "document", "/", 200, "")))
+	}
+	for i := range 2 * maxUAs {
+		evs = append(evs, req(listed, fmt.Sprintf("Mozilla/5.0 (compatible; Googlebot/2.%d)", i), "", "/", 200, ""))
+	}
+	r.insert(t, evs...)
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		ip    string
+		cls   int
+		count int
+	}{{"192.0.2.195", store.ClsAPI, 2 * maxUAs}, {listed, store.ClsHuman, 300}, {listed, store.ClsBot, 2 * maxUAs}} {
+		var n int
+		if err := r.st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE ip = ? AND cls = ?`, tt.ip, tt.cls).Scan(&n); err != nil ||
+			n != tt.count {
+			t.Errorf("%s: %d events of class %d, want %d, %v", tt.ip, n, tt.cls, tt.count, err)
+		}
+	}
+	e := account(req(listed, browserUA, "document", "/b", 200, ""))
+	e.SiteID, e.IPKey, e.TS = r.site.ID, e.IP, r.now.UnixMilli()
+	r.c.Enrich(&e)
+	if e.Cls != store.ClsHuman {
+		t.Errorf("the person's next request: %d", e.Cls)
+	}
+}
+
+// Small clients go unlisted only beside a person and as a small part; a page with a dot in its name is a page; Node's
+// fetch, which sends Sec-Fetch-Mode, is no signed-in browser; an API client beside a scanner is no reason of the
+// scanner's, nor is its pace.
+func TestPass_SmallParts(t *testing.T) {
+	r := newRig(t, true)
+	if err := r.st.AddStats(t.Context(), []store.IngestStat{{SiteID: r.site.ID, Hour: r.now.Unix() / 3600,
+		Accepted: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	page := func(ip, path string) store.Event {
+		e := req(ip, "Mozilla/5.0 (X11; Linux x86_64) Chrome/120.0 Safari/537.36", "", path, 200, `{"lang":"en"}`)
+		e.Method = "GET"
+		return e
+	}
+	evs := []store.Event{
+		{Source: "browser", Kind: "page_view", IP: "192.0.2.200", UA: browserUA},
+		req("192.0.2.200", browserUA, "document", "/", 200, ""),
+		req("192.0.2.200", browserUA, "document", "/b", 200, ""),
+		req("192.0.2.200", "curl/8.4.0", "", "/.env", 404, ""), req("192.0.2.200", "curl/8.4.0", "", "/x", 404, ""),
+		page("192.0.2.201", "/index.html"),
+	}
+	for range 5 {
+		evs = append(evs, store.Event{Source: "browser", Kind: "page_view", IP: "192.0.2.201", UA: browserUA})
+	}
+	for i := range 15 {
+		e := account(req("192.0.2.202", browserUA, "empty", "/v1/x", 200, `{"sf_mode":"cors","lang":"*"}`))
+		slow := req("192.0.2.203", "curl/8.4.0", "", "/v1/x", 200, `{}`)
+		e.TS, slow.TS = r.now.UnixMilli()-int64(i)*2000, r.now.UnixMilli()-int64(i)*2000
+		evs = append(evs, e, slow)
+	}
+	for range 14 {
+		evs = append(evs, account(req("192.0.2.203", "sdk/1", "", "/v1/x", 200, `{}`)))
+	}
+	r.insert(t, evs...)
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	for key, want := range map[string]string{
+		"192.0.2.200": "human|script beacon,also unknown automated: curl/8.4.0, 2 of 5 events (client curl/8.4.0)",
+		"192.0.2.201": "human|script beacon",
+		"192.0.2.202": "unknown|no page loaded",
+		"192.0.2.203": "unknown|client curl/8.4.0,also API client: sdk/1, 14 of 29 events (signed-in API client)",
+	} {
+		a := classes[key]
+		if got := a.Class + "|" + strings.Join(a.Reasons, ","); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	var cls int
+	if err := r.st.DB.QueryRow(`SELECT cls FROM event WHERE path = '/index.html'`).Scan(&cls); err != nil || cls != store.ClsUnknown {
+		t.Errorf("a page delivered without a beacon: cls %d, %v", cls, err)
+	}
+}
+
+// Ten SDKs of two requests each beside a person are too much to go unlisted.
+func TestPass_SmallAPIClients(t *testing.T) {
+	r := newRig(t, true)
+	evs := []store.Event{{Source: "browser", Kind: "page_view", IP: "192.0.2.191", UA: browserUA}}
+	for range 40 {
+		evs = append(evs, req("192.0.2.191", browserUA, "document", "/", 200, ""))
+	}
+	for i := range 10 {
+		for range 2 {
+			evs = append(evs, account(req("192.0.2.191", fmt.Sprintf("sdk-%d/1", i), "", "/v1/x", 200, `{}`)))
+		}
+	}
+	r.insert(t, evs...)
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	a := classes["192.0.2.191"]
+	if a.Class != "human" || !slices.Contains(a.Reasons, "also API client: sdk-0/1, 2 of 61 events (signed-in API client)") {
+		t.Errorf("actor %+v", a)
+	}
+}
+
+// A feed without the fetch headers says nothing about a browser by their absence: a signed-in person's single-page app
+// on a site without the script stays one.
+func TestPass_APIClientNeedsFetchMeta(t *testing.T) {
+	r := newRig(t, true)
+	var evs []store.Event
+	for range 10 {
+		evs = append(evs, account(req("192.0.2.170", browserUA, "", "/api/x", 200, `{}`)))
+	}
+	r.insert(t, evs...)
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	if a := classes["192.0.2.170"]; a.Class != "human" {
+		t.Errorf("signed-in browser on a feed without fetch headers: %+v", a)
+	}
+}
+
+// A signed-in person's machine asks for things beside the browser: a sign-in callback fetched again without its cookie
+// by a link preview and by a second Safari user agent, two events of 403 (seen in production 2026-11-23). They make no
+// "also" line and the browser's twin goes with the person; three such fetches are an actor of their own.
+func TestPass_SideFetches(t *testing.T) {
+	r := newRig(t, true)
+	if err := r.st.AddStats(t.Context(), []store.IngestStat{{SiteID: r.site.ID, Hour: r.now.Unix() / 3600,
+		Accepted: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	const (
+		previewUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_1) AppleWebKit/601.2.4 (KHTML, like Gecko) " +
+			"Version/9.0.1 Safari/601.2.4 facebookexternalhit/1.1 Facebot Twitterbot/1.0"
+		oldUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_1) AppleWebKit/601.2.4 Version/9.0.1 Safari/601.2.4"
+	)
+	callback := func(ip, ua string) store.Event { return req(ip, ua, "", "/auth/github/callback", 403, "") }
+	person := func(ip string) []store.Event {
+		evs := []store.Event{req(ip, browserUA, "script", "/assets/a.js", 200, ""),
+			account(req(ip, browserUA, "empty", "/api/me", 200, "")), req(ip, browserUA, "empty", "/api/me", 401, ""),
+			{Source: "browser", Kind: "engagement", IP: ip, UA: browserUA}}
+		for _, status := range []int{200, 200, 304} {
+			evs = append(evs, req(ip, browserUA, "document", "/", status, ""),
+				store.Event{Source: "browser", Kind: "page_view", IP: ip, UA: browserUA})
+		}
+		return evs
+	}
+	r.insert(t, append(person("192.0.2.150"), callback("192.0.2.150", previewUA), callback("192.0.2.150", oldUA))...)
+	// Three: no side fetch. A scanner with a browser's user agent does not hide behind the person.
+	r.insert(t, append(person("192.0.2.151"), callback("192.0.2.151", oldUA), callback("192.0.2.151", oldUA),
+		callback("192.0.2.151", oldUA))...)
+	// The same fetch with nobody beside it is nobody's.
+	r.insert(t, callback("192.0.2.152", oldUA))
+	// A page delivered and no beacon: the rule as it was.
+	r.insert(t, req("192.0.2.153", browserUA, "document", "/", 304, ""))
+	// Signed in, the tracker blocked and the assets cached: the account shows the person.
+	r.insert(t, req("192.0.2.154", browserUA, "document", "/", 304, ""),
+		account(req("192.0.2.154", browserUA, "empty", "/api/me", 200, "")))
+	// A scanner rotating browsers' user agents, two probes each, behind a person: the same size one by one.
+	evs := person("192.0.2.155")
+	for i := range 20 {
+		ua := fmt.Sprintf("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/%d.0 Safari/537.36", 100+i)
+		evs = append(evs, req("192.0.2.155", ua, "", "/.env", 404, ""), req("192.0.2.155", ua, "", "/wp-login.php", 404, ""))
+	}
+	// Three tools of two events each behind a person: too much to be side fetches, so listed.
+	evs = append(evs, person("192.0.2.156")...)
+	for _, ua := range []string{"curl/8.4.0", "python-requests/2.32", "Wget/1.21"} {
+		evs = append(evs, req("192.0.2.156", ua, "", "/x", 404, ""), req("192.0.2.156", ua, "", "/y", 404, ""))
+	}
+	// A key-holding script wearing a browser's user agent on a site with the script: a program, or, sending
+	// Accept-Language, nobody's browser; never a person.
+	for range 20 {
+		evs = append(evs, account(req("192.0.2.157", browserUA, "", "/v1/x", 200, `{}`)),
+			account(req("192.0.2.158", browserUA, "", "/v1/x", 200, `{"lang":"en"}`)))
+	}
+	r.insert(t, evs...)
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, r.now.UnixMilli()/dayMS)
+	for key, want := range map[string]string{
+		"192.0.2.150": "human|script beacon,engaged,assets loaded,signed in",
+		"192.0.2.151": "human|script beacon,engaged,assets loaded,signed in,also unknown automated: " +
+			"Safari" + ensp + "·" + ensp + "macOS, 3 of 13 events (no page loaded)",
+		"192.0.2.152": "unknown|no page loaded",
+		"192.0.2.153": "unknown|no sign of a browser",
+		"192.0.2.154": "human|signed in,no script beacon,no assets",
+		"192.0.2.155": "unknown|no page loaded,mostly refused",
+		"192.0.2.156": "human|script beacon,engaged,assets loaded,signed in," +
+			"also unknown automated: Wget/1.21, 2 of 16 events (client Wget/1.21)," +
+			"also unknown automated: curl/8.4.0, 2 of 16 events (client curl/8.4.0)," +
+			"also unknown automated: python-requests/2.32, 2 of 16 events (client python-requests/2.32)",
+		"192.0.2.157": "api|signed-in API client",
+		"192.0.2.158": "unknown|API only, no page loaded,rapid requests",
+	} {
+		a := classes[key]
+		if got := a.Class + "|" + strings.Join(a.Reasons, ","); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	for ua, want := range map[string]int{previewUA: store.ClsUnknown, oldUA: store.ClsHuman} {
+		var cls int
+		if err := r.st.DB.QueryRow(`SELECT cls FROM event WHERE ip = '192.0.2.150' AND ua = ?`, ua).Scan(&cls); err != nil ||
+			cls != want {
+			t.Errorf("%q: cls %d, want %d, %v", ua, cls, want, err)
+		}
+	}
+}
+
+// A request answered with an account is an API client's when written, over the lists and over a pass that saw the
+// client without one.
+func TestEnrich_APIClient(t *testing.T) {
+	r := newRig(t, true)
+	r.insert(t, req("192.0.2.160", loomUA, "", "/mcp", 401, `{}`),
+		account(req("192.0.2.164", loomUA, "", "/mcp", 200, `{}`)), account(req("192.0.2.164", loomUA, "", "/mcp", 200, `{}`)),
+		// One good answer among refusals: the pass saw the account and said no.
+		account(req("192.0.2.166", loomUA, "", "/mcp", 200, `{}`)), req("192.0.2.166", loomUA, "", "/mcp", 401, `{}`),
+		req("192.0.2.166", loomUA, "", "/mcp", 401, `{}`))
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		e    store.Event
+		want int
+	}{
+		{"after a pass", account(req("192.0.2.160", loomUA, "", "/mcp", 200, `{}`)), store.ClsAPI},
+		{"listed address", account(req("66.249.66.1", loomUA, "", "/mcp", 200, `{}`)), store.ClsAPI},
+		{"refused", account(req("192.0.2.161", loomUA, "", "/mcp", 429, `{}`)), store.ClsUnknown},
+		{"a browser", account(req("192.0.2.162", browserUA, "empty", "/api/me", 200, "")), store.ClsPending},
+		{"no account", req("192.0.2.163", loomUA, "", "/mcp", 200, `{}`), store.ClsUnknown},
+		{"decided against", account(req("192.0.2.166", loomUA, "", "/mcp", 200, `{}`)), store.ClsUnknown},
+		{"a 404 lookup", account(req("192.0.2.165", loomUA, "", "/mcp", 404, `{}`)), store.ClsAPI},
+		// Behind an address the pass classed API client: its own refused request stays its own, a newcomer is not it.
+		{"its own refusal", req("192.0.2.164", loomUA, "", "/mcp", 401, `{}`), store.ClsAPI},
+		{"a scanner beside it", req("192.0.2.164", "curl/8.4.0", "", "/.env", 404, `{}`), store.ClsUnknown},
+		{"a page beside it", req("192.0.2.164", browserUA, "document", "/", 200, ""), store.ClsPending},
+		{"a beacon beside it", store.Event{Source: "browser", Kind: "page_view", IP: "192.0.2.164", UA: browserUA,
+			Props: `{"ctx":{"webdriver":false}}`}, store.ClsHuman},
+	} {
+		tt.e.SiteID, tt.e.IPKey, tt.e.TS = r.site.ID, tt.e.IP, r.now.UnixMilli()
+		r.c.Enrich(&tt.e)
+		if tt.e.Cls != tt.want {
+			t.Errorf("%s: %d, want %d", tt.name, tt.e.Cls, tt.want)
+		}
 	}
 }
 

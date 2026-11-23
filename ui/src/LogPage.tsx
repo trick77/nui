@@ -21,6 +21,7 @@ const CLASS_OPTS: [string, string][] = [
   ["bot", "Known bots"],
   ["monitor", "Uptime probes"],
   ["unknown", "Unknown automated"],
+  ["api", "API clients"],
 ];
 const BROWSER_KINDS = [
   "page_view",

@@ -520,7 +520,7 @@ func TestUpgrade_0002(t *testing.T) {
 	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event`).Scan(&events); err != nil || events != 50 {
 		t.Errorf("events after upgrade = %d, %v", events, err)
 	}
-	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 3 {
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 4 {
 		t.Errorf("migrations = %d, %v", migrated, err)
 	}
 	for _, tbl := range []string{"agg_day", "agg_hour", "agg_list", "agg_addr"} {
@@ -534,6 +534,98 @@ func TestUpgrade_0002(t *testing.T) {
 	if err := st.InsertEvents(t.Context(), []Event{{SiteID: id, TS: day * dayMS, Source: "browser",
 		Kind: "page_view", IP: "192.0.2.1", IPKey: "192.0.2.1"}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestUpgrade_0004 opens a database that 0.2 left, with classes and hourly aggregates whose raw is gone: every row
+// stays as it was, sketches included, and the new class is taken.
+func TestUpgrade_0004(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.db")
+	old := fstest.MapFS{}
+	for _, f := range []string{"0001_init.sql", "0002_agg.sql", "0003_purge.sql"} {
+		data, err := fs.ReadFile(migrations(), f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old[f] = &fstest.MapFile{Data: data}
+	}
+	db, err := sql.Open("sqlite3", dsn(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := migrate.Up(t.Context(), db, old, migrate.Options{Dialect: migrate.SQLite}); err != nil {
+		t.Fatal(err)
+	}
+	id := seed(t, &Store{DB: db})
+	// Every column its own value: a column copied into another would show.
+	for i, class := range []string{"human", "bot", "monitor", "unknown"} {
+		if _, err := db.Exec(`INSERT INTO actor_class VALUES (?, ?, ?, ?, ?, ?)`, id, fmt.Sprintf("192.0.2.%d", i+1),
+			100+i, class, fmt.Sprintf(`["r%d"]`, i), 1000+i); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO agg_hour VALUES (?, ?, ?, 11, 12, 13, 14, 15, 16, 17, x'01', x'0203', ?)`,
+			id, 2400+i, i+1, []byte{byte(i), 0xff}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dump := func(db *sql.DB, table string) string {
+		t.Helper()
+		//nolint:gosec // the test's own table names
+		rows, err := db.Query(`SELECT * FROM ` + table + ` ORDER BY 1, 2, 3`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = rows.Close() }()
+		cols, err := rows.Columns()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := fmt.Sprintln(cols)
+		for rows.Next() {
+			vals, ptrs := make([]any, len(cols)), make([]any, len(cols))
+			for i := range vals {
+				ptrs[i] = &vals[i]
+			}
+			if err := rows.Scan(ptrs...); err != nil {
+				t.Fatal(err)
+			}
+			out += fmt.Sprintln(vals...)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	tables := []string{"actor_class", "agg_hour"}
+	before := map[string]string{}
+	for _, tbl := range tables {
+		before[tbl] = dump(db, tbl)
+	}
+	_ = db.Close()
+
+	st, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	for _, tbl := range tables {
+		if got := dump(st.DB, tbl); got != before[tbl] {
+			t.Errorf("%s after the upgrade:\n%s\nwant\n%s", tbl, got, before[tbl])
+		}
+	}
+	if err := st.SetActorClass(t.Context(), ActorClass{SiteID: id, IPKey: "192.0.2.9", Day: 200, Class: "api"}, nil); err != nil {
+		t.Errorf("class api: %v", err)
+	}
+	if _, err := st.DB.Exec(`INSERT INTO agg_hour (site_id, hour, cls) VALUES (?, 4800, ?)`, id, ClsAPI); err != nil {
+		t.Errorf("hour of class api: %v", err)
+	}
+	if _, err := st.DB.Exec(`INSERT INTO agg_hour (site_id, hour, cls) VALUES (?, 4800, 6)`, id); err == nil {
+		t.Error("a class code nobody knows was taken")
+	}
+	var index int
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE type = 'index' AND name = 'actor_class_day'`).
+		Scan(&index); err != nil || index != 1 {
+		t.Errorf("actor_class_day: %d, %v", index, err)
 	}
 }
 

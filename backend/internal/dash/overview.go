@@ -338,7 +338,7 @@ func totalOf(bs []bucketStats, f func(bucketStats) float64) float64 {
 func (s *Server) live(ctx context.Context, site int64) (live, error) {
 	var l live
 	err := s.row(ctx, `SELECT COALESCE(SUM(h), 0), COALESCE(SUM(a OR (p AND NOT h)), 0) FROM (
-		SELECT MAX(cls = 1) AS h, MAX(cls IN (2, 3, 4)) AS a, MAX(cls = 0) AS p
+		SELECT MAX(cls = 1) AS h, MAX(cls IN (2, 3, 4, 5)) AS a, MAX(cls = 0) AS p
 		FROM event WHERE site_id = ? AND ts >= ? AND ts < ? GROUP BY ip_key)`,
 		// Up to an hour on: past any time the collector stamps (a minute after receipt at most), a bounded read.
 		site, ms(s.now().Add(-5*time.Minute)), ms(s.now().Add(time.Hour))).Scan(&l.Humans, &l.Automated)
