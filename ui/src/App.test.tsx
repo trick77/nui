@@ -1523,9 +1523,17 @@ describe("log page", () => {
       fireEvent.change(box(log, "Path or event name"), {
         target: { value: "/api" },
       });
-      await pause();
-      const q = lastCall("/api/dash/log");
-      expect([q.get("addr"), q.get("path")]).toEqual(["192.0.2.120", "/api"]);
+      // However long the first filter's render takes.
+      await waitFor(
+        () => {
+          const q = lastCall("/api/dash/log");
+          expect([q.get("addr"), q.get("path")]).toEqual([
+            "192.0.2.120",
+            "/api",
+          ]);
+        },
+        { timeout: 4000 },
+      );
       const url = new URLSearchParams(window.location.search);
       expect([url.get("addr"), url.get("path")]).toEqual([
         "192.0.2.120",
@@ -1540,15 +1548,19 @@ describe("log page", () => {
       fireEvent.change(box(log, "Path or event name"), {
         target: { value: "sign " },
       });
-      await pause();
-      expect(lastCall("/api/dash/log").get("path")).toBe("sign");
+      await waitFor(
+        () => expect(lastCall("/api/dash/log").get("path")).toBe("sign"),
+        { timeout: 4000 },
+      );
       // The space just typed stays in the field.
       expect(box(log, "Path or event name")).toHaveValue("sign ");
       fireEvent.change(box(log, "Path or event name"), {
         target: { value: "sign up" },
       });
-      await pause();
-      expect(lastCall("/api/dash/log").get("path")).toBe("sign up");
+      await waitFor(
+        () => expect(lastCall("/api/dash/log").get("path")).toBe("sign up"),
+        { timeout: 4000 },
+      );
       expect(box(log, "Path or event name")).toHaveValue("sign up");
     });
 
