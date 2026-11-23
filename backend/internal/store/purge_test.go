@@ -123,8 +123,8 @@ func TestPurgeRaw_Grace(t *testing.T) {
 	if n := countRows(t, st, `SELECT COUNT(*) FROM agg_hour`); n != 21 {
 		t.Errorf("hours %d, want every day's", n)
 	}
-	// A second round finds nothing more.
-	if n := purge(at.Add(time.Hour)); n != 0 {
+	// A second round finds nothing more the same day (start is a full hour: an hour on could be the next one).
+	if n := purge(at.Add(time.Minute)); n != 0 {
 		t.Errorf("second round purged %d", n)
 	}
 	// A recorded start that is no unix ms stops the purge with an error, deleting nothing.
