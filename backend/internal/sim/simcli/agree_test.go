@@ -190,7 +190,7 @@ func TestSourcesAgreeFeedGaps(t *testing.T) {
 				days, scale = max(sc.MinDays, 3), 0.3
 			}
 			src, w := history(t, scale, days, sc.Name)
-			path := filepath.Join(t.TempDir(), "nui.db")
+			path := filepath.Join(t.TempDir(), "stakeout.db")
 			if _, err := src.DB.ExecContext(t.Context(), `VACUUM INTO ?`, path); err != nil {
 				t.Fatal(err)
 			}

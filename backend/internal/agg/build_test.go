@@ -23,7 +23,7 @@ var anchor = time.Date(2026, 11, 22, 13, 30, 0, 0, time.UTC)
 
 func openStore(t *testing.T) *store.Store {
 	t.Helper()
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "nui.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ var history = sync.OnceValues(func() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, "nui.db")
+	path := filepath.Join(dir, "stakeout.db")
 	st, err := store.Open(ctxBackground(), path)
 	if err != nil {
 		return "", err
@@ -76,7 +76,7 @@ func historyCopy(t *testing.T) *store.Store {
 var historyDir string
 
 func tempDir() (string, error) {
-	d, err := os.MkdirTemp("", "nui-agg-")
+	d, err := os.MkdirTemp("", "stakeout-agg-")
 	historyDir = d
 	return d, err
 }

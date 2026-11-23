@@ -401,7 +401,7 @@ func TestRawWritesMarkAggDirty(t *testing.T) {
 // TestUpgrade_0002 opens a database that 0.1 left (0001 only, with events): Open adds the aggregate tables, empty,
 // and every event stays.
 func TestUpgrade_0002(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nui.db")
+	path := filepath.Join(t.TempDir(), "stakeout.db")
 	init, err := fs.ReadFile(migrations(), "0001_init.sql")
 	if err != nil {
 		t.Fatal(err)
