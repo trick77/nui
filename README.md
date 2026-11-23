@@ -6,7 +6,9 @@ The name: a stakeout is a quiet watch on a door, noting everyone who comes and g
 
 Most analytics tools are a browser script, so they only ever see visitors whose browser runs it. Stakeout also takes a
 feed from your backend and puts the two together: the people, and everything else that knocks on your door, from
-crawlers and uptime probes to scanners and scripts walking your API.
+crawlers and uptime probes to scanners and scripts walking your API. Where other tools bolt a chat box onto their
+charts, the model in Stakeout is part of the analysis: it works from what Stakeout has already worked out and never
+makes up a figure.
 
 ![The overview: figures with trends, visitors per day against the previous period, and what the model found noteworthy](docs/img/overview.png)
 
@@ -16,8 +18,9 @@ crawlers and uptime probes to scanners and scripts walking your API.
   is sampled and nothing leaves your server.
 - **People or bots.** Each visitor is classed as a person, a known bot, an uptime probe or unknown automation, and
   the dashboard shows the reasons. Known bots come from the [ipverse](https://github.com/ipverse) lists.
-- **AI that reads the traffic for you.** With a model key Stakeout writes a short briefing of what changed and says in a
-  sentence what an address is up to. Every figure is computed without it; the model never produces a number.
+- **AI built in, not bolted on.** The model is part of the analysis, not a chat box on top of the charts: it works from
+  the facts and verdicts Stakeout has already computed, writes a short briefing of what changed and says in a sentence
+  what an address is up to. Every figure is computed without it; the model never produces a number.
 - **Harmless to your site.** The script is under 6 kB gzipped, sends in the background, and caps and backs off on its
   own. If Stakeout is down, your pages and your backend do not notice.
 - **One container.** A single image behind your reverse proxy, with its database inside and sign-in by OIDC or an
