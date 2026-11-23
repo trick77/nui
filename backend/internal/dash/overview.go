@@ -2,6 +2,7 @@ package dash
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"slices"
 	"time"
@@ -13,15 +14,92 @@ import (
 // visitor did.
 const eventKinds = `kind NOT IN ('page_view', 'session_start', 'engagement', 'vital')`
 
-// bucket reads one bucket, a piece (at most a day) at a time.
-func (s *Server) bucket(ctx context.Context, site int64, aud string, from, to time.Time) (bucketStats, error) {
-	b := bucketStats{visitors: map[string]struct{}{}}
+// bucket reads one bucket, a piece (at most a day) at a time, each from its source. short: a 24h or 7d range or its
+// prior period, read raw first.
+func (s *Server) bucket(ctx context.Context, pl *plan, aud string, from, to time.Time, short bool) (bucketStats, error) {
+	var b bucketStats
 	for _, pc := range pieces(from, to) {
-		if err := s.bucketPiece(ctx, site, aud, pc[0], pc[1], &b); err != nil {
+		if err := pl.read(ctx, pc[0], pc[1], time.Hour, short,
+			func() (bool, error) { return s.bucketHours(ctx, pl.site, aud, pc[0], pc[1], &b) },
+			func() error { return s.bucketPiece(ctx, pl.site, aud, pc[0], pc[1], &b) }); err != nil {
 			return b, err
 		}
 	}
 	return b, nil
+}
+
+// audCls is the agg_hour classes of an audience (pending is stored as 4, unknown automated).
+func audCls(aud string) func(cls int) bool {
+	switch aud {
+	case "humans":
+		return func(cls int) bool { return cls == 1 }
+	case "bots":
+		return func(cls int) bool { return cls != 1 }
+	}
+	return func(int) bool { return true }
+}
+
+// bucketHours adds one piece's hours from agg_hour to b, false when its day is not clean in the statement's
+// snapshot (nothing added then).
+func (s *Server) bucketHours(ctx context.Context, site int64, aud string, from, to time.Time, b *bucketStats) (bool, error) {
+	rows, err := s.query(ctx, `SELECT d.ok, t.cls, t.views, t.actions, t.requests, t.errors, t.browser_ids, t.addrs`+
+		aggFrom("agg_hour", "t.hour >= ?3 AND t.hour < ?4"), site, ms(from)/dayMS, ms(from)/hourMS, ms(to)/hourMS)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	in := audCls(aud)
+	var add bucketStats
+	ok := false
+	for rows.Next() {
+		var cls sql.NullInt64
+		var views, actions, requests, errs sql.NullInt64
+		var ids, addrs []byte
+		if err := rows.Scan(&ok, &cls, &views, &actions, &requests, &errs, &ids, &addrs); err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+		if !cls.Valid { // a day without an hour of events
+			continue
+		}
+		c := int(cls.Int64)
+		add.allReq += float64(requests.Int64)
+		if c == 4 {
+			add.unknown += float64(requests.Int64)
+		}
+		if !in(c) {
+			continue
+		}
+		add.views += float64(views.Int64)
+		add.events += float64(actions.Int64)
+		add.requests += float64(requests.Int64)
+		add.errors += float64(errs.Int64)
+		sk := ids
+		if aud == "bots" {
+			sk = addrs
+		}
+		if err := add.visitors.addSketch(sk); err != nil {
+			return false, err
+		}
+	}
+	if err := rows.Err(); err != nil || !ok {
+		return false, err
+	}
+	b.add(&add)
+	return true, nil
+}
+
+// add adds o's figures to b.
+func (b *bucketStats) add(o *bucketStats) {
+	b.views += o.views
+	b.events += o.events
+	b.requests += o.requests
+	b.unknown += o.unknown
+	b.allReq += o.allReq
+	b.errors += o.errors
+	b.visitors.merge(&o.visitors)
 }
 
 // bucketPiece adds one piece to b: two short statements (the sums, the distinct visitors).
@@ -60,16 +138,16 @@ func (s *Server) bucketPiece(ctx context.Context, site int64, aud string, from, 
 		if err := rows.Scan(&v); err != nil {
 			return err
 		}
-		b.visitors[v] = struct{}{}
+		b.visitors.add(v)
 	}
 	return rows.Err()
 }
 
 // buckets reads every bucket of bounds, one at a time.
-func (s *Server) buckets(ctx context.Context, site int64, aud string, bounds []time.Time) ([]bucketStats, error) {
+func (s *Server) buckets(ctx context.Context, pl *plan, aud string, bounds []time.Time, short bool) ([]bucketStats, error) {
 	out := make([]bucketStats, 0, len(bounds))
 	for i := 0; i+1 < len(bounds); i++ {
-		b, err := s.bucket(ctx, site, aud, bounds[i], bounds[i+1])
+		b, err := s.bucket(ctx, pl, aud, bounds[i], bounds[i+1], short)
 		if err != nil {
 			return nil, err
 		}
@@ -115,7 +193,7 @@ type tileDef struct {
 }
 
 var tileDefs = []tileDef{
-	{key: "visitors", label: "Unique visitors", kind: "sum", of: func(b bucketStats) float64 { return float64(len(b.visitors)) }},
+	{key: "visitors", label: "Unique visitors", kind: "sum", of: func(b bucketStats) float64 { return float64(b.visitors.count()) }},
 	{key: "views", label: "Page views", kind: "sum", of: func(b bucketStats) float64 { return b.views }},
 	{key: "events", label: "Events", kind: "sum", of: func(b bucketStats) float64 { return b.events }},
 	{key: "requests", label: "Requests", kind: "sum", server: true, of: func(b bucketStats) float64 { return b.requests }},
@@ -135,13 +213,17 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request, q *query
 
 func (s *Server) overview(ctx context.Context, q *query) (overview, error) {
 	var ov overview
-	cur, err := s.buckets(ctx, q.site.ID, q.aud, q.p.Bounds)
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		return ov, err
+	}
+	cur, err := s.buckets(ctx, pl, q.aud, q.p.Bounds, !q.p.agg)
 	if err != nil {
 		return ov, err
 	}
 	var prev []bucketStats
 	if q.p.Prev != nil {
-		if prev, err = s.buckets(ctx, q.site.ID, q.aud, q.p.Prev); err != nil {
+		if prev, err = s.buckets(ctx, pl, q.aud, q.p.Prev, !q.p.prevAgg); err != nil {
 			return ov, err
 		}
 	}
@@ -195,13 +277,11 @@ func (s *Server) tiles(q *query, cur, prev []bucketStats) []tile {
 func (s *Server) total(d tileDef, bs []bucketStats) float64 {
 	switch d.key {
 	case "visitors":
-		all := map[string]struct{}{}
-		for _, b := range bs {
-			for v := range b.visitors {
-				all[v] = struct{}{}
-			}
+		var all uniq
+		for i := range bs {
+			all.merge(&bs[i].visitors)
 		}
-		return float64(len(all))
+		return float64(all.count())
 	case "auto_share":
 		return round1(pct(totalOf(bs, func(b bucketStats) float64 { return b.unknown }),
 			totalOf(bs, func(b bucketStats) float64 { return b.allReq })))
@@ -224,8 +304,9 @@ func (s *Server) live(ctx context.Context, site int64) (live, error) {
 	var l live
 	err := s.row(ctx, `SELECT COALESCE(SUM(h), 0), COALESCE(SUM(a OR (p AND NOT h)), 0) FROM (
 		SELECT MAX(cls = 1) AS h, MAX(cls IN (2, 3, 4)) AS a, MAX(cls = 0) AS p
-		FROM event WHERE site_id = ? AND ts >= ? GROUP BY ip_key)`,
-		site, ms(s.now().Add(-5*time.Minute))).Scan(&l.Humans, &l.Automated)
+		FROM event WHERE site_id = ? AND ts >= ? AND ts < ? GROUP BY ip_key)`,
+		// Up to an hour on: past any time the collector stamps (a minute after receipt at most), a bounded read.
+		site, ms(s.now().Add(-5*time.Minute)), ms(s.now().Add(time.Hour))).Scan(&l.Humans, &l.Automated)
 	return l, err
 }
 

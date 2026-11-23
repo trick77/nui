@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/trick77/stakeout/backend/internal/agg"
 	"github.com/trick77/stakeout/backend/internal/apix"
 	"github.com/trick77/stakeout/backend/internal/ingest"
 	"github.com/trick77/stakeout/backend/internal/insight"
@@ -106,6 +107,10 @@ func newRig(t *testing.T, days, people int, model insight.Model) *rig {
 		}
 		if err := st.AddStats(t.Context(), []store.IngestStat{{SiteID: rows[feedSite].ID, Hour: end.Unix()/3600 - 30,
 			Accepted: 100, AcceptedServer: 60, RateLimited: 4}, {SiteID: 0, Hour: end.Unix() / 3600, UnknownDomain: 2}}); err != nil {
+			t.Fatal(err)
+		}
+		// Every day built, as the job would have up to two days ago: auto reads them, SourceAgg all of them.
+		if _, err := agg.BuildThrough(t.Context(), st, end, agg.TopK); err != nil {
 			t.Fatal(err)
 		}
 	}

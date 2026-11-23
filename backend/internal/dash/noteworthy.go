@@ -172,11 +172,15 @@ func nonNil(s []string) []string {
 func (s *Server) briefingInput(ctx context.Context, q *query) (insight.BriefingInput, error) {
 	in := insight.BriefingInput{SiteID: q.site.ID, Domain: q.site.Domain, Range: q.rng, PrevLabel: q.p.prevL,
 		AsOf: q.p.ClosedEnd()}
-	cur, err := s.buckets(ctx, q.site.ID, "all", q.p.Bounds)
+	pl, err := s.planOf(ctx, q)
 	if err != nil {
 		return in, err
 	}
-	prev, err := s.buckets(ctx, q.site.ID, "all", q.p.Prev)
+	cur, err := s.buckets(ctx, pl, "all", q.p.Bounds, !q.p.agg)
+	if err != nil {
+		return in, err
+	}
+	prev, err := s.buckets(ctx, pl, "all", q.p.Prev, !q.p.prevAgg)
 	if err != nil {
 		return in, err
 	}
