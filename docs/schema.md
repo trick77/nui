@@ -37,6 +37,7 @@ Checks:
 Go types:
 
 - `store.AggAddr` (internal/store): AggAddr is one address key's sums for one site, UTC day and part.
+- `store.AggAddrKey` (internal/store): AggAddrKey is an agg_addr row's key within its site-day.
 
 | Column | Type | Null | Default | PK |
 | --- | --- | --- | --- | --- |
@@ -162,6 +163,7 @@ Checks:
 
 Go types:
 
+- `agg.raw` (internal/agg): raw is one event row as the builder reads it.
 - `classify.actorDay` (internal/classify): actorDay is one actor's day as the pass weighs it: its address, network and its most frequent user agents.
 - `classify.actorKey` (internal/classify): actorKey is one actor-day of a site: a pass's unit of work, and what an rDNS answer still pending marks.
 - `classify.uaDay` (internal/classify): uaDay is one user agent's part of an actor's day, sums over its events: the pass weighs every client of a shared address on its own.
