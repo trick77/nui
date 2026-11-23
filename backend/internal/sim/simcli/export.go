@@ -122,67 +122,8 @@ func Export(ctx context.Context, st *store.Store, w *sim.World, dir string, abou
 	}
 	for _, s := range w.Sites {
 		for _, rng := range rngs {
-			p := func(aud, cmp string, kv ...string) map[string]string {
-				m := map[string]string{"site": s.Domain, "range": rng, "aud": aud, "cmp": cmp, "tz": "UTC"}
-				for i := 0; i+1 < len(kv); i += 2 {
-					m[kv[i]] = kv[i+1]
-				}
-				return m
-			}
-			auds := []string{"all"}
-			if rng == "7d" {
-				auds = audiences
-			}
-			for _, aud := range audiences {
-				for _, cmp := range compares {
-					if _, err := get("overview", p(aud, cmp)); err != nil {
-						return 0, err
-					}
-				}
-			}
-			for _, aud := range auds {
-				var reqs [][]string
-				for _, ep := range []string{"noteworthy", "classes", "status", "clients", "domain", "log"} {
-					reqs = append(reqs, []string{ep})
-				}
-				for _, dim := range listDims {
-					for _, sort := range []string{"volume", "change"} {
-						reqs = append(reqs, []string{"list", "dim", dim, "sort", sort, "limit", "6"},
-							[]string{"list", "dim", dim, "sort", sort, "limit", "500"})
-					}
-				}
-				reqs = append(reqs, []string{"list", "dim", "countries", "sort", "volume", "limit", "300"},
-					[]string{"list", "dim", "countries", "sort", "volume", "limit", "5"},
-					[]string{"list", "dim", "events", "sort", "volume", "limit", "6", "sub", "custom"})
-				for _, sort := range visitorSorts {
-					for _, limit := range []string{"7", "50"} {
-						reqs = append(reqs, []string{"visitors", "sort", sort, "limit", limit})
-					}
-				}
-				for _, r := range reqs {
-					body, err := get(r[0], p(aud, "prev", r[1:]...))
-					if err != nil {
-						return 0, err
-					}
-					// The expansions of the top pages, and the details of the visitors listed first.
-					switch {
-					case aud == "all" && r[0] == "list" && r[2] == "pages" && r[6] == "6" && r[4] == "volume":
-						for _, row := range rows(body) {
-							if row["expandable"] == true {
-								if _, err := get("list", p(aud, "prev", "dim", "pages", "sort", "volume", "limit", "6",
-									"within", fmt.Sprint(row["key"]))); err != nil {
-									return 0, err
-								}
-							}
-						}
-					case aud == "all" && r[0] == "visitors" && r[4] == "7" && (rng == "7d" || rng == "24h"):
-						for _, row := range rows(body) {
-							if _, err := get("visitor", p(aud, "prev", "key", fmt.Sprint(row["key"]))); err != nil {
-								return 0, err
-							}
-						}
-					}
-				}
+			if err := uiRequests(s.Domain, rng, "UTC", "", get); err != nil {
+				return 0, err
 			}
 		}
 	}
@@ -191,6 +132,81 @@ func Export(ctx context.Context, st *store.Store, w *sim.World, dir string, abou
 		return 0, err
 	}
 	return len(idx.Responses), os.WriteFile(filepath.Join(dir, "index.json"), append(b, '\n'), 0o600)
+}
+
+// uiRequests asks get for every request the UI makes of a site over a range in zone tz: the overview in every
+// audience and comparison, each panel in the audiences the range offers (all three at 7d), and the expansions and
+// visitor details the answers lead to. cmp, unless empty, replaces every comparison (empty: the overview's three,
+// the prior period elsewhere).
+func uiRequests(site, rng, tz, cmp string, get func(endpoint string, params map[string]string) (map[string]any,
+	error)) error {
+	p := func(aud, cmp string, kv ...string) map[string]string {
+		m := map[string]string{"site": site, "range": rng, "aud": aud, "cmp": cmp, "tz": tz}
+		for i := 0; i+1 < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return m
+	}
+	cmps, other := compares, "prev"
+	if cmp != "" {
+		cmps, other = []string{cmp}, cmp
+	}
+	auds := []string{"all"}
+	if rng == "7d" {
+		auds = audiences
+	}
+	for _, aud := range audiences {
+		for _, c := range cmps {
+			if _, err := get("overview", p(aud, c)); err != nil {
+				return err
+			}
+		}
+	}
+	for _, aud := range auds {
+		var reqs [][]string
+		for _, ep := range []string{"noteworthy", "classes", "status", "clients", "domain", "log"} {
+			reqs = append(reqs, []string{ep})
+		}
+		for _, dim := range listDims {
+			for _, sort := range []string{"volume", "change"} {
+				reqs = append(reqs, []string{"list", "dim", dim, "sort", sort, "limit", "6"},
+					[]string{"list", "dim", dim, "sort", sort, "limit", "500"})
+			}
+		}
+		reqs = append(reqs, []string{"list", "dim", "countries", "sort", "volume", "limit", "300"},
+			[]string{"list", "dim", "countries", "sort", "volume", "limit", "5"},
+			[]string{"list", "dim", "events", "sort", "volume", "limit", "6", "sub", "custom"})
+		for _, sort := range visitorSorts {
+			for _, limit := range []string{"7", "50"} {
+				reqs = append(reqs, []string{"visitors", "sort", sort, "limit", limit})
+			}
+		}
+		for _, r := range reqs {
+			body, err := get(r[0], p(aud, other, r[1:]...))
+			if err != nil {
+				return err
+			}
+			// The expansions of the top pages, and the details of the visitors listed first.
+			switch {
+			case aud == "all" && r[0] == "list" && r[2] == "pages" && r[6] == "6" && r[4] == "volume":
+				for _, row := range rows(body) {
+					if row["expandable"] == true {
+						if _, err := get("list", p(aud, other, "dim", "pages", "sort", "volume", "limit", "6",
+							"within", fmt.Sprint(row["key"]))); err != nil {
+							return err
+						}
+					}
+				}
+			case aud == "all" && r[0] == "visitors" && r[4] == "7":
+				for _, row := range rows(body) {
+					if _, err := get("visitor", p(aud, other, "key", fmt.Sprint(row["key"]))); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func rows(body map[string]any) []map[string]any {

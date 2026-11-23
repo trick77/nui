@@ -31,7 +31,26 @@ func history(t testing.TB, scale float64, days int, scenarios string) (*store.St
 // shared too: a test changes a copy.
 func seededHistory(t testing.TB, seed uint64, scale float64, days int, scenarios string) (*store.Store, *sim.World) {
 	t.Helper()
-	key := fmt.Sprint(seed, scale, days, scenarios)
+	classifyLast := 0
+	if days > 30 {
+		classifyLast = 9
+	}
+	return historyOf(t, seed, scale, days, scenarios, classifyLast)
+}
+
+// classifiedHistory is seededHistory with the classifier's pass after every day, however long: as a live server
+// stamps each day. Without it the older days keep the writer's instant classes, and a session's rows fall into both
+// parts (people and automated), which the aggregates count once each.
+func classifiedHistory(t testing.TB, seed uint64, scale float64, days int, scenarios string) (*store.Store,
+	*sim.World) {
+	t.Helper()
+	return historyOf(t, seed, scale, days, scenarios, 0)
+}
+
+func historyOf(t testing.TB, seed uint64, scale float64, days int, scenarios string, classifyLast int) (*store.Store,
+	*sim.World) {
+	t.Helper()
+	key := fmt.Sprint(seed, scale, days, scenarios, classifyLast)
 	shared.Lock()
 	h, ok := shared.histories[key]
 	if !ok {
@@ -39,7 +58,7 @@ func seededHistory(t testing.TB, seed uint64, scale float64, days int, scenarios
 		shared.histories[key] = h
 	}
 	shared.Unlock()
-	h.once.Do(func() { h.err = h.build(seed, scale, days, scenarios) })
+	h.once.Do(func() { h.err = h.build(seed, scale, days, scenarios, classifyLast) })
 	if h.err != nil {
 		t.Fatal(h.err)
 	}
@@ -78,7 +97,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func (h *sharedHistory) build(seed uint64, scale float64, days int, scenarios string) error {
+func (h *sharedHistory) build(seed uint64, scale float64, days int, scenarios string, classifyLast int) error {
 	ctx := context.Background()
 	var err error
 	if h.dir, err = os.MkdirTemp("", "stakeout-simcli-test-"); err != nil {
@@ -95,9 +114,9 @@ func (h *sharedHistory) build(seed uint64, scale float64, days int, scenarios st
 	// A half year (growth) on the first site alone, which its expectation reads: a third of the work, so the gate
 	// affords it under -race.
 	var ss []*sim.Site
-	o := sim.BackfillOptions{Days: days, Classify: true}
+	o := sim.BackfillOptions{Days: days, Classify: true, ClassifyLast: classifyLast}
 	if days > 30 {
-		ss, o.ClassifyLast = sim.DefaultSites()[:1], 9
+		ss = sim.DefaultSites()[:1]
 	}
 	if h.w, err = sim.NewWorld(sim.Options{Seed: seed, Anchor: anchor, Scale: scale, Sites: ss, Scenarios: sc,
 		Ref: ref}); err != nil {
@@ -109,8 +128,11 @@ func (h *sharedHistory) build(seed uint64, scale float64, days int, scenarios st
 	if _, err := h.w.SyncSites(ctx, h.st); err != nil {
 		return err
 	}
-	_, err = sim.Backfill(ctx, h.st, h.w, o)
-	return err
+	if _, err = sim.Backfill(ctx, h.st, h.w, o); err != nil {
+		return err
+	}
+	// Built here, before any test reads it: Check's own build then writes nothing beside the other tests' reads.
+	return buildAggregates(ctx, h.st, h.w)
 }
 
 // The checks are not vacuous: a quiet history fails every story it did not play.

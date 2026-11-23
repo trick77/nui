@@ -45,12 +45,13 @@ var otherBySub = map[string]bool{"events": true}
 // eventKinds are the browser kinds that are no action (the dashboard's eventKinds).
 var eventKinds = map[string]bool{"page_view": true, "session_start": true, "engagement": true, "vital": true}
 
-// traceSQL, when set (tests), sees every statement the builder reads with: the plan test checks them.
-var traceSQL func(query string, args []any)
+// TraceSQL, when set (tests: this package's and the dashboard's large-table test), sees every statement the
+// builder reads with: their plans are checked.
+var TraceSQL func(query string, args []any)
 
 func query(ctx context.Context, db store.Queryer, q string, args ...any) (*sql.Rows, error) {
-	if traceSQL != nil {
-		traceSQL(q, args)
+	if TraceSQL != nil {
+		TraceSQL(q, args)
 	}
 	return db.QueryContext(ctx, q, args...)
 }
