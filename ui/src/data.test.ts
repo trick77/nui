@@ -13,6 +13,7 @@ import {
   dayMonth,
   num,
   pct,
+  SEP,
   seconds,
   value,
   when,
@@ -22,6 +23,7 @@ import {
   parseView,
   storeAudience,
   storedAudience,
+  tabTitle,
   viewHref,
 } from "./state";
 
@@ -169,6 +171,23 @@ describe("state", () => {
         log: { addr: "2001:db8::/64", path: "/AS:n" },
       }),
     ).toBe("/dashboard/log?addr=2001%3Adb8%3A%3A%2F64&path=%2FAS%3An");
+  });
+
+  it("names the domain and the log's address in the tab title", () => {
+    const v = parseView("/dashboard/", "?range=30d&aud=bots");
+    expect(tabTitle(null, v)).toBe("Stakeout");
+    expect(tabTitle("a.example.com", v)).toBe(`Stakeout${SEP}a.example.com`);
+    const log = { ...v, page: "log" as const };
+    expect(tabTitle("a.example.com", { ...log, log: { path: "/x" } })).toBe(
+      `Stakeout${SEP}a.example.com${SEP}Log`,
+    );
+    expect(
+      tabTitle("a.example.com", { ...log, log: { addr: "192.0.2.1" } }),
+    ).toBe(`Stakeout${SEP}a.example.com${SEP}192.0.2.1`);
+    for (const asn of ["64500", "AS64500"])
+      expect(tabTitle("a.example.com", { ...log, log: { asn } })).toBe(
+        `Stakeout${SEP}a.example.com${SEP}AS64500`,
+      );
   });
 
   it("finds the mount", () => {

@@ -240,6 +240,8 @@ describe("sign-in", () => {
     expect(
       await screen.findByRole("link", { name: "Sign in" }),
     ).toBeInTheDocument();
+    // The dashboard had named its domain; the sign-in card is the plain name.
+    expect(document.title).toBe("Stakeout");
   });
 });
 
@@ -746,10 +748,12 @@ describe("dashboard on a domain with a server feed", () => {
     await waitFor(() =>
       expect(lastCall("/api/dash/list").get("sub")).toBe("custom"),
     );
+    expect(document.title).toBe(`Stakeout${SEP}lens.example.com`);
     fireEvent.click(await within(ev).findByText("share_link"));
     await waitFor(() =>
       expect(window.location.pathname).toBe("/dashboard/log"),
     );
+    expect(document.title).toBe(`Stakeout${SEP}lens.example.com${SEP}Log`);
     expect(new URLSearchParams(window.location.search).get("path")).toBe(
       "share_link",
     );
