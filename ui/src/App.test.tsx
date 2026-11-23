@@ -285,7 +285,7 @@ describe("dashboard on a domain with a server feed", () => {
   it("switches the main chart with a tile", async () => {
     start();
     const ov = await screen.findByRole("region", { name: "Overview" });
-    await within(ov).findByText(`Visitors per day${SEP}all`, asIs);
+    await within(ov).findByText(`Unique visitors per day${SEP}all`, asIs);
     fireEvent.click(within(ov).getByRole("button", { name: /Page views/ }));
     expect(
       within(ov).getByText(`Page views per day${SEP}all`, asIs),
@@ -302,7 +302,7 @@ describe("dashboard on a domain with a server feed", () => {
   it("draws no comparison with the comparison off", async () => {
     start("/dashboard/?cmp=off");
     const ov = await screen.findByRole("region", { name: "Overview" });
-    await within(ov).findByText(`Visitors per day${SEP}all`, asIs);
+    await within(ov).findByText(`Unique visitors per day${SEP}all`, asIs);
     // The backend sends an empty previous series, not none.
     expect(lastCall("/api/dash/overview").get("cmp")).toBe("off");
     fireEvent.mouseMove(within(ov).getByTestId("chart-hit"), {
@@ -310,7 +310,7 @@ describe("dashboard on a domain with a server feed", () => {
       clientY: 100,
     });
     const tip = screen.getByRole("tooltip");
-    expect(tip).toHaveTextContent("Visitors");
+    expect(tip).toHaveTextContent("Unique visitors");
     expect(tip).not.toHaveTextContent(/prior/);
     // This period and the median, nothing else.
     expect(tip.querySelectorAll(".tr")).toHaveLength(2);
@@ -338,7 +338,7 @@ describe("dashboard on a domain with a server feed", () => {
 
   it("keeps range, audience and comparison in the URL", async () => {
     start();
-    await screen.findByText(`Visitors per day${SEP}all`, asIs);
+    await screen.findByText(`Unique visitors per day${SEP}all`, asIs);
     fireEvent.click(screen.getByRole("button", { name: "30d" }));
     expect(window.location.search).toContain("range=30d");
     await waitFor(() =>
@@ -939,7 +939,7 @@ describe("while an answer is on its way", () => {
   it("keeps the same domain's answer dimmed, without paging from it", async () => {
     startHeld("/dashboard/");
     const ov = await screen.findByRole("region", { name: "Overview" });
-    await within(ov).findByText(`Visitors per day${SEP}all`, asIs);
+    await within(ov).findByText(`Unique visitors per day${SEP}all`, asIs);
     const v = panel("Visitors by address");
     await within(v).findByText("198.51.100.7");
     const mainChart = () => within(ov).getByTestId("chart-hit").closest("svg");

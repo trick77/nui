@@ -115,7 +115,7 @@ type tileDef struct {
 }
 
 var tileDefs = []tileDef{
-	{key: "visitors", label: "Visitors", kind: "sum", of: func(b bucketStats) float64 { return float64(len(b.visitors)) }},
+	{key: "visitors", label: "Unique visitors", kind: "sum", of: func(b bucketStats) float64 { return float64(len(b.visitors)) }},
 	{key: "views", label: "Page views", kind: "sum", of: func(b bucketStats) float64 { return b.views }},
 	{key: "events", label: "Events", kind: "sum", of: func(b bucketStats) float64 { return b.events }},
 	{key: "requests", label: "Requests", kind: "sum", server: true, of: func(b bucketStats) float64 { return b.requests }},

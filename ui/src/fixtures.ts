@@ -201,7 +201,7 @@ function overview(
     };
   };
   const tiles: Tile[] = [
-    mk("visitors", aud === "bots" ? "Addresses" : "Visitors", base, 1),
+    mk("visitors", aud === "bots" ? "Addresses" : "Unique visitors", base, 1),
     mk("views", "Page views", base * 2.34, 2),
     mk("events", "Events", base * 0.43, 3),
     mk("requests", "Requests", base * 9.2, 4, { server: true }),
