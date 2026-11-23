@@ -451,7 +451,25 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request, q *query) {
 		return
 	}
 	resp.Server = d.server
-	if within == "" && (dim == "pages" || dim == "entry") {
+	if within != "" {
+		// The paths are raw events: they reach back to detail_since, the template's row to the range's start.
+		pl, err := s.planOf(r.Context(), q)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		since, err := pl.detailSince(r.Context(), q.p.win.From)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		apix.JSON(w, http.StatusOK, struct {
+			listResp
+			DetailSince any `json:"detail_since"`
+		}{resp, since})
+		return
+	}
+	if dim == "pages" || dim == "entry" {
 		for i := range resp.Rows {
 			resp.Rows[i].Expandable = true
 		}

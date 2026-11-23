@@ -471,7 +471,10 @@ func (s *Server) handleVisitors(w http.ResponseWriter, r *http.Request, q *query
 		return
 	}
 	// What it does and the reading go back this far; the sums cover the whole span.
-	resp["detail_since"] = pl.detailSince()
+	if resp["detail_since"], err = pl.detailSince(ctx, q.p.win.From); err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	apix.JSON(w, http.StatusOK, resp)
 }
 
@@ -1406,10 +1409,15 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 	}
 	// "What it does" as the table's row has it: the computed sentence, the model's when its reading resolves.
 	row.Does.Text = doesText(row, counts)
+	detailSince, err := pl.detailSince(ctx, q.p.win.From)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	resp := map[string]any{"key": key, "class": row.Class, "network": row.Network, "network_kind": row.NetworkKind,
 		"country": row.Country, "client": row.Client, "signals": row.Signals, "requests": row.Requests,
 		"addresses": addrs, "hours": hours, "trail": tr.lines, "trail_next": tr.next, "reading": nil,
-		"client_gen": nil, "does": &row.Does, "detail_since": pl.detailSince()}
+		"client_gen": nil, "does": &row.Does, "detail_since": detailSince}
 	if s.Model != nil && s.Model.Configured() {
 		one := []visitorRow{row}
 		s.labelClients(ctx, q.site.ID, one)

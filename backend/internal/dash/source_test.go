@@ -524,6 +524,16 @@ func TestSources_RawSpan(t *testing.T) {
 	if l["detail_since"] != detailSince {
 		t.Errorf("log detail_since %v", l["detail_since"])
 	}
+	// A template's paths are raw: their answer says since when, the template list itself covers the range.
+	_, pages := r.get(t, "list", p(feedSite, "range", "30d", "tz", "UTC", "dim", "pages"))
+	if _, ok := pages["detail_since"]; ok || len(listRows(pages)) == 0 {
+		t.Fatalf("pages %v", pages)
+	}
+	_, in := r.get(t, "list", p(feedSite, "range", "30d", "tz", "UTC", "dim", "pages", "within",
+		listRows(pages)[0]["key"].(string)))
+	if in["detail_since"] != detailSince || len(listRows(in)) == 0 {
+		t.Errorf("within detail_since %v, %d rows", in["detail_since"], len(listRows(in)))
+	}
 	_, dom := r.get(t, "domain", p(feedSite, "range", "30d", "tz", "UTC"))
 	st, src := dom["storage"].(map[string]any), dom["sources"].(map[string]any)
 	if st["oldest"] != detailSince || st["figures_since"] == nil ||
@@ -867,6 +877,62 @@ func TestUniq(t *testing.T) {
 	}
 	if err := w.addSketch([]byte{9}); err == nil {
 		t.Error("a bad sketch merged")
+	}
+}
+
+// detail_since says where raw begins only when something is missing, decided on the reads' UTC days: a site whose
+// figures begin where its raw does says nothing, nor a range whose first UTC day raw holds (Kolkata, its local
+// start the evening before in UTC); a raw start after that day is said (New York, though it is still the range's
+// first local date).
+func TestSources_DetailSince(t *testing.T) {
+	r, insert := exactRig(t)
+	view := func(ts int64) store.Event {
+		return store.Event{TS: ts, Source: "browser", Kind: "page_view", Visitor: "v1", SID: "s1",
+			IP: "192.0.2.90", IPKey: "192.0.2.90", Template: "/", Path: "/", Cls: store.ClsHuman}
+	}
+	insert(view(at("2026-10-20T10:00:00Z")), view(at("2026-10-24T05:00:00Z")), view(at("2026-10-25T00:30:00Z")),
+		view(at("2026-11-10T10:00:00Z")), view(at("2026-11-20T10:00:00Z")))
+	r.build(t)
+	since := func(rng, tz string) any {
+		t.Helper()
+		var out []any
+		for _, ask := range [][]string{{"visitors"}, {"log"}, {"visitor", "key", "192.0.2.90"},
+			{"list", "dim", "pages", "within", "/"}} {
+			code, body := r.get(t, ask[0], p(feedSite, append([]string{"range", rng, "tz", tz}, ask[1:]...)...))
+			if code != 200 {
+				t.Fatalf("%s %s %v: %d %v", rng, tz, ask, code, body)
+			}
+			out = append(out, body["detail_since"])
+		}
+		for _, x := range out[1:] {
+			if x != out[0] {
+				t.Errorf("%s %s: detail_since differs between endpoints: %v", rng, tz, out)
+			}
+		}
+		return out[0]
+	}
+	if s := since("90d", "UTC"); s != nil {
+		t.Errorf("young site: detail_since %v", s)
+	}
+	cut := func(day string) {
+		t.Helper()
+		if _, err := r.s.DB.PruneAge(t.Context(), time.UnixMilli(at(day))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cut("2026-10-24T00:00:00Z")
+	if s := since("90d", "UTC"); s != "2026-10-24T05:00:00Z" {
+		t.Errorf("cut, 90d: detail_since %v", s)
+	}
+	if s := since("30d", "Asia/Kolkata"); s != nil {
+		t.Errorf("Kolkata 30d, raw from its first UTC day: detail_since %v", s)
+	}
+	cut("2026-10-25T00:00:00Z")
+	if s := since("30d", "America/New_York"); s != "2026-10-25T00:30:00Z" {
+		t.Errorf("New York 30d, raw from its second UTC day: detail_since %v", s)
+	}
+	if s := since("7d", "UTC"); s != nil {
+		t.Errorf("7d after the cut: detail_since %v", s)
 	}
 }
 
