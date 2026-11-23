@@ -1,6 +1,7 @@
-// Package dash is the dashboard API, GET /api/dash/*: every figure computed in Go from the raw events, nothing
-// pre-aggregated. A long range is read as one short statement per bucket, never one long read: a read transaction
-// held for seconds keeps SQLite's WAL checkpoint from completing while the collector writes on.
+// Package dash is the dashboard API, GET /api/dash/*: every figure computed in Go, per UTC day from the aggregate
+// tables once the day is built and clean (internal/agg), from the raw events otherwise (source.go). A long range is
+// read as one short statement per piece, never one long read: a read transaction held for seconds keeps SQLite's
+// WAL checkpoint from completing while the collector writes on.
 package dash
 
 import (
@@ -33,6 +34,8 @@ type Server struct {
 	RetentionMonths int
 	Build           string
 	Now             func() time.Time
+	// Source is where the figures the aggregates can serve come from: SourceAuto but in tests.
+	Source Source
 
 	snaps snapshots // the visitor tables a cursor pages through
 }
@@ -77,6 +80,7 @@ type query struct {
 	aud  string
 	cmp  string
 	p    period
+	plan *plan // made on first use (planOf)
 }
 
 var ranges = map[string]bool{"24h": true, "7d": true, "30d": true, "90d": true, "12mo": true}

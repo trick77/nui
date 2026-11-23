@@ -3,6 +3,7 @@ package dash
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"net/http"
@@ -79,19 +80,19 @@ func distinctExpr(distinct, aud string) string {
 	return "CASE WHEN source = 'browser' THEN visitor ELSE '' END"
 }
 
-// agg is one key's sums.
-type agg struct {
+// keySums is one key's sums.
+type keySums struct {
 	sub  string
 	a, b int64
 	d    map[string]struct{}
 }
 
-type aggMap map[string]*agg
+type aggMap map[string]*keySums
 
-func (m aggMap) get(k string) *agg {
+func (m aggMap) get(k string) *keySums {
 	g, ok := m[k]
 	if !ok {
-		g = &agg{d: map[string]struct{}{}}
+		g = &keySums{d: map[string]struct{}{}}
 		m[k] = g
 	}
 	return g
@@ -677,61 +678,149 @@ func (s *Server) handleClasses(w http.ResponseWriter, r *http.Request, q *query)
 	if serverOnly(w, q) {
 		return
 	}
-	all := q
-	if q.aud != "all" { // ignores aud
-		c := *q
-		c.aud = "all"
-		all = &c
+	// Ignores aud.
+	ctx := r.Context()
+	pl, err := s.planOf(ctx, q)
+	if err != nil {
+		s.fail(w, r, err)
+		return
 	}
-	d := dimSpec{where: "source = 'server'", key: "CAST(cls AS TEXT)", a: "COUNT(*)", b: "0", distinct: "ip_key",
-		value: countA, second: countD}
+	n := q.p.n()
 	series := map[string][]float64{}
+	cur, closed, prev := classSums{}, classSums{}, classSums{}
 	for _, c := range classOrder {
-		series[c] = make([]float64, q.p.n())
+		series[c] = make([]float64, n)
+		cur[c], closed[c], prev[c] = &classAcc{}, &classAcc{}, &classAcc{}
 	}
-	cur, closed := aggMap{}, aggMap{}
-	for i := 0; i < q.p.n(); i++ {
-		b := aggMap{}
-		if err := s.scanDim(r.Context(), all, d, "", nil, closedWin(q.p.Bounds[i], q.p.Bounds[i+1]), b); err != nil {
+	for i := 0; i < n; i++ {
+		b, err := s.classSpan(ctx, pl, q.p.Bounds[i], q.p.Bounds[i+1], !q.p.agg)
+		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
-		for k, g := range b {
-			cls, _ := strconv.Atoi(k)
-			name := classOf(cls)
-			series[name][i] += float64(g.a)
-			merge(cur.get(name), g)
-			if i < q.p.n()-1 {
-				merge(closed.get(name), g)
+		for name, g := range b {
+			series[name][i] += float64(g.requests)
+			cur[name].requests += g.requests
+			cur[name].addrs.merge(&g.addrs)
+			if i < n-1 {
+				closed[name].requests += g.requests
 			}
 		}
 	}
-	prev := aggMap{}
 	if q.p.Prev != nil {
-		raw := aggMap{}
-		if err := s.scanDim(r.Context(), all, d, "", nil, closedWin(q.p.Prev[0], q.p.Prev[q.p.n()-1]), raw); err != nil {
+		if prev, err = s.classSpan(ctx, pl, q.p.Prev[0], q.p.Prev[n-1], !q.p.prevAgg); err != nil {
 			s.fail(w, r, err)
 			return
-		}
-		for k, g := range raw {
-			cls, _ := strconv.Atoi(k)
-			merge(prev.get(classOf(cls)), g)
 		}
 	}
 	var total int64
 	for _, g := range cur {
-		total += g.a
+		total += g.requests
 	}
 	rows := []classRow{}
 	for _, c := range classOrder {
-		g := cur.get(c)
-		row := classRow{Class: c, Requests: g.a, Addresses: int64(len(g.d)),
-			Share: round1(pct(float64(g.a), float64(total)))}
-		row.Change = sumChange(float64(closed.get(c).a), float64(prev.get(c).a), q.p.Prev != nil)
+		g := cur[c]
+		row := classRow{Class: c, Requests: g.requests, Addresses: g.addrs.count(),
+			Share: round1(pct(float64(g.requests), float64(total)))}
+		var was int64
+		if p := prev[c]; p != nil {
+			was = p.requests
+		}
+		row.Change = sumChange(float64(closed[c].requests), float64(was), q.p.Prev != nil)
 		row.Verdict = classVerdict(c, row.Change)
 		rows = append(rows, row)
 	}
 	apix.JSON(w, http.StatusOK, map[string]any{"labels": q.p.labels, "series": series, "rows": rows})
+}
+
+// classAcc is one class's server requests and distinct addresses.
+type classAcc struct {
+	requests int64
+	addrs    uniq
+}
+
+// classSums are classAccs by the API's class name.
+type classSums map[string]*classAcc
+
+func (c classSums) get(name string) *classAcc {
+	g := c[name]
+	if g == nil {
+		g = &classAcc{}
+		c[name] = g
+	}
+	return g
+}
+
+// classSpan sums [from, to)'s server requests and addresses per class, a piece at a time from its source.
+func (s *Server) classSpan(ctx context.Context, pl *plan, from, to time.Time, short bool) (classSums, error) {
+	out := classSums{}
+	for _, pc := range pieces(from, to) {
+		err := pl.read(ctx, pc[0], pc[1], time.Hour, short, func() (bool, error) {
+			rows, err := s.query(ctx, `SELECT d.ok, t.cls, t.requests, t.server_addrs`+
+				aggFrom("agg_hour", "t.hour >= ?3 AND t.hour < ?4"), pl.site, ms(pc[0])/dayMS, ms(pc[0])/hourMS,
+				ms(pc[1])/hourMS)
+			if err != nil {
+				return false, err
+			}
+			defer func() { _ = rows.Close() }()
+			add := classSums{}
+			ok := false
+			for rows.Next() {
+				var cls, requests sql.NullInt64
+				var addrs []byte
+				if err := rows.Scan(&ok, &cls, &requests, &addrs); err != nil {
+					return false, err
+				}
+				if !ok {
+					return false, nil
+				}
+				if !cls.Valid || requests.Int64 == 0 {
+					continue
+				}
+				g := add.get(classOf(int(cls.Int64)))
+				g.requests += requests.Int64
+				if err := g.addrs.addSketch(addrs); err != nil {
+					return false, err
+				}
+			}
+			if err := rows.Err(); err != nil || !ok {
+				return false, err
+			}
+			out.merge(add)
+			return true, nil
+		}, func() error {
+			rows, err := s.query(ctx, `SELECT cls, ip_key, COUNT(*) FROM event WHERE site_id = ? AND ts >= ? AND ts < ?
+				AND source = 'server' GROUP BY cls, ip_key`, pl.site, ms(pc[0]), ms(pc[1]))
+			if err != nil {
+				return err
+			}
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var cls int
+				var key string
+				var n int64
+				if err := rows.Scan(&cls, &key, &n); err != nil {
+					return err
+				}
+				g := out.get(classOf(cls))
+				g.requests += n
+				g.addrs.add(key)
+			}
+			return rows.Err()
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (c classSums) merge(o classSums) {
+	for name, g := range o {
+		t := c.get(name)
+		t.requests += g.requests
+		t.addrs.merge(&g.addrs)
+	}
 }
 
 // classVerdict judges a class's change: more people is good, more unknown automation bad; known bots and uptime
@@ -744,12 +833,4 @@ func classVerdict(class string, c change) string {
 		return verdict(c, true)
 	}
 	return "flat"
-}
-
-func merge(into, g *agg) {
-	into.a += g.a
-	into.b += g.b
-	for k := range g.d {
-		into.d[k] = struct{}{}
-	}
 }

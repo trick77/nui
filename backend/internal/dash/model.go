@@ -4,7 +4,7 @@ package dash
 //
 // Table: -
 type bucketStats struct {
-	visitors map[string]struct{} // visitor ids (aud bots: address keys)
+	visitors uniq // visitor ids (aud bots: address keys)
 	views    float64
 	events   float64
 	requests float64
