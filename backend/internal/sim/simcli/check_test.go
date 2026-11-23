@@ -19,6 +19,14 @@ import (
 
 var anchor = time.Date(2026, 11, 22, 13, 30, 0, 0, time.UTC)
 
+// skipRace skips a test -race makes too slow for CI's ten minutes a package: the gate runs it whole without (ship.yaml).
+func skipRace(t *testing.T) {
+	t.Helper()
+	if raceOn {
+		t.Skip("run without -race (ship.yaml's step)")
+	}
+}
+
 // history is the default sites' history with the named scenarios: its store and world.
 func history(t testing.TB, scale float64, days int, scenarios string) (*store.Store, *sim.World) {
 	t.Helper()
@@ -111,8 +119,7 @@ func (h *sharedHistory) build(seed uint64, scale float64, days int, scenarios st
 	if err != nil {
 		return err
 	}
-	// A half year (growth) on the first site alone, which its expectation reads: a third of the work, so the gate
-	// affords it under -race.
+	// A half year (growth) on the first site alone, which its expectation reads: a third of the work.
 	var ss []*sim.Site
 	o := sim.BackfillOptions{Days: days, Classify: true, ClassifyLast: classifyLast}
 	if days > 30 {
@@ -167,17 +174,14 @@ func TestExpectationsFailWithoutTheirStory(t *testing.T) {
 // checked too.
 func TestScenariosTogether(t *testing.T) {
 	t.Parallel()
+	skipRace(t)
 	var names []string
 	for _, c := range sim.Catalogue() {
 		if c.MinDays <= 30 {
 			names = append(names, c.Name)
 		}
 	}
-	days, scale := 9, 1.0
-	if raceOn {
-		days, scale = 7, 0.3
-	}
-	st, w := history(t, scale, days, strings.Join(names, ","))
+	st, w := history(t, 1, 9, strings.Join(names, ","))
 	fails, err := Check(t.Context(), st, w)
 	if err != nil {
 		t.Fatal(err)
@@ -189,13 +193,13 @@ func TestScenariosTogether(t *testing.T) {
 
 // Growth shows whatever the seed: its visitors rise far past Noteworthy's 20 % (by 44 to 70 % over seeds 1 to 8 at
 // this scale), not at the threshold. A half year's history is the package's longest build: the dashboard reads the
-// scenario test's (and more seeds' without -race); every seed is checked on the world's own visitors, which agree
+// scenario test's and more seeds', without -race; every seed is checked on the world's own visitors, which agree
 // with the dashboard's where both are read (within 4 points).
 func TestGrowthAnySeed(t *testing.T) {
 	t.Parallel()
-	dashboard := []uint64{7}
-	if !raceOn {
-		dashboard = append(dashboard, 1, 2, 3, 4)
+	dashboard := []uint64{7, 1, 2, 3, 4}
+	if raceOn {
+		dashboard = nil
 	}
 	ref, err := sim.OpenReference(t.TempDir())
 	if err != nil {
@@ -309,9 +313,10 @@ func TestScenarioExpectations(t *testing.T) {
 	for _, sc := range sim.Catalogue() {
 		t.Run(sc.Name, func(t *testing.T) {
 			t.Parallel()
-			// Half a year (growth) at 0.3, under -race too: the gate runs every scenario.
+			// Half a year (growth) at 0.3, not under -race.
 			days, scale := max(sc.MinDays, 9), 1.0
 			if days > 30 {
+				skipRace(t)
 				scale = 0.3
 			}
 			if raceOn {

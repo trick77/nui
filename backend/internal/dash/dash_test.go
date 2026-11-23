@@ -255,6 +255,7 @@ func plainDots(t *testing.T, endpoint, body string) {
 }
 
 func TestSeparatorSpacing(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, 3, 30, nil)
 	sep := "\xe2\x80\x82·\xe2\x80\x82"
 	// Composed texts the existing answers carry: the footer's rules, a browser's client in the log and the table.
@@ -448,8 +449,8 @@ func TestOverview(t *testing.T) {
 	for _, rng := range []string{"24h", "7d", "30d", "90d", "12mo"} {
 		for _, aud := range []string{"all", "humans", "bots"} {
 			for _, c := range []string{"prev", "yoy", "off"} {
-				// Every range once; the audience and comparison matrix on the short ones (SQLite under -race is slow).
-				if (aud != "all" || c != "prev") && (rng == "90d" || rng == "12mo" || rng == "30d") {
+				// Every range once; the audience and comparison matrix on the short ones, not under -race.
+				if (aud != "all" || c != "prev") && (raceOn || rng == "90d" || rng == "12mo" || rng == "30d") {
 					continue
 				}
 				code, body := r.get(t, "overview", p(feedSite, "range", rng, "aud", aud, "cmp", c))
@@ -519,6 +520,7 @@ func listRows(body map[string]any) []map[string]any {
 }
 
 func TestLists(t *testing.T) {
+	t.Parallel()
 	model := &fakeModel{labels: map[string]string{"GET /.env": "looking for leaked secrets"}}
 	r := newRig(t, 10, 15, model)
 	for dim := range dims {
@@ -1383,6 +1385,7 @@ func TestSourcesNeverDelivered(t *testing.T) {
 }
 
 func TestNoteworthy(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, 16, 10, nil)
 	code, body := r.get(t, "noteworthy", p(feedSite, "aud", "bots"))
 	if code != 200 {

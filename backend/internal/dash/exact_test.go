@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/trick77/ship/kit/ratelimit"
+	"github.com/trick77/stakeout/backend/internal/agg"
 	"github.com/trick77/stakeout/backend/internal/insight"
 	"github.com/trick77/stakeout/backend/internal/store"
 )
@@ -224,7 +225,13 @@ func TestExact_24hLastYear(t *testing.T) {
 	r, insert := exactRig(t)
 	insert(pageLoad(at("2025-11-22T10:00:00Z"), "a", "192.0.2.1", "CH", "Mozilla/5.0", 64500)...)
 	insert(pageLoad(at("2026-11-22T10:00:00Z"), "b", "192.0.2.2", "CH", "Mozilla/5.0", 64500)...)
-	r.build(t)
+	through := r.end
+	if raceOn { // last year's days alone: a build of the year between takes seconds
+		through = r.end.AddDate(-1, 0, 0)
+	}
+	if _, err := agg.BuildThrough(t.Context(), r.s.DB, through, agg.TopK); err != nil {
+		t.Fatal(err)
+	}
 	var body map[string]any
 	n := countPieces(r, func(r *rig) {
 		_, body = r.getFrom(t, SourceAuto, "overview", p(feedSite, "range", "24h", "cmp", "yoy"))

@@ -36,18 +36,9 @@ type agreeCase struct {
 	rngs    []string
 }
 
-// agreeSetup is TestSourcesAgree's size: without -race seeds 3 and 7, 400 days, every zone, both comparisons and
-// every range (12mo in UTC only: its requests read a year of day pieces each, three quarters of the test's time in
-// every zone). Under -race (SQLite crawls: the 400 days alone took 100 s) seed 7, 40 days at a fifth of the scale,
-// some days copied to the prior periods and the year before (echo), and a covering set: Zurich (a whole-hour zone:
-// its 7d hours are agg_hour's, 24h is raw) against the prior period at 24h, 7d and 30d, UTC against last year at 90d and
-// 12mo, Kolkata (half hour, floored buckets) at 30d; raceSkips left out; the three-entry pass at 30d and 90d, both
-// comparisons.
-func agreeSetup() (seeds []uint64, days int, scale float64, cases []agreeCase, echo bool) {
-	if raceOn {
-		return []uint64{7}, 40, 0.06, []agreeCase{{"Europe/Zurich", "prev", []string{"24h", "7d", "30d"}},
-			{"UTC", "yoy", []string{"90d", "12mo"}}, {"Asia/Kolkata", "prev", []string{"30d"}}}, true
-	}
+// agreeCases are TestSourcesAgree's: every zone, both comparisons and every range (12mo in UTC only: its requests read
+// a year of day pieces each, three quarters of the test's time in every zone).
+func agreeCases() (cases []agreeCase) {
 	for _, tz := range []string{"UTC", "Europe/Zurich", "Asia/Kolkata", "America/New_York"} {
 		for _, c := range []string{"prev", "yoy"} {
 			rngs := ranges
@@ -57,29 +48,7 @@ func agreeSetup() (seeds []uint64, days int, scale float64, cases []agreeCase, e
 			cases = append(cases, agreeCase{tz, c, rngs})
 		}
 	}
-	return []uint64{3, 7}, 400, 0.15, cases, false
-}
-
-// echoDays copies five days of a short history 120 and 365 days back, the visitors and addresses as they were, the
-// sessions under ids of their own (one id a year apart would be one visit raw, two from the days): the prior periods
-// of 90d (and 30d's, in the history itself), the year before and 12mo's prior year hold data, the days the copies
-// land on built.
-func echoDays(t *testing.T, st *store.Store, w *sim.World) {
-	t.Helper()
-	from := w.Anchor.AddDate(0, 0, -10).Truncate(24 * time.Hour)
-	for _, back := range []int{120, 365} {
-		if _, err := st.DB.ExecContext(t.Context(), `INSERT INTO event (site_id, ts, source, kind, name, visitor, sid,
-			ip, ip_key, ua, path, template, url, ref, ref_host, method, status, dur_ms, asn, country, account, cls, props)
-			SELECT site_id, ts - ?1, source, kind, name, visitor, CASE WHEN sid = '' THEN '' ELSE sid || '~' || ?1 END,
-			ip, ip_key, ua, path, template, url, ref, ref_host, method, status, dur_ms, asn, country, account, cls, props
-			FROM event WHERE ts >= ?2 AND ts < ?3`,
-			int64(back)*86_400_000, from.UnixMilli(), from.AddDate(0, 0, 5).UnixMilli()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := agg.BuildThrough(t.Context(), st, w.Anchor, agg.TopK); err != nil {
-		t.Fatal(err)
-	}
+	return cases
 }
 
 // agreeScenarios play on a 400-day history: the half year of growth, and the stories of the last days, whose lists
@@ -93,18 +62,16 @@ const agreeScenarios = "growth,referrer-spike,scan-wave,deploy-error,api-walker,
 // call new.
 func TestSourcesAgree(t *testing.T) {
 	t.Parallel()
+	skipRace(t)
 	if testing.Short() {
 		t.Skip("400-day histories")
 	}
-	seeds, days, scale, cases, echo := agreeSetup()
-	for _, seed := range seeds {
+	cases := agreeCases()
+	for _, seed := range []uint64{3, 7} {
 		t.Run("seed"+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
 			start := time.Now()
-			st, w := classifiedHistory(t, seed, scale, days, agreeScenarios)
-			if echo {
-				echoDays(t, st, w)
-			}
+			st, w := classifiedHistory(t, seed, 0.15, 400, agreeScenarios)
 			t.Logf("history in %v", time.Since(start).Round(time.Millisecond))
 			// The premise of equal visits: no session of a classified day has rows in both parts.
 			var mixed int64
@@ -132,9 +99,6 @@ func TestSourcesAgree(t *testing.T) {
 							t.Run(rng, func(t *testing.T) {
 								t.Parallel()
 								get := func(ep string, params map[string]string) (map[string]any, error) {
-									if raceOn && raceSkips(ep, params) {
-										return map[string]any{}, nil
-									}
 									key := requestKey(ep, params)
 									mu.Lock()
 									rb, again := asked[key]
@@ -243,14 +207,6 @@ func TestSourcesAgreeFeedGaps(t *testing.T) {
 			}
 		})
 	}
-}
-
-// raceSkips is what -race leaves unasked: the short lists (cuts of the full ones, computed alike from either
-// source; with them the expansions of the top pages, raw under every source) and the visitors table at 50 rows
-// (the 7 are compared).
-func raceSkips(ep string, params map[string]string) bool {
-	return ep == "list" && params["limit"] != "500" && params["within"] == "" ||
-		ep == "visitors" && params["limit"] == "50"
 }
 
 // requestKey names a request whose answer does not depend on the comparison without it: asked once per zone.
@@ -409,9 +365,6 @@ func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard)
 	}
 	num := func(v any) float64 { f, _ := v.(float64); return f }
 	rngs, cmps := []string{"30d", "90d", "12mo"}, []string{"prev", "yoy"}
-	if raceOn {
-		rngs = []string{"30d", "90d"}
-	}
 	today := w.Anchor.UnixMilli() / 86_400_000
 	anyCut := false
 	for _, s := range w.Sites {

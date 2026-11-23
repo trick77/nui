@@ -19,6 +19,14 @@ import (
 	"github.com/trick77/stakeout/backend/internal/store"
 )
 
+// skipRace skips a test -race makes too slow for CI's ten minutes a package: the gate runs it whole without (ship.yaml).
+func skipRace(t *testing.T) {
+	t.Helper()
+	if raceOn {
+		t.Skip("run without -race (ship.yaml's step)")
+	}
+}
+
 // build builds every day of the rig's store up to its end, as BuildThrough does for a history.
 func (r *rig) build(t *testing.T) {
 	t.Helper()
@@ -568,6 +576,7 @@ func TestSources_RawSpan(t *testing.T) {
 // year before hold data, some of it collapsed.
 func TestSources_ListsTopThree(t *testing.T) {
 	t.Parallel()
+	skipRace(t)
 	r := copyRig(t, nil)
 	for _, tbl := range []string{"agg_day", "agg_hour", "agg_list", "agg_addr"} {
 		if _, err := r.s.DB.DB.Exec(`DELETE FROM ` + tbl); err != nil { //nolint:gosec // the test's own names
@@ -627,9 +636,6 @@ func TestSources_ListsTopThree(t *testing.T) {
 	}
 	compared := 0 // changes from the aggregates against prior data
 	combos := [][2]string{{"30d", "prev"}, {"90d", "prev"}, {"30d", "yoy"}, {"90d", "yoy"}}
-	if raceOn { // a prior period and a year before, at both ranges
-		combos = [][2]string{{"30d", "prev"}, {"90d", "yoy"}}
-	}
 	for _, rc := range combos {
 		rng := rc[0] + " " + rc[1]
 		for dim, d := range dims {
