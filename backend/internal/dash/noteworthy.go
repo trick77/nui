@@ -89,6 +89,9 @@ func (s *Server) handleNoteworthy(w http.ResponseWriter, r *http.Request, q *que
 	fq := *q
 	fq.aud = "all"
 	fq.p = newPeriod(q.rng, "prev", q.p.Now, q.loc)
+	if q.rng == "24h" {
+		fq.p = hoursPeriod(q.p.Now, q.loc)
+	}
 	in, err := s.briefingInput(ctx, &fq)
 	if err != nil {
 		s.fail(w, r, err)
@@ -179,11 +182,14 @@ func (s *Server) briefingInput(ctx context.Context, q *query) (insight.BriefingI
 	if err != nil {
 		return in, err
 	}
-	cur, prev, gaps, err := s.curPrev(ctx, pl, q, "all")
+	cur, prev, _, gaps, err := s.curPrev(ctx, pl, q, "all")
 	if err != nil {
 		return in, err
 	}
-	tiles := s.tiles(q, cur, prev, gaps)
+	// Closed buckets only (as_of says until when), unlike the overview's tiles: the lists' findings are whole days, and
+	// a trend that turned within the day would have the briefing written again.
+	closed := q.p.closedN()
+	tiles := s.tiles(q, cur, prev, cur[:closed], prev[:closed], gaps)
 	for _, t := range tiles {
 		pv := ""
 		if t.Prev != nil {

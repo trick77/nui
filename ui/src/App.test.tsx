@@ -305,19 +305,32 @@ describe("dashboard on a domain with a server feed", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
-  it("names the bucket the tiles leave out", async () => {
+  it("runs every range to now: 24h ends at the minute, nothing filling", async () => {
     start();
     const ov = await screen.findByRole("region", { name: "Overview" });
+    await within(ov).findByText(`Unique visitors per day${SEP}all`, asIs);
+    expect(screen.queryByText(/excluded/)).toBeNull();
     expect(
-      await screen.findByText(
-        "Humans and bots together. Tiles: today excluded.",
-      ),
+      within(ov).getByText("dashed end = day still filling"),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "24h" }));
     await within(ov).findByText(`Unique visitors per hour${SEP}all`, asIs);
-    expect(
-      screen.getByText("Humans and bots together. Tiles: this hour excluded."),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/excluded/)).toBeNull();
+    expect(within(ov).queryByText(/still filling/)).toBeNull();
+    expect(ov.querySelector('[fill^="url(#hatch"]')).toBeNull();
+    // The last hour, in both charts.
+    fireEvent.mouseMove(within(ov).getByTestId("chart-hit"), {
+      clientX: 5000,
+      clientY: 100,
+    });
+    expect(screen.getByRole("tooltip").textContent).toMatch(/^hour to 13:20/);
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent("still filling");
+    fireEvent.mouseLeave(within(ov).getByTestId("chart-hit"));
+    const bars = await screen.findAllByTestId("stack-hit");
+    fireEvent.mouseMove(bars[bars.length - 1], { clientX: 10, clientY: 10 });
+    await waitFor(() =>
+      expect(screen.getByRole("tooltip").textContent).toMatch(/^hour to 13:20/),
+    );
   });
 
   it("draws no comparison with the comparison off", async () => {

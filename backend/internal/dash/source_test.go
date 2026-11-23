@@ -84,7 +84,7 @@ func (c sourceCase) String() string {
 }
 
 // raceCases replace the full matrix under -race, where SQLite crawls: every zone, range and comparison at least
-// once, and the pairs with a path of their own (Kolkata's half hour at 24h and 7d, read raw, and at 30d, floored;
+// once, and the pairs with a path of their own (24h and Kolkata's half hour at 7d, read raw, and at 30d, floored;
 // a zone west of UTC at 30d and 90d; 24h against last year, which compares no list; 12mo in UTC).
 var raceCases = []sourceCase{{"UTC", "24h", "prev"}, {"UTC", "7d", "yoy"}, {"UTC", "30d", "prev"},
 	{"UTC", "90d", "yoy"}, {"UTC", "12mo", "prev"}, {"Europe/Zurich", "7d", "prev"}, {"Europe/Zurich", "30d", "yoy"},
@@ -210,8 +210,8 @@ func TestSources_Hourly(t *testing.T) {
 					delete(raw, "live")
 					delete(got, "live")
 					agree(t, ep+" "+where, raw, got, looseTiles)
-					// Kolkata's 24h and 7d hours are on the half hour: read raw, under every source.
-					offGrain := c.tz == "Asia/Kolkata" && (c.rng == "24h" || c.rng == "7d")
+					// 24h begins and ends inside an hour, Kolkata's 7d on the half hour: read raw, under every source.
+					offGrain := c.rng == "24h" || c.tz == "Asia/Kolkata" && c.rng == "7d"
 					if (n.agg == 0 && !offGrain) || n.raw != 0 || (n.off != 0 && !offGrain) {
 						t.Errorf("%s %s: pieces %+v", ep, where, n)
 					}

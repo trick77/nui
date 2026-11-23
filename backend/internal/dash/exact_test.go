@@ -2,6 +2,7 @@ package dash
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -57,8 +58,8 @@ func changeOf(v any) string {
 	return string(b)
 }
 
-// The rig's clock is 2026-11-22 13:31 UTC, the viewer in Zurich: 7d is 16.-21.11. closed, the 22nd open, compared
-// with 9.-14.11. (the 15th is the prior period's open-aligned bucket and is left out like the 22nd).
+// The rig's clock is 2026-11-22 13:31 UTC, the viewer in Zurich: 7d is 16.-21.11. closed, the 22nd open. A tile runs
+// to now and is compared with 9.-15.11. up to the same hour, 13:00 UTC; a list's change with the 14th and before.
 func TestExact_BothSourcesOpenBucketPrevious(t *testing.T) {
 	r, insert := exactRig(t)
 	const chrome = "Mozilla/5.0 (Macintosh) Chrome/142 Safari/537.36"
@@ -66,25 +67,31 @@ func TestExact_BothSourcesOpenBucketPrevious(t *testing.T) {
 	insert(pageLoad(at("2026-11-22T10:00:00Z"), "b", "192.0.2.2", "DE", chrome, 64501)...) // open bucket
 	insert(pageLoad(at("2026-11-12T10:00:00Z"), "c", "192.0.2.3", "CH", chrome, 64500)...) // prior, closed
 	insert(pageLoad(at("2026-11-15T10:00:00Z"), "d", "192.0.2.4", "CH", chrome, 64500)...) // prior, aligned to open
+	insert(pageLoad(at("2026-11-15T20:00:00Z"), "e", "192.0.2.5", "CH", chrome, 64500)...) // prior, past the cut
 
 	_, ov := r.get(t, "overview", p(feedSite))
 	tl := tiles(t, ov)
 	vis := tl["visitors"]
-	if num64(vis["value"]) != 1 || num64(vis["prev"]) != 1 || changeOf(vis["change"]) != `{"pct":0}` ||
+	if num64(vis["value"]) != 2 || num64(vis["prev"]) != 2 || changeOf(vis["change"]) != `{"pct":0}` ||
 		vis["verdict"] != "flat" || num64(vis["median"]) != 0 {
 		t.Errorf("visitors tile %v", vis)
 	}
 	if s := vis["series"].([]any); len(s) != 7 || num64(s[4]) != 1 || num64(s[6]) != 1 || num64(s[0]) != 0 {
 		t.Errorf("visitors series %v", s)
 	}
-	if ps := vis["prev_series"].([]any); num64(ps[3]) != 1 || num64(ps[6]) != 1 {
+	if ps := vis["prev_series"].([]any); num64(ps[3]) != 1 || num64(ps[6]) != 2 {
 		t.Errorf("visitors prev series %v", ps)
 	}
-	if v := tl["views"]; num64(v["value"]) != 1 || num64(v["prev"]) != 1 {
+	if v := tl["views"]; num64(v["value"]) != 2 || num64(v["prev"]) != 2 {
 		t.Errorf("views tile %v", v)
 	}
-	if v := tl["requests"]; num64(v["value"]) != 1 || num64(v["prev"]) != 1 {
+	if v := tl["requests"]; num64(v["value"]) != 2 || num64(v["prev"]) != 2 {
 		t.Errorf("requests tile %v", v)
+	}
+	// The classes are compared as the tiles are.
+	_, cs := r.get(t, "classes", p(feedSite))
+	if row := listRows(cs)[0]; num64(row["requests"]) != 2 || changeOf(row["change"]) != `{"pct":0}` {
+		t.Errorf("classes %v", row)
 	}
 
 	// Countries: one person per page load, whatever the sources. Over the whole range (the open bucket in), the
@@ -120,6 +127,110 @@ func TestExact_BothSourcesOpenBucketPrevious(t *testing.T) {
 	if vr := v["rows"].([]any); len(vr) != 1 || num64(vr[0].(map[string]any)["views"]) != 1 ||
 		num64(vr[0].(map[string]any)["requests"]) != 1 || num64(vr[0].(map[string]any)["visits"]) != 1 {
 		t.Errorf("visitors %v", v)
+	}
+}
+
+// 24h is the 24 hours before now (13:31 UTC) to the minute, compared with the 24 before them: tiles, classes and lists.
+func TestExact_Last24Hours(t *testing.T) {
+	r, insert := exactRig(t)
+	const chrome = "Mozilla/5.0 (Macintosh) Chrome/142 Safari/537.36"
+	insert(pageLoad(at("2026-11-22T13:26:00Z"), "a", "192.0.2.1", "CH", chrome, 64500)...) // five minutes ago
+	insert(pageLoad(at("2026-11-21T13:41:00Z"), "b", "192.0.2.2", "CH", chrome, 64500)...) // 23 h 50 min ago
+	insert(pageLoad(at("2026-11-21T13:21:00Z"), "c", "192.0.2.3", "CH", chrome, 64500)...) // 24 h 10 min ago: prior
+	insert(pageLoad(at("2026-11-20T13:21:00Z"), "d", "192.0.2.4", "CH", chrome, 64500)...) // 48 h 10 min ago: neither
+
+	_, ov := r.get(t, "overview", p(feedSite, "range", "24h"))
+	period := ov["period"].(map[string]any)
+	if labels := period["labels"].([]any); period["last_bucket_open"] != false || labels[23] != "14:31" ||
+		labels[0] != "15:31" || period["from"] != "2026-11-21T13:31:00Z" {
+		t.Errorf("period %v", period)
+	}
+	tl := tiles(t, ov)
+	for _, key := range []string{"visitors", "views", "requests"} {
+		v := tl[key]
+		if num64(v["value"]) != 2 || num64(v["prev"]) != 1 || changeOf(v["change"]) != `{"pct":100}` {
+			t.Errorf("%s tile %v", key, v)
+		}
+		if s, ps := v["series"].([]any), v["prev_series"].([]any); num64(s[0]) != 1 || num64(s[23]) != 1 ||
+			num64(ps[23]) != 1 || num64(ps[0]) != 0 {
+			t.Errorf("%s series %v, prior %v", key, s, ps)
+		}
+	}
+	_, cs := r.get(t, "classes", p(feedSite, "range", "24h"))
+	if row := listRows(cs)[0]; num64(row["requests"]) != 2 || changeOf(row["change"]) != `{"pct":100}` {
+		t.Errorf("classes %v", row)
+	}
+	_, cl := r.get(t, "list", p(feedSite, "range", "24h", "dim", "countries"))
+	if rows := listRows(cl); len(rows) != 1 || num64(rows[0]["value"]) != 2 ||
+		changeOf(rows[0]["change"]) != `{"pct":100}` {
+		t.Errorf("countries %v", rows)
+	}
+}
+
+// 24h rolls on: a visitor shown opens, and the log's next page ends, where the page loaded (from), at most a day back.
+func TestExact_HoldFrom(t *testing.T) {
+	r, insert := exactRig(t)
+	insert(pageLoad(at("2026-11-21T13:35:00Z"), "a", "192.0.2.1", "CH", "Mozilla/5.0", 64500)...)
+	_, table := r.get(t, "visitors", p(feedSite, "range", "24h"))
+	_, log := r.get(t, "log", p(feedSite, "range", "24h"))
+	from := strconv.FormatInt(int64(num64(table["from"])), 10)
+	if len(listRows(table)) != 1 || log["total"] != 3.0 || table["from"] != log["from"] ||
+		int64(num64(table["from"])) != at("2026-11-21T13:31:00Z") {
+		t.Fatalf("table %v, log %v", table, log)
+	}
+	r.s.Now = func() time.Time { return r.end.Add(11 * time.Minute) } // 13:41: the event is 24 h 6 min old
+	for _, c := range []struct {
+		from string
+		code int
+		log  float64
+	}{{"", 404, 0}, {from, 200, 3}, {strconv.FormatInt(at("2026-11-20T13:00:00Z"), 10), 404, 0}, {"x", 400, 0}} {
+		code, _ := r.get(t, "visitor", p(feedSite, "range", "24h", "key", "192.0.2.1", "from", c.from))
+		logCode, l := r.get(t, "log", p(feedSite, "range", "24h", "from", c.from))
+		if code != c.code || (c.code != 400 && num64(l["total"]) != c.log) || (logCode == 400) != (c.code == 400) {
+			t.Errorf("from %q: visitor %d, log %d %v", c.from, code, logCode, l)
+		}
+	}
+	// Another range starts at a midnight: from changes nothing.
+	if _, l := r.get(t, "log", p(feedSite, "range", "7d", "from", "1")); num64(l["total"]) != 3 {
+		t.Errorf("7d %v", l)
+	}
+}
+
+// Noteworthy's 24h is the full hours of the 24 before now (21st 14:00 to 22nd 13:00): its facts, and the briefing
+// written for them, hold until the next, and each is inside the 24h the other panels show.
+func TestExact_NoteworthyHour(t *testing.T) {
+	r, insert := exactRig(t)
+	jsErr := func(ts, name string) store.Event {
+		return store.Event{TS: at(ts), Source: "browser", Kind: "js_error", Name: name, Visitor: "v", SID: "s",
+			IP: "192.0.2.1", IPKey: "192.0.2.1", Cls: store.ClsHuman}
+	}
+	insert(jsErr("2026-11-21T14:05:00Z", "first"), jsErr("2026-11-22T13:05:00Z", "this hour"),
+		jsErr("2026-11-21T13:05:00Z", "a day ago"), jsErr("2026-11-21T13:45:00Z", "its first hour"))
+	_, b := r.get(t, "noteworthy", p(feedSite, "range", "24h"))
+	items := b["items"].([]any)
+	if b["as_of"] != "2026-11-22T13:00:00Z" || len(items) != 1 || items[0].(map[string]any)["id"] != "err:first" {
+		t.Errorf("noteworthy %v", b)
+	}
+	// On the hour every one of the 24 is full.
+	p := hoursPeriod(time.UnixMilli(at("2026-11-22T13:00:00Z")).UTC(), time.UTC)
+	if p.open || p.ClosedEnd().UnixMilli() != at("2026-11-22T13:00:00Z") ||
+		p.win.From.UnixMilli() != at("2026-11-21T13:00:00Z") || !p.prevWin.Closed.Equal(p.win.From) {
+		t.Errorf("on the hour %+v", p)
+	}
+}
+
+// 24h against last year reads the comparison from the hourly aggregates, raw long gone.
+func TestExact_24hLastYear(t *testing.T) {
+	r, insert := exactRig(t)
+	insert(pageLoad(at("2025-11-22T10:00:00Z"), "a", "192.0.2.1", "CH", "Mozilla/5.0", 64500)...)
+	insert(pageLoad(at("2026-11-22T10:00:00Z"), "b", "192.0.2.2", "CH", "Mozilla/5.0", 64500)...)
+	r.build(t)
+	var body map[string]any
+	n := countPieces(r, func(r *rig) {
+		_, body = r.getFrom(t, SourceAuto, "overview", p(feedSite, "range", "24h", "cmp", "yoy"))
+	})
+	if v := tiles(t, body)["views"]; num64(v["value"]) != 1 || num64(v["prev"]) != 1 || n.agg == 0 || n.raw != 0 {
+		t.Errorf("views %v, pieces %+v", v, n)
 	}
 }
 

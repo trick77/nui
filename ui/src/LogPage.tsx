@@ -311,7 +311,7 @@ export function LogPage({
                 fresh &&
                 more.load(() =>
                   api
-                    .log(scope, filter, next)
+                    .log(scope, filter, next, undefined, page.data?.from)
                     .then((p) => ({ items: p.rows, next: p.next })),
                 )
               }

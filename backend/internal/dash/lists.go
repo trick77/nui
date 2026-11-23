@@ -1032,10 +1032,10 @@ func (s *Server) handleClasses(w http.ResponseWriter, r *http.Request, q *query)
 	n := q.p.n()
 	gaps := pl.gaps
 	series := map[string][]float64{}
-	cur, closed, prev := classSums{}, classSums{}, classSums{}
+	cur, prev := classSums{}, classSums{}
 	for _, c := range classOrder {
 		series[c] = make([]float64, n)
-		cur[c], closed[c], prev[c] = &classAcc{}, &classAcc{}, &classAcc{}
+		cur[c], prev[c] = &classAcc{}, &classAcc{}
 	}
 	for i := 0; i < n; i++ {
 		b, err := s.classSpan(ctx, pl, q.p.Bounds[i], q.p.Bounds[i+1], !q.p.agg)
@@ -1047,13 +1047,10 @@ func (s *Server) handleClasses(w http.ResponseWriter, r *http.Request, q *query)
 			series[name][i] += float64(g.requests)
 			cur[name].requests += g.requests
 			cur[name].addrs.merge(&g.addrs)
-			if i < n-1 {
-				closed[name].requests += g.requests
-			}
 		}
 	}
 	if q.p.Prev != nil {
-		if prev, err = s.classSpan(ctx, pl, q.p.Prev[0], q.p.Prev[n-1], !q.p.prevAgg); err != nil {
+		if prev, err = s.classSpan(ctx, pl, q.p.Prev[0], q.p.prevCut, !q.p.prevAgg); err != nil {
 			s.fail(w, r, err)
 			return
 		}
@@ -1071,11 +1068,12 @@ func (s *Server) handleClasses(w http.ResponseWriter, r *http.Request, q *query)
 		if p := prev[c]; p != nil {
 			was = p.requests
 		}
-		row.Change = sumChange(float64(closed[c].requests), float64(was), q.p.Prev != nil && pl.gaps == gaps)
+		row.Change = sumChange(float64(g.requests), float64(was), q.p.Prev != nil && pl.gaps == gaps)
 		row.Verdict = classVerdict(c, row.Change)
 		rows = append(rows, row)
 	}
-	apix.JSON(w, http.StatusOK, map[string]any{"labels": q.p.labels, "series": series, "rows": rows})
+	apix.JSON(w, http.StatusOK, map[string]any{"bucket": q.p.Bucket, "labels": q.p.labels,
+		"last_bucket_open": q.p.open, "series": series, "rows": rows})
 }
 
 // classAcc is one class's server requests and distinct addresses.

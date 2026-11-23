@@ -40,7 +40,7 @@ type agreeCase struct {
 // every range (12mo in UTC only: its requests read a year of day pieces each, three quarters of the test's time in
 // every zone). Under -race (SQLite crawls: the 400 days alone took 100 s) seed 7, 40 days at a fifth of the scale,
 // some days copied to the prior periods and the year before (echo), and a covering set: Zurich (a whole-hour zone:
-// its 24h and 7d hours are agg_hour's) against the prior period at 24h, 7d and 30d, UTC against last year at 90d and
+// its 7d hours are agg_hour's, 24h is raw) against the prior period at 24h, 7d and 30d, UTC against last year at 90d and
 // 12mo, Kolkata (half hour, floored buckets) at 30d; raceSkips left out; the three-entry pass at 30d and 90d, both
 // comparisons.
 func agreeSetup() (seeds []uint64, days int, scale float64, cases []agreeCase, echo bool) {

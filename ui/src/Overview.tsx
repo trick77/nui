@@ -14,12 +14,6 @@ const AUD_WORD: Record<Audience, string> = {
   humans: "humans",
   bots: "bots",
 };
-// The tiles' figures leave the open bucket out: a 7 d figure holds no visitor seen only today.
-const OPEN_NOTE: Record<string, string> = {
-  hour: "Tiles: this hour excluded.",
-  day: "Tiles: today excluded.",
-  month: "Tiles: this month excluded.",
-};
 
 function TileValue({ t }: { t: Tile }) {
   return (
@@ -60,11 +54,7 @@ export function OverviewSection({
       <SectionHead
         id="overview"
         title="Overview"
-        lead={
-          p?.last_bucket_open && OPEN_NOTE[p.bucket]
-            ? `${AUD_NOTE[aud]} ${OPEN_NOTE[p.bucket]}`
-            : AUD_NOTE[aud]
-        }
+        lead={AUD_NOTE[aud]}
         sources={["browser", "server"]}
       />
       <Panel className="hero" label="Overview" busy={busy}>
@@ -153,6 +143,7 @@ export function OverviewSection({
                   median={sel.median}
                   kind={sel.kind}
                   open={p.last_bucket_open}
+                  hourly={p.bucket === "hour"}
                   title={sel.label}
                   prevLabel={p.prev_label}
                 />

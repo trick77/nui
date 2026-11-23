@@ -135,23 +135,48 @@ func (s *Server) parse(r *http.Request) (*query, error) {
 	return q, nil
 }
 
-// period is a range's buckets in the viewer's zone. Bounds holds n+1 instants for n buckets, the last bucket the
-// open one (it ends in the future). Prev holds the comparison's, nil when cmp is off.
+// holdFrom keeps a 24h span's start where a page already shows it (from, unix ms, as the visitors and the log answer
+// it): 24h rolls on with every request, yet a row shown must still open and a later page end where the first did. At
+// most a day back; other ranges start at a midnight and ignore it.
+func (q *query) holdFrom(from string) error {
+	if from == "" {
+		return nil
+	}
+	n, err := strconv.ParseInt(from, 10, 64)
+	if err != nil {
+		return errors.New("from is a time in unix ms")
+	}
+	t := time.UnixMilli(n)
+	if q.rng == "24h" && t.Before(q.p.win.From) && !t.Before(q.p.win.From.Add(-readSpan)) {
+		q.p.win.From = t
+	}
+	return nil
+}
+
+// period is a range's buckets in the viewer's zone. Bounds holds n+1 instants for n buckets, Prev the comparison's, nil
+// when cmp is off. Every range ends now: 24h is the 24 hours before now (the last bucket ends now, a label is its
+// bucket's end, to the minute), any other range's last bucket is today or this month, open (it ends in the future).
 //
 // An aggregate period (30d, 90d, 12mo, and every yoy comparison) is one the daily and hourly tables can serve: its
 // bucket bounds are floored to the UTC hour (a zone on a half hour moves 30 min earlier), and its daily figures read
-// whole UTC days by the viewer's calendar date (win). 24h and 7d and their prior period keep the exact local bounds.
+// whole UTC days by the viewer's calendar date (win). 24h and 7d and their prior period keep the exact local bounds:
+// 24h off the tables' hours, which is safe because raw of the last three days outlives the size cap.
 type period struct {
 	Bucket string
 	Bounds []time.Time
 	Prev   []time.Time
 	Now    time.Time
-	labels []string
-	prevL  string
+	// open says whether the last bucket is still filling.
+	open bool
+	// prevCut is where the comparison of a figure that runs to now ends: now's own time of day in the prior period,
+	// floored to the hour (the aggregates' grain: a cut inside an hour is read raw, and nothing where raw is gone).
+	prevCut time.Time
+	labels  []string
+	prevL   string
 	// agg and prevAgg say whether the range, and its comparison, is an aggregate period.
 	agg, prevAgg bool
 	// win is the span of the daily figures (lists, status, clients, the visitors table, a visitor, the log);
-	// prevWin the comparison's closed part, nil when lists compare nothing (cmp off, and 24h against last year,
+	// prevWin what its closed part is compared with, nil when lists compare nothing (cmp off, and 24h against last year,
 	// which whole days cannot match).
 	win     window
 	prevWin *window
@@ -172,12 +197,12 @@ func newPeriod(rng, cmp string, now time.Time, loc *time.Location) period {
 	var n int
 	var step func(time.Time, int) time.Time
 	var start time.Time
-	p := period{Now: now, agg: rng != "24h" && rng != "7d"}
+	p := period{Now: now, agg: rng != "24h" && rng != "7d", open: rng != "24h"}
 	p.prevAgg = p.agg || cmp == "yoy"
 	switch rng {
 	case "24h":
 		n, p.Bucket = 24, "hour"
-		start = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, loc)
+		start = t.Add(-time.Hour)
 		step = func(x time.Time, k int) time.Time { return x.Add(time.Duration(k) * time.Hour) }
 	case "12mo":
 		n, p.Bucket = 12, "month"
@@ -191,24 +216,35 @@ func newPeriod(rng, cmp string, now time.Time, loc *time.Location) period {
 	}
 	first := step(start, -(n - 1))
 	for i := 0; i <= n; i++ {
-		b := step(first, i)
-		p.Bounds = append(p.Bounds, b)
-		if i < n {
-			p.labels = append(p.labels, label(b, p.Bucket))
-		}
+		p.Bounds = append(p.Bounds, step(first, i))
+	}
+	named := p.Bounds[:n]
+	if rng == "24h" { // by its hours' ends
+		named = p.Bounds[1:]
+	}
+	for _, b := range named {
+		p.labels = append(p.labels, label(b, p.Bucket))
 	}
 	switch cmp {
 	case "prev":
 		for i := 0; i <= n; i++ {
 			p.Prev = append(p.Prev, step(first, i-n))
 		}
+		p.prevCut = step(t, -n)
 		p.prevL = "prior " + strings.Replace(strings.Replace(rng, "h", " h", 1), "d", " d", 1)
 		if rng == "12mo" {
 			p.prevL = "prior 12 mo"
 		}
 	case "yoy":
-		for _, b := range p.Bounds {
-			p.Prev = append(p.Prev, b.AddDate(-1, 0, 0))
+		// As many buckets on from the start's last year, not each bound's own: 29 February's would be 1 March's, and
+		// the day empty.
+		for i := 0; i <= n; i++ {
+			p.Prev = append(p.Prev, step(first.AddDate(-1, 0, 0), i))
+		}
+		p.prevCut = t.AddDate(-1, 0, 0)
+		if p.Bucket == "day" { // now's time of the last of those days
+			y, m, d := p.Prev[n-1].Date()
+			p.prevCut = time.Date(y, m, d, t.Hour(), t.Minute(), t.Second(), 0, loc)
 		}
 		p.prevL = "last year"
 	}
@@ -220,7 +256,7 @@ func newPeriod(rng, cmp string, now time.Time, loc *time.Location) period {
 	if snapped.Closed.After(today) {
 		snapped.Closed = today
 	}
-	p.win = window{From: p.Bounds[0], Closed: p.Bounds[n-1], End: p.Bounds[n]}
+	p.win = window{From: p.Bounds[0], Closed: p.ClosedEnd(), End: p.Bounds[n]}
 	closedDays := n - 1 // 7d: local days, whatever UTC's clamp
 	if p.agg {
 		p.win = snapped
@@ -231,7 +267,7 @@ func newPeriod(rng, cmp string, now time.Time, loc *time.Location) period {
 	case cmp == "prev" && p.agg, cmp == "yoy" && rng == "12mo":
 		p.prevWin = &window{From: step(snapped.From, -n), Closed: step(snapped.Closed, -n)}
 	case cmp == "prev":
-		p.prevWin = &window{From: p.Prev[0], Closed: p.Prev[n-1]}
+		p.prevWin = &window{From: p.Prev[0], Closed: p.Prev[p.closedN()]}
 	case cmp == "yoy" && rng != "24h":
 		// As many whole days as the current closed part, a leap day or a clamp to UTC's today included.
 		from := snapped.From.AddDate(-1, 0, 0)
@@ -252,13 +288,39 @@ func newPeriod(rng, cmp string, now time.Time, loc *time.Location) period {
 	if p.prevAgg {
 		floor(p.Prev)
 	}
+	switch {
+	case p.Prev == nil:
+	case !p.open:
+		p.prevCut = p.Prev[n]
+	default: // inside the last bucket: 29 February's last year is past its month's end, a floor may be before its start
+		p.prevCut = minTime(p.prevCut.Truncate(time.Hour), p.Prev[n])
+		if p.prevCut.Before(p.Prev[n-1]) {
+			p.prevCut = p.Prev[n-1]
+		}
+	}
+	return p
+}
+
+// hoursPeriod is Noteworthy's 24h: the full hours of the 24 before now, compared with the prior 24 h's. On a window
+// moving with every request the set of findings, and with it the briefing written for it, would not hold a minute;
+// none reaches back past the 24 hours, so each opens on what the other panels show.
+func hoursPeriod(now time.Time, loc *time.Location) period {
+	end := now.Truncate(time.Hour)
+	if end.Before(now) {
+		end = end.Add(time.Hour)
+	}
+	p := newPeriod("24h", "prev", end, loc)
+	p.Now, p.open = now, end.After(now)
+	p.win.Closed = p.ClosedEnd()
+	p.prevWin.Closed = p.Prev[p.closedN()]
+	p.prevWin.End = p.prevWin.Closed
 	return p
 }
 
 func label(t time.Time, bucket string) string {
 	switch bucket {
 	case "hour":
-		return t.Format("15:00")
+		return t.Format("15:04")
 	case "month":
 		return t.Format("Jan")
 	}
@@ -295,8 +357,16 @@ func (p period) n() int { return len(p.Bounds) - 1 }
 // From is the range's start, To now.
 func (p period) From() time.Time { return p.Bounds[0] }
 
-// ClosedEnd is where the open bucket starts.
-func (p period) ClosedEnd() time.Time { return p.Bounds[p.n()-1] }
+// closedN is the number of buckets that are over: all but an open last one.
+func (p period) closedN() int {
+	if p.open {
+		return p.n() - 1
+	}
+	return p.n()
+}
+
+// ClosedEnd is where the open bucket starts, now without one.
+func (p period) ClosedEnd() time.Time { return p.Bounds[p.closedN()] }
 
 // audWhere is the SQL condition for the audience (event.cls codes; pending counts as automated until classified,
 // as classOf).

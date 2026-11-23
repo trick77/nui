@@ -461,7 +461,7 @@ func (s *Server) handleVisitors(w http.ResponseWriter, r *http.Request, q *query
 	}
 	end := min(start+limit, len(rows))
 	page := slices.Clone(rows[start:end])
-	resp := map[string]any{"total": len(rows), "next": ""}
+	resp := map[string]any{"total": len(rows), "next": "", "from": span.From}
 	if end < len(rows) {
 		last := page[len(page)-1]
 		resp["next"] = visitorCursor{From: span.From, To: span.To, Value: sortValue(last, sortBy), Key: last.Key}.String()
@@ -1473,6 +1473,10 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 		apix.Error(w, http.StatusBadRequest, "bad cursor")
 		return
 	}
+	if err := q.holdFrom(v.Get("from")); err != nil {
+		apix.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	ctx := r.Context()
 	a, err := s.actorOne(ctx, q, key)
 	if err != nil {
@@ -1524,7 +1528,7 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 	resp := map[string]any{"key": key, "class": row.Class, "network": row.Network, "network_kind": row.NetworkKind,
 		"country": row.Country, "client": row.Client, "signals": row.Signals, "requests": row.Requests,
 		"addresses": addrs, "hours": hours, "trail": tr.lines, "trail_next": tr.next, "reading": nil,
-		"client_gen": nil, "does": &row.Does, "detail_since": detailSince}
+		"client_gen": nil, "does": &row.Does, "from": ms(q.p.win.From), "detail_since": detailSince}
 	if s.Model != nil && s.Model.Configured() {
 		one := []visitorRow{row}
 		s.labelClients(ctx, q.site.ID, one)

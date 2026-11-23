@@ -70,9 +70,9 @@ const N: Record<string, number> = {
   "12mo": 12,
 };
 const NOW = new Date("2026-11-22T13:20:00Z");
-// Each range's start, midnight or the hour in Zurich.
+// Each range's start: 24 hours before now, else a midnight in Zurich.
 const FROM: Record<string, string> = {
-  "24h": "2026-11-21T14:00:00Z",
+  "24h": "2026-11-21T13:20:00Z",
   "7d": "2026-11-15T23:00:00Z",
   "30d": "2026-10-23T22:00:00Z",
   "90d": "2026-08-24T22:00:00Z",
@@ -101,17 +101,17 @@ function labels(range: string): string[] {
   return Array.from({ length: n }, (_, i) => {
     const back = n - 1 - i;
     const d = new Date(NOW);
+    const two = (n: number) => String(n).padStart(2, "0");
+    // As the backend writes them: an hour's end "15:04", "Jan", "02.01.".
     if (range === "24h") {
       d.setUTCHours(d.getUTCHours() - back);
-      return `${String(d.getUTCHours()).padStart(2, "0")}:00`;
+      return `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;
     }
-    // As the backend writes them: "Jan", "02.01.", "15:00".
     if (range === "12mo") {
       d.setUTCMonth(d.getUTCMonth() - back);
       return MONTHS[d.getUTCMonth()];
     }
     d.setUTCDate(d.getUTCDate() - back);
-    const two = (n: number) => String(n).padStart(2, "0");
     return `${two(d.getUTCDate())}.${two(d.getUTCMonth() + 1)}.`;
   });
 }
@@ -123,6 +123,12 @@ const median = (a: number[]) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 const round1 = (v: number) => Math.round(v * 10) / 10;
+
+const bucketOf = (range: string) =>
+  range === "24h" ? "hour" : range === "12mo" ? "month" : "day";
+
+// How much of the last bucket is over: all of 24h's, which ends now.
+const lastPart = (range: string) => (range === "24h" ? 1 : 0.56);
 
 function series(range: string, base: number, seed: number, spike = 1) {
   const n = N[range] ?? 7;
@@ -137,7 +143,7 @@ function series(range: string, base: number, seed: number, spike = 1) {
         : range === "12mo"
           ? 1
           : [0.62, 1.05, 1.12, 1.1, 1.06, 0.98, 0.66][i % 7];
-    const part = i === n - 1 ? 0.56 : 1;
+    const part = i === n - 1 ? lastPart(range) : 1;
     const grow = 0.86 + (0.28 * i) / n;
     cur.push(
       Math.round(
@@ -176,10 +182,13 @@ function overview(
     } = {},
   ): Tile => {
     const s = series(range, b, seed, opt.spike);
-    const closed = s.cur.slice(0, -1);
-    const pclosed = s.prev.slice(0, -1);
-    let value = sum(closed);
-    let prev: number | null = sum(pclosed);
+    // To now, against the prior period cut at the same time of day; the
+    // median on the buckets that are over.
+    const over = range === "24h" ? s.cur.length : s.cur.length - 1;
+    let value = sum(s.cur);
+    let prev: number | null =
+      sum(s.prev.slice(0, -1)) +
+      Math.round(s.prev[s.prev.length - 1] * lastPart(range));
     let cur = s.cur;
     let prevSeries: number[] | null = s.prev;
     if (opt.rate) {
@@ -187,8 +196,8 @@ function overview(
       prevSeries = s.prev.map((v, i) =>
         round1((v / (b * 10)) * 4 + ((i + 1) % 3)),
       );
-      value = round1(median(cur.slice(0, -1)));
-      prev = round1(median(prevSeries.slice(0, -1)));
+      value = round1(median(cur));
+      prev = round1(median(prevSeries));
     }
     const diff = opt.rate
       ? round1(value - prev)
@@ -215,7 +224,9 @@ function overview(
       verdict: cmp === "off" ? "flat" : verdict,
       series: cur,
       prev_series: prevSeries,
-      median: opt.rate ? value : Math.round(median(cur.slice(0, -1))),
+      median: opt.rate
+        ? round1(median(cur.slice(0, over)))
+        : Math.round(median(cur.slice(0, over))),
       server: opt.server ?? false,
     };
   };
@@ -240,7 +251,7 @@ function overview(
     period: {
       from: FROM[range] ?? FROM["7d"],
       to: NOW.toISOString(),
-      bucket: range === "24h" ? "hour" : range === "12mo" ? "month" : "day",
+      bucket: bucketOf(range),
       labels: ls,
       // Empty with the comparison off.
       prev_label:
@@ -249,7 +260,7 @@ function overview(
           : cmp === "yoy"
             ? "last year"
             : `prior ${range.replace(/(\d+)/, "$1 ")}`,
-      last_bucket_open: true,
+      last_bucket_open: range !== "24h",
     },
     live: { humans: 7, automated: feed ? 3 : 1 },
     tiles,
@@ -398,7 +409,9 @@ function classes(range: string): Classes {
   const s = (b: number, seed: number, spike = 1) =>
     series(range, b * scale, seed, spike).cur;
   return {
+    bucket: bucketOf(range),
     labels: ls,
+    last_bucket_open: range !== "24h",
     series: {
       human: s(2500, 11),
       bot: s(1400, 12),
@@ -932,6 +945,7 @@ function visitors(q: URLSearchParams, feed: boolean): Visitors {
     rows: page,
     total: rows.length,
     next: from + limit < rows.length ? cursorOf(page[page.length - 1]) : "",
+    from: Date.parse(FROM[q.get("range") || "7d"]),
     detail_since: detailSince(q.get("range")),
   };
 }
@@ -1007,6 +1021,7 @@ function visitor(key: string, feed: boolean, cursor: string): Visitor | null {
       : PERSON_TRAIL[later ? 1 : 0],
     // The backend's keyset cursor, "<ms>.<row id>".
     trail_next: scrape || later ? "" : TRAIL_NEXT,
+    from: Date.parse(FROM["7d"]),
     detail_since: DETAIL_SINCE,
   };
 }
@@ -1170,6 +1185,7 @@ function log(q: URLSearchParams, feed: boolean, script: boolean): Log | null {
       page.length === LOG_PAGE && from + LOG_PAGE < rows.length
         ? id(page[page.length - 1])
         : "",
+    from: Date.parse(FROM[q.get("range") || "7d"]),
     detail_since: detailSince(q.get("range")),
   };
 }

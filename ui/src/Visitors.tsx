@@ -277,6 +277,7 @@ export function Visitors({ aud }: { aud: Audience }) {
         <VisitorDetail
           key={`${scope.site}`}
           vkey={selected}
+          from={page.data?.from}
           onLog={() => openLog({ addr: selected })}
         />
       )}
@@ -342,13 +343,21 @@ function trailText(t: TrailLine): string {
   return `${t.what}${span}${every}${more}`;
 }
 
-function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
+function VisitorDetail({
+  vkey,
+  from,
+  onLog,
+}: {
+  vkey: string;
+  from: number | undefined;
+  onLog: () => void;
+}) {
   const { scope, feed, selectVisitor } = useDash();
   const { site, range } = scope;
   const key = scopeKey("visitor", { site, range, vkey });
   const d = useApi<Visitor>(
     key,
-    (s) => api.visitor(scope, vkey, undefined, s),
+    (s) => api.visitor(scope, vkey, undefined, s, from),
     site,
   );
   const more = useMore<TrailItem>(key);
@@ -534,7 +543,7 @@ function VisitorDetail({ vkey, onLog }: { vkey: string; onLog: () => void }) {
                   fresh &&
                   more.load(() =>
                     api
-                      .visitor(scope, vkey, next)
+                      .visitor(scope, vkey, next, undefined, v?.from)
                       .then((p) => ({ items: p.trail, next: p.trail_next })),
                   )
                 }
