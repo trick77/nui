@@ -441,9 +441,9 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request, q *query) {
 		apix.Error(w, http.StatusBadRequest, "sub is auto or custom, for dim=events")
 		return
 	case sub == "custom":
-		o.extra, o.scan.sub = o.extra+" AND kind = 'custom'", sub
+		o.extra, o.sub = o.extra+" AND kind = 'custom'", sub
 	default:
-		o.extra, o.scan.sub = o.extra+" AND kind != 'custom'", sub
+		o.extra, o.sub = o.extra+" AND kind != 'custom'", sub
 	}
 	resp, err := s.list(r.Context(), q, dim, o)
 	if err != nil {
