@@ -125,12 +125,22 @@ func (pl *plan) rawFrom(from time.Time) time.Time {
 	return from
 }
 
-// detailSince is the API's detail_since: the oldest raw event, null without any.
-func (pl *plan) detailSince() any {
-	if !pl.hasRaw {
-		return nil
+// detailSince is the API's detail_since, what a raw-only read of [from, …) says about its start: the oldest raw
+// event when its UTC day is after from's (the reads' own day bounds, not the viewer's dates) and the figures reach
+// further back (an hour of aggregates before it); null otherwise, nothing missing: raw covers the span, or the
+// site's figures begin where its raw does (a site younger than the range).
+func (pl *plan) detailSince(ctx context.Context, from time.Time) (any, error) {
+	if !pl.hasRaw || pl.oldest <= ms(from)/dayMS {
+		return nil, nil
 	}
-	return iso(time.UnixMilli(pl.oldestTS))
+	var first sql.NullInt64
+	if err := pl.s.row(ctx, `SELECT MIN(hour) FROM agg_hour WHERE site_id = ?`, pl.site).Scan(&first); err != nil {
+		return nil, err
+	}
+	if !first.Valid || first.Int64 >= pl.oldestTS/hourMS {
+		return nil, nil
+	}
+	return iso(time.UnixMilli(pl.oldestTS)), nil
 }
 
 // rawOK: the day's raw is all there. Retention marks a day it deleted from (raw = 0); before the oldest event

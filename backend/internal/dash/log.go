@@ -158,8 +158,12 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 			break
 		}
 	}
-	apix.JSON(w, http.StatusOK, map[string]any{"rows": out, "total": total, "next": next,
-		"detail_since": pl.detailSince()})
+	since, err := pl.detailSince(ctx, q.p.win.From)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	apix.JSON(w, http.StatusOK, map[string]any{"rows": out, "total": total, "next": next, "detail_since": since})
 }
 
 // scanWindow is the longest span one log or footer statement reads: a day of a busy site is short, a year is not.
