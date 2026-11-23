@@ -21,6 +21,11 @@ type live struct {
 	Automated int64 `json:"automated"`
 }
 
+// dayState is one agg_day row as the dashboard needs it.
+//
+// Table: agg_day
+type dayState struct{ frozen, clean, raw bool }
+
 // classInfo is one address key's stored class and its reasons for a day.
 //
 // Table: actor_class
