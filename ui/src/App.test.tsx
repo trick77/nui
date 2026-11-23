@@ -345,7 +345,7 @@ describe("dashboard on a domain with a server feed", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Bots" }));
     expect(window.location.search).toContain("aud=bots");
-    expect(localStorage.getItem("stakeout.aud")).toBe("bots");
+    expect(localStorage.getItem("app.aud")).toBe("bots");
     expect(
       await screen.findByText(`Addresses per day${SEP}bots`, asIs),
     ).toBeInTheDocument();

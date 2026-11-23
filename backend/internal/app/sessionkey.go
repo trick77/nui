@@ -33,7 +33,7 @@ func sessionKey(cfg Config) ([]byte, error) {
 		secret = s
 	}
 	m := hmac.New(sha256.New, secret)
-	m.Write([]byte("stakeout-session\x00" + cfg.AdminToken))
+	m.Write([]byte("session\x00" + cfg.AdminToken))
 	return m.Sum(nil), nil
 }
 

@@ -203,12 +203,12 @@ describe("automation probes", () => {
 
   it("sends a kept renderer, and ignores what the page wrote there", async () => {
     localStorage.setItem(
-      "stakeout.gl",
+      "analytics.gl",
       JSON.stringify(["Apple Inc.", "Apple GPU"]),
     );
     expect((await ctxOf(boot())).gl).toEqual(["Apple Inc.", "Apple GPU"]);
     tracker!.stop();
-    localStorage.setItem("stakeout.gl", '{"x":1}');
+    localStorage.setItem("analytics.gl", '{"x":1}');
     expect((await ctxOf(boot())).gl).toBeUndefined();
   });
 
@@ -250,7 +250,7 @@ describe("automation probes", () => {
       "ANGLE (SwiftShader)",
     ]);
     expect(loseContext).toHaveBeenCalledTimes(1);
-    expect(localStorage.getItem("stakeout.gl")).toContain("SwiftShader");
+    expect(localStorage.getItem("analytics.gl")).toContain("SwiftShader");
   });
 
   it("asks no more where asking threw, and not at all without idle callbacks", async () => {
@@ -266,7 +266,7 @@ describe("automation probes", () => {
     const idle = stubIdle();
     boot();
     idle.run(49);
-    expect(localStorage.getItem("stakeout.gl")).toBe("-");
+    expect(localStorage.getItem("analytics.gl")).toBe("-");
     tracker!.stop();
     boot();
     expect(idle.queued()).toBe(0);
@@ -529,8 +529,8 @@ describe("sending", () => {
     t.event("before");
     // Another tab of the browser idled out first and started a new one.
     const other = "ab".repeat(16);
-    localStorage.setItem("stakeout.sid", other);
-    localStorage.setItem("stakeout.seen", String(Date.now()));
+    localStorage.setItem("analytics.sid", other);
+    localStorage.setItem("analytics.seen", String(Date.now()));
     t.event("after");
     expect(t.state().sid).toBe(other);
     t.flush(true);
@@ -1797,8 +1797,8 @@ describe("collector limits", () => {
   });
 
   it("keeps every property it sends within the collector's limits", async () => {
-    localStorage.setItem("stakeout.vid", "v".repeat(2000));
-    localStorage.setItem("stakeout.sid", "s".repeat(2000));
+    localStorage.setItem("analytics.vid", "v".repeat(2000));
+    localStorage.setItem("analytics.sid", "s".repeat(2000));
     const long = "é".repeat(3000);
     Object.defineProperty(navigator, "userAgentData", {
       configurable: true,

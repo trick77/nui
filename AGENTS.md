@@ -14,6 +14,9 @@ change to `/stakeout.js`, `/api/in`, `/api/feed` or `sites.json` updates it in t
   change forks the family.
 - Hostname only in `.env` (`PUBLIC_FQDN`), never in config, code or tests: examples use `example.com`. App variables
   are `BACKEND_*`.
+- Stored names never carry the product's name (user): database file (`store.FileName`), cookies, session key label,
+  `localStorage` keys, simulator markers. A rename once started the server on an empty database beside its data and
+  would have signed everyone out and counted every browser as new.
 - TLS: no certresolver, the server's Traefik holds a wildcard certificate.
 - Schema: `docs/schema.md`, generated (`SCHEMADOC_UPDATE=1 go test ./... -run TestSchemaDoc` in `backend/`).
   Migration 0001 is unreleased until v1 ships: edit it, never add 0002 before the first release.

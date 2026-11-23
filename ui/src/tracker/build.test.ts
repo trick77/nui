@@ -238,9 +238,9 @@ describe("the built script", () => {
     );
     // The contract stays readable.
     for (const s of [
-      "stakeout.vid",
-      "stakeout.sid",
-      "stakeout.seen",
+      "analytics.vid",
+      "analytics.sid",
+      "analytics.seen",
       "/api/in",
       "__stakeout",
     ])

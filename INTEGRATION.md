@@ -41,7 +41,7 @@ On every page, in `<head>`:
 - To tell people from automated browsers it also reads: globals and attributes automation tools leave in the page
   (sent as fixed tokens, never the names), where `navigator.webdriver` is defined, window frame size, plugin count
   and `pdfViewerEnabled`, the notification permission against the Permissions API, the WebGL renderer (an offscreen
-  canvas, once per site in each browser, only in an idle period, kept in `localStorage` as `stakeout.gl`; not in
+  canvas, once per site in each browser, only in an idle period, kept in `localStorage` as `analytics.gl`; not in
   Safari), mouse moves and presses, input events a script dispatched.
 - Local development on a host not in `sites.json` is refused (403) and the script stops: no switch needed. Including
   the tag only in production builds is fine too.

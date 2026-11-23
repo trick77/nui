@@ -62,7 +62,7 @@ func TestSeedDemo(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := app.Config{DataDir: dir, SitesFile: filepath.Join(dir, "sites.json"), RefDataDisabled: true}
-	st, err := store.Open(t.Context(), filepath.Join(dir, "stakeout.db"))
+	st, err := store.Open(t.Context(), filepath.Join(dir, "app.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

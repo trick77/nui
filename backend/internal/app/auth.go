@@ -19,11 +19,12 @@ import (
 	"github.com/trick77/stakeout/backend/internal/apix"
 )
 
-// SessionCookie is the session cookie's name, prefixed so another app on the same parent domain cannot overwrite it.
-const SessionCookie = "stakeout_session"
+// SessionCookie is the session cookie's name. Cookie names never carry the product's name (user): a rename would
+// sign everyone out.
+const SessionCookie = "app_session"
 
 // CookiePrefix names the OIDC flow's transient cookies.
-const CookiePrefix = "stakeout_"
+const CookiePrefix = "app_"
 
 // AdminName is the identity of a session signed in with the admin token: whoever held it, not a person.
 const AdminName = "admin"

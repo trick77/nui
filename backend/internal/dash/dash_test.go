@@ -78,7 +78,7 @@ type rig struct {
 
 func newRig(t *testing.T, days, people int, model insight.Model) *rig {
 	t.Helper()
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "app.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

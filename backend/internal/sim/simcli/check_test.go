@@ -103,7 +103,7 @@ func (h *sharedHistory) build(seed uint64, scale float64, days int, scenarios st
 		Ref: ref}); err != nil {
 		return err
 	}
-	if h.st, err = store.Open(ctx, filepath.Join(h.dir, "stakeout.db")); err != nil {
+	if h.st, err = store.Open(ctx, filepath.Join(h.dir, "app.db")); err != nil {
 		return err
 	}
 	if _, err := h.w.SyncSites(ctx, h.st); err != nil {

@@ -150,7 +150,7 @@ func TestCommands(t *testing.T) {
 		!strings.Contains(errs, "STAKEOUT_SIM_SEED=x") {
 		t.Fatalf("backfill: %d %s %s", code, out, errs)
 	}
-	for _, f := range []string{"stakeout.db", "sites.json", "ref/crawlers.json", "ref/as-ip-blocks.tar.gz", sim.OwnerFile,
+	for _, f := range []string{"app.db", "sites.json", "ref/crawlers.json", "ref/as-ip-blocks.tar.gz", sim.OwnerFile,
 		"ref/" + sim.RefMarkerFile} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Error(err)
@@ -220,7 +220,7 @@ func TestLiveCommand(t *testing.T) {
 	}
 	lens, _ := w.Site("lens.example.com")
 	lens.FeedKey = "custom-key"
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "app.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestServer(t *testing.T) {
 		cfg.DataDir != s.Dir || cfg.TrustedHops != 1 || !sim.Owned(s.Dir) {
 		t.Fatalf("config %+v, %v", cfg, err)
 	}
-	st, err := store.Open(t.Context(), filepath.Join(cfg.DataDir, "stakeout.db"))
+	st, err := store.Open(t.Context(), filepath.Join(cfg.DataDir, store.FileName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func TestDemo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "app.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
