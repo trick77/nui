@@ -517,6 +517,9 @@ describe("dashboard on a domain with a server feed", () => {
     expect(
       within(v).getByText(`AS64510 Example Cloud${SEP}Hosting`, asIs),
     ).toBeInTheDocument();
+    expect(v.textContent).toContain(
+      `Mostly refused${SEP}API only, no page loaded${SEP}Rapid requests${SEP}Hosting network`,
+    );
     expect(within(v).getByText(/Top 7 of 17 addresses/)).toBeInTheDocument();
     // A refused share of 20 % or more is red.
     expect(within(v).getByText(/^2['’]338$/)).toHaveClass("bad");
@@ -644,7 +647,7 @@ describe("dashboard on a domain with a server feed", () => {
     );
     const row = (await within(v).findByText("198.51.100.30")).closest("tr")!;
     expect(within(row).getByText("API client")).toBeInTheDocument();
-    expect(within(row).getByText("signed-in API client")).toBeInTheDocument();
+    expect(within(row).getByText("Signed-in API client")).toBeInTheDocument();
     await waitFor(() =>
       expect(within(v).queryByText("198.51.100.7")).toBeNull(),
     );
@@ -2086,6 +2089,9 @@ describe("separators", () => {
     await within(d).findByText("Person");
     expect(body()).toContain(`Chrome${SEP}macOS`);
     expect(d.textContent).toMatch(new RegExp(`AS\\d+ [^·]+${SEP}ISP`));
+    expect(d.textContent).toContain(
+      `Script beacon${SEP}Engaged${SEP}Assets loaded${SEP}Also unknown`,
+    );
     expect(plainDots()).toEqual([]);
 
     // Each chart's tooltip on its last point, still filling.

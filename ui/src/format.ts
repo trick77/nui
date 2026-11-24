@@ -21,11 +21,21 @@ export function joinSep(parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(SEP);
 }
 
+function upperFirst(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 // A network's kind as it stands after its name: ISP, Hosting. The backend's
 // word stays lower case: cached readings hang on it.
 export function networkKind(kind: string): string {
-  if (kind === "isp") return "ISP";
-  return kind.charAt(0).toUpperCase() + kind.slice(1);
+  return kind === "isp" ? "ISP" : upperFirst(kind);
+}
+
+// A signal as shown: No user agent, Hosting network. A first word with a dot
+// in it is a name from code (navigator.webdriver) and stays. The backend's
+// wording stays too, stored days and cached readings hold it.
+export function signal(s: string): string {
+  return /^\S*\./.test(s) ? s : upperFirst(s);
 }
 
 export function num(x: number | null | undefined, digits = 0): string {
