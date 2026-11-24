@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Audience, Overview, Tile, TileKey } from "./api";
-import { MainChart, Spark } from "./charts";
+import { MainChart, Spark, isCount } from "./charts";
 import { SEP, num, rawSince } from "./format";
 import { Delta, ErrorBox, Panel, SectionHead, Skeleton } from "./ui";
 
@@ -110,7 +110,11 @@ export function OverviewSection({
                   <div className="legend ml-auto">
                     <span>
                       <i
-                        className="sw line thin"
+                        className={
+                          isCount(sel.kind, sel.unit)
+                            ? "sw pale"
+                            : "sw line thin"
+                        }
                         style={{ background: "var(--color-s1)" }}
                       />
                       per {p.slot}

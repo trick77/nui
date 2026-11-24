@@ -521,6 +521,10 @@ body:has(.gate) {
   height: 1px;
   opacity: 0.6;
 }
+/* The main chart's bars. */
+.sw.pale {
+  opacity: 0.45;
+}
 
 svg text {
   font: 10.5px var(--font-mono);

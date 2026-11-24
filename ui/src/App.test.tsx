@@ -1792,6 +1792,7 @@ describe("an API", () => {
         mean={[null, 4, null, 5, 7]}
         prev={[1, null, null, 2, 3]}
         kind="sum"
+        unit="ms"
       />,
     );
     for (const id of ["slots", "mean"])
@@ -2209,6 +2210,59 @@ describe("main chart", () => {
     expect(screen.getByText("Mon")).toBeInTheDocument();
     expect(screen.getByTestId("peak").textContent).toBe(`7${SEP}c`);
     expect(screen.queryByTestId("prev")).toBeNull();
+  });
+
+  it("draws a count in bars, a share and a measure as a line", () => {
+    const draw = (kind: "sum" | "rate", unit = "", open = false) => {
+      const { container, unmount } = render(
+        <MainChart
+          {...CHART}
+          labels={["a", "b", "c", "d"]}
+          cur={[2, 0, null, 3]}
+          mean={[1, 1, 1, 2]}
+          prev={null}
+          kind={kind}
+          unit={unit}
+          open={open}
+        />,
+      );
+      const d = (id: string) =>
+        container.querySelector(`[data-testid=${id}]`)?.getAttribute("d") ??
+        null;
+      const out = { slots: d("slots"), open: d("open-slot") };
+      expect(container.innerHTML).not.toMatch(/NaN|Infinity|undefined/);
+      unmount();
+      return out;
+    };
+    // No bar of nothing, nor where there is no figure.
+    expect(draw("sum").slots!.match(/z/g)).toHaveLength(2);
+    expect(draw("sum").open).toBeNull();
+    // The open slot apart, paler.
+    const filling = draw("sum", "", true);
+    expect(filling.slots!.match(/z/g)).toHaveLength(1);
+    expect(filling.open!.match(/z/g)).toHaveLength(1);
+    for (const [kind, unit] of [
+      ["rate", "%"],
+      ["sum", "ms"],
+    ] as const) {
+      expect(draw(kind, unit).slots).toMatch(/^M[^z]*$/);
+      expect(draw(kind, unit, true).open).toBeNull();
+    }
+  });
+
+  it("lights the bar under the pointer", () => {
+    render(
+      <MainChart
+        {...CHART}
+        labels={["a", "b"]}
+        cur={[2, 3]}
+        mean={[2, 3]}
+        prev={null}
+        kind="sum"
+      />,
+    );
+    fireEvent.pointerMove(screen.getByTestId("chart-hit"), { clientX: 5000 });
+    expect(screen.getByTestId("hovered").getAttribute("d")).toMatch(/z$/);
   });
 
   it("names no largest share", () => {
