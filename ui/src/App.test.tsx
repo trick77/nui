@@ -514,6 +514,9 @@ describe("dashboard on a domain with a server feed", () => {
       name: "Visitors by address",
     });
     await within(v).findByText("198.51.100.7");
+    expect(
+      within(v).getByText(`AS64510 Example Cloud${SEP}Hosting`, asIs),
+    ).toBeInTheDocument();
     expect(within(v).getByText(/Top 7 of 17 addresses/)).toBeInTheDocument();
     // A refused share of 20 % or more is red.
     expect(within(v).getByText(/^2['’]338$/)).toHaveClass("bad");
@@ -2037,6 +2040,7 @@ describe("separators", () => {
     const d = screen.getByRole("region", { name: "Visitor" });
     await within(d).findByText("Person");
     expect(body()).toContain(`Chrome${SEP}macOS`);
+    expect(d.textContent).toMatch(new RegExp(`AS\\d+ [^·]+${SEP}ISP`));
     expect(plainDots()).toEqual([]);
 
     // Each chart's tooltip on its last point, still filling.

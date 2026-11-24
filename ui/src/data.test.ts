@@ -11,6 +11,7 @@ import {
   date,
   dateTime,
   dayMonth,
+  networkKind,
   num,
   pct,
   rawSince,
@@ -71,6 +72,14 @@ describe("format", () => {
     expect(seconds(90)).toBe("2 min");
     expect(seconds(7200)).toBe("2.0 h");
     expect(seconds(null)).toBe("–");
+  });
+
+  it("writes a network's kind after its name", () => {
+    expect(
+      ["isp", "hosting", "business", "education", "government", ""].map(
+        networkKind,
+      ),
+    ).toEqual(["ISP", "Hosting", "Business", "Education", "Government", ""]);
   });
 
   it("writes changes with an arrow from the sign", () => {

@@ -14,6 +14,7 @@ import {
   countryName,
   dateTime,
   joinSep,
+  networkKind,
   num,
   pct,
   rawSince,
@@ -163,7 +164,7 @@ export function Visitors({ aud }: { aud: Audience }) {
                           {v.display}
                         </span>
                         <span className="block text-[12px] text-muted">
-                          {joinSep([v.network, v.network_kind])}
+                          {joinSep([v.network, networkKind(v.network_kind)])}
                         </span>
                       </RowButton>
                     </td>
@@ -426,7 +427,9 @@ function VisitorDetail({
                 <ClassPill cls={v.class} />
               </dd>
               <dt className="text-muted">Network</dt>
-              <dd className="m-0">{joinSep([v.network, v.network_kind])}</dd>
+              <dd className="m-0">
+                {joinSep([v.network, networkKind(v.network_kind)])}
+              </dd>
               <dt className="text-muted">Country</dt>
               <dd className="m-0">{countryName(v.country)}</dd>
               <dt className="text-muted">Client</dt>

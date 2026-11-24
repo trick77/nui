@@ -21,6 +21,13 @@ export function joinSep(parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(SEP);
 }
 
+// A network's kind as it stands after its name: ISP, Hosting. The backend's
+// word stays lower case: cached readings hang on it.
+export function networkKind(kind: string): string {
+  if (kind === "isp") return "ISP";
+  return kind.charAt(0).toUpperCase() + kind.slice(1);
+}
+
 export function num(x: number | null | undefined, digits = 0): string {
   if (x == null || !Number.isFinite(x)) return "–";
   return x.toLocaleString(LOCALE, {
