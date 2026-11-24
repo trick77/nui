@@ -18,7 +18,7 @@ jobs:
   cleanup:
     uses: trick77/ship/.github/workflows/cleanup-images.yaml@master
     with:
-      packages: '["stakeout"]'
+      packages: '["trakk"]'
       dry-run: ${{ inputs.dry-run }}
     permissions:
       contents: read
