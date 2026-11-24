@@ -137,7 +137,7 @@ describe("automation probes", () => {
   it("sends its own tokens for automation globals, never the page's names", async () => {
     const w = win as unknown as Record<string, unknown>;
     const d = document as unknown as Record<string, unknown>;
-    w.__pwInitScripts = {};
+    w.__playwright__binding__ = {};
     d.$cdc_asdjflasutopfhvcZLmcfl_Symbol = {};
     // The page's own, with a tool's prefix: none of them a hit.
     w.__pwaInstallPrompt = 1;
@@ -147,13 +147,13 @@ describe("automation probes", () => {
     try {
       const ctx = await ctxOf(boot());
       expect(ctx.auto).toEqual([
-        "playwright-init",
+        "playwright-binding",
         "chromedriver",
         "selenium-attr",
       ]);
     } finally {
       for (const k of [
-        "__pwInitScripts",
+        "__playwright__binding__",
         "__pwaInstallPrompt",
         "cdc_config",
         "__driver_state",
@@ -201,15 +201,145 @@ describe("automation probes", () => {
     }
   });
 
-  it("sends a kept renderer, and ignores what the page wrote there", async () => {
-    localStorage.setItem(
-      "analytics.gl",
-      JSON.stringify(["Apple Inc.", "Apple GPU"]),
-    );
-    expect((await ctxOf(boot())).gl).toEqual(["Apple Inc.", "Apple GPU"]);
+  it("sends a kept renderer while it stands, and ignores what the page wrote there", async () => {
+    const day = 24 * 60 * 60 * 1000;
+    const ua = navigator.userAgent;
+    const keep = async (v: unknown) => {
+      tracker?.stop();
+      localStorage.setItem("analytics.gl", JSON.stringify(v));
+      return ctxOf(boot());
+    };
+    expect(
+      (await keep(["Apple Inc.", "Apple GPU", Date.now() - 29 * day, ua])).gl,
+    ).toEqual(["Apple Inc.", "Apple GPU"]);
+    // Too old, dated ahead, another browser version, an earlier format, the
+    // page's own: each measured again.
+    for (const v of [
+      ["Apple Inc.", "Apple GPU", Date.now() - 31 * day, ua],
+      ["Apple Inc.", "Apple GPU", Date.now() + day, ua],
+      ["Apple Inc.", "Apple GPU", Date.now(), ua + "x"],
+      ["Apple Inc.", "Apple GPU", "x", ua],
+      ["Apple Inc.", "Apple GPU", String(Date.now()), ua],
+      ["Apple Inc.", "Apple GPU"],
+      "-",
+      { x: 1 },
+    ])
+      expect((await keep(v)).gl, JSON.stringify(v)).toBeUndefined();
+  });
+
+  it("says why there is no renderer", async () => {
+    vi.stubGlobal("requestIdleCallback", undefined);
+    expect((await ctxOf(boot())).glw).toBe("no-idle");
     tracker!.stop();
-    localStorage.setItem("analytics.gl", '{"x":1}');
-    expect((await ctxOf(boot())).gl).toBeUndefined();
+    vi.stubGlobal("OffscreenCanvas", undefined);
+    let idle = stubIdle();
+    let t = boot();
+    for (let i = 0; i < 25; i++) idle.run(5);
+    expect((await ctxOf(t)).glw).toBe("busy");
+    tracker!.stop();
+    idle = stubIdle();
+    t = boot();
+    idle.run(49);
+    expect((await ctxOf(t)).glw).toBe("no-canvas");
+    tracker!.stop();
+    vi.stubGlobal(
+      "OffscreenCanvas",
+      class {
+        getContext() {
+          return null;
+        }
+      },
+    );
+    idle = stubIdle();
+    t = boot();
+    idle.run(49);
+    const ctx = await ctxOf(t);
+    expect(ctx.gl).toEqual(["", ""]);
+    expect(ctx.glw).toBeUndefined();
+    expect(localStorage.getItem("analytics.gl")).toBeNull();
+    tracker!.stop();
+    // A context lost as it was made.
+    vi.stubGlobal(
+      "OffscreenCanvas",
+      class {
+        getContext() {
+          return { getParameter: () => null, getExtension: () => null };
+        }
+      },
+    );
+    idle = stubIdle();
+    t = boot();
+    expect((await ctxOf(t)).glw).toBe("pending");
+    idle.run(49);
+    t.event("e");
+    const lost = await ctxOf(t);
+    expect(lost.gl).toBeUndefined();
+    expect(lost.glw).toBe("lost");
+    expect(localStorage.getItem("analytics.gl")).toBeNull();
+  });
+
+  it("counts clicks a script made, and names Playwright's evaluate by its stack", async () => {
+    const t = boot();
+    document.body.innerHTML = '<button id="b">b</button>';
+    const b = document.getElementById("b")!;
+    b.click();
+    let ctx = await ctxOf(t);
+    expect(ctx.sclick).toBe(1);
+    expect(ctx.synth).toBe(0);
+    expect(ctx.auto).toEqual([]);
+    // A page's own class of that name is no Playwright's.
+    new Function(
+      "b",
+      "class UtilityScript { evaluate() { b.click(); } } new UtilityScript().evaluate();",
+    )(b);
+    t.event("e");
+    ctx = await ctxOf(t);
+    expect(ctx.sclick).toBe(2);
+    expect(ctx.auto).toEqual([]);
+    // The frame as Chromium prints it, below a limit raised for the look.
+    const V8 = Error as unknown as {
+      stackTraceLimit: number;
+      prepareStackTrace?: unknown;
+    };
+    const { stackTraceLimit: limit, prepareStackTrace: prepare } = V8;
+    let seen = 0;
+    V8.prepareStackTrace = () => {
+      seen = V8.stackTraceLimit;
+      return "Error\n    at f (x.js:1:1)\n    at UtilityScript.evaluate (<anonymous>:372:16)";
+    };
+    try {
+      b.click();
+      expect(seen).toBe(Math.max(limit, 50));
+      expect(V8.stackTraceLimit).toBe(limit);
+      seen = 0;
+      b.click();
+      // Once named, no stack is taken any more.
+      expect(seen).toBe(0);
+    } finally {
+      V8.prepareStackTrace = prepare;
+      V8.stackTraceLimit = limit;
+      document.body.innerHTML = "";
+    }
+    t.event("e");
+    ctx = await ctxOf(t);
+    expect(ctx.sclick).toBe(4);
+    expect(ctx.auto).toEqual(["playwright-evaluate"]);
+  });
+
+  it("sends the probes' version and whether the page was activated", async () => {
+    Object.defineProperty(navigator, "userActivation", {
+      value: { hasBeenActive: true },
+      configurable: true,
+    });
+    try {
+      const ctx = await ctxOf(boot());
+      expect(ctx.pv).toBe(2);
+      expect(ctx.act).toBe(true);
+    } finally {
+      delete (navigator as { userActivation?: unknown }).userActivation;
+    }
+    tracker!.stop();
+    expect((await ctxOf(boot())).act).toBeUndefined();
   });
 
   it("measures the renderer when idle, offscreen, and keeps it", async () => {
@@ -266,10 +396,11 @@ describe("automation probes", () => {
     const idle = stubIdle();
     boot();
     idle.run(49);
-    expect(localStorage.getItem("analytics.gl")).toBe("-");
+    expect(JSON.parse(localStorage.getItem("analytics.gl")!)[0]).toBe("-");
     tracker!.stop();
-    boot();
+    const again = boot();
     expect(idle.queued()).toBe(0);
+    expect((await ctxOf(again)).glw).toBe("threw");
     tracker!.stop();
     localStorage.clear();
     vi.stubGlobal("requestIdleCallback", undefined);
@@ -1337,6 +1468,8 @@ describe("capture", () => {
       scroll: 1,
       move: 0,
       mdown: 0,
+      wheel: 0,
+      synth: 2,
     });
     expect(ev.find((e) => e.k === "vital" && e.p.name === "CLS")).toBeTruthy();
     // A second hide does not repeat the vitals.
@@ -1368,18 +1501,18 @@ describe("capture", () => {
     const eng = bodies()
       .flatMap((b) => b.events)
       .filter((e) => e.k === "engagement");
+    // Every event a test dispatches is untrusted: synth counts them too.
+    const none = { touch: 0, scroll: 0, move: 0, mdown: 0, wheel: 0 };
     expect(eng.map((e) => e.p.inputs)).toEqual([
-      { pointer: 2, key: 0, touch: 0, scroll: 0, move: 0, mdown: 0 },
-      { pointer: 0, key: 1, touch: 0, scroll: 0, move: 0, mdown: 0 },
+      { ...none, pointer: 2, key: 0, synth: 2 },
+      { ...none, pointer: 0, key: 1, synth: 1 },
     ]);
     // The context keeps the document's totals.
     expect(bodies().at(-1)!.ctx.inputs).toEqual({
+      ...none,
       pointer: 2,
       key: 1,
-      touch: 0,
-      scroll: 0,
-      move: 0,
-      mdown: 0,
+      synth: 3,
     });
   });
 
@@ -1392,13 +1525,21 @@ describe("capture", () => {
     };
     for (let i = 0; i < 5; i++) mouse("pointermove");
     mouse("pointerdown");
+    // A wheel event a script dispatched is none of a person's.
+    document.dispatchEvent(new Event("wheel"));
     const pen = new Event("pointermove");
     Object.defineProperty(pen, "pointerType", { value: "pen" });
     document.dispatchEvent(pen);
     t.flush();
     await vi.advanceTimersByTimeAsync(0);
     const ctx = bodies().at(-1)!.ctx;
-    expect(ctx.inputs).toMatchObject({ pointer: 1, move: 5, mdown: 1 });
+    expect(ctx.inputs).toMatchObject({
+      pointer: 1,
+      move: 5,
+      mdown: 1,
+      wheel: 0,
+      synth: 1,
+    });
     // Every event a test dispatches is untrusted.
     expect(ctx.synth).toBe(1);
   });

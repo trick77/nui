@@ -87,7 +87,7 @@ const STORE_GL = "analytics.gl";
 // page's own __pwa… or cdc_config is no tool's), one group per token sent.
 // ChromeDriver's is cdc_ or $cdc_ and 22 letters, then a kind.
 const AUTO_KEY = new RegExp(
-  "^(?:(__playwright__binding__)|(__pwInitScripts)|(\\$?cdc_[a-zA-Z0-9]{22}_[a-zA-Z]+)|" +
+  "^(?:(__playwright__binding__)|(\\$?cdc_[a-zA-Z0-9]{22}_[a-zA-Z]+)|" +
     "(\\$wdc_[a-zA-Z0-9]{22}_[a-zA-Z]+)|(domAutomation|domAutomationController)|" +
     "(_phantom|callPhantom)|(__nightmare)|" +
     "(_Selenium_IDE_Recorder|__selenium_evaluate|__selenium_unwrapped)|" +
@@ -97,7 +97,6 @@ const AUTO_KEY = new RegExp(
 );
 const AUTO_TOKEN = [
   "playwright-binding",
-  "playwright-init",
   "chromedriver",
   "webdriver-wdc",
   "dom-automation",
@@ -107,6 +106,25 @@ const AUTO_TOKEN = [
   "webdriver-js",
   "watir",
 ];
+// The version of the probes' meaning, sent with every context: a change to what one counts raises it, so figures
+// taken before and after are told apart.
+const PROBES = 2;
+// How long a measured renderer stands; a new browser version ends it sooner.
+const GL_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
+// The input counts, per page and per document: scroll counts a script's scrolling too, the wheel a person's own;
+// synth is the part of pointer, key and touch a script dispatched (isTrusted
+// false). Password managers type this way too, and CDP-driven input is
+// trusted: a figure to weigh, no verdict.
+const noInputs = () => ({
+  pointer: 0,
+  key: 0,
+  touch: 0,
+  scroll: 0,
+  move: 0,
+  mdown: 0,
+  wheel: 0,
+  synth: 0,
+});
 const DOWNLOAD =
   /\.(zip|gz|tgz|tar|xz|bz2|7z|rar|pdf|csv|tsv|json|txt|xlsx?|docx?|pptx?|dmg|exe|msi|pkg|deb|rpm|apk|iso|mmdb|mrt)$/i;
 const SEARCH_NAMES = /^(q|query|search|s|term)$/i;
@@ -366,7 +384,7 @@ export function start(
   let sid = id(STORE_SID);
 
   // ---- context, sent with every batch
-  const inputs = { pointer: 0, key: 0, touch: 0, scroll: 0, move: 0, mdown: 0 };
+  const inputs = noInputs();
   let uach: Props | undefined;
   const navEntry = () => {
     try {
@@ -414,18 +432,19 @@ export function start(
   // go out, never a name the page chose. Taken again with every context:
   // ChromeDriver marks the document once it first runs a command.
   const autoSeen: string[] = [];
+  const autoHit = (t: string) => {
+    if (autoSeen.indexOf(t) < 0 && autoSeen.length < 16) autoSeen.push(t);
+  };
   const autoTake = () => {
-    const hit = (t: string) => {
-      if (autoSeen.indexOf(t) < 0 && autoSeen.length < 16) autoSeen.push(t);
-    };
     for (const o of [win, doc] as object[])
       for (const k of Object.getOwnPropertyNames(o)) {
         const m = AUTO_KEY.exec(k);
-        if (m) hit(AUTO_TOKEN[m.findIndex((g, i) => i > 0 && g != null) - 1]);
+        if (m)
+          autoHit(AUTO_TOKEN[m.findIndex((g, i) => i > 0 && g != null) - 1]);
       }
     const el = doc.documentElement;
     for (const a of ["webdriver", "selenium", "driver"])
-      if (el && el.getAttribute(a) != null) hit("selenium-attr");
+      if (el && el.getAttribute(a) != null) autoHit("selenium-attr");
     return autoSeen.slice();
   };
   // Where navigator.webdriver is defined: on the prototype as every browser
@@ -441,34 +460,51 @@ export function start(
   let perm: [string, string] | undefined;
   // The WebGL renderer: SwiftShader and llvmpipe are no person's GPU, a
   // renderer not in ANGLE's form on desktop Chrome a spoofed one. Kept per
-  // site in each browser; "-" marks a browser where asking threw.
+  // site in each browser, with the time and the browser it was taken in: a
+  // remote desktop once, or an old version, is not the browser's renderer for
+  // good. "-" in the vendor's place marks a browser where asking threw.
   let gl: [string, string] | undefined;
-  const kept = get(STORE_GL);
+  // Why there is no renderer, sent in its place.
+  let glw = "";
+  const browser = clip(nav.userAgent, 256);
   try {
-    const v = JSON.parse(kept || "null") as unknown;
+    const v = JSON.parse(get(STORE_GL) || "null") as unknown;
     if (
       Array.isArray(v) &&
-      v.length === 2 &&
-      v.every((s) => typeof s === "string")
-    )
-      gl = [clip(v[0], 128), clip(v[1], 128)];
+      v.length === 4 &&
+      typeof v[0] === "string" &&
+      typeof v[1] === "string" &&
+      v[3] === browser &&
+      typeof v[2] === "number" &&
+      now() - v[2] >= 0 &&
+      now() - v[2] < GL_KEEP_MS
+    ) {
+      if (v[0] === "-") glw = "threw";
+      else gl = [clip(v[0], 128), clip(v[1], 128)];
+    }
   } catch {
     // the page wrote something else there
   }
+  const glKeep = (ven: string, ren: string) =>
+    put(STORE_GL, JSON.stringify([ven, ren, now(), browser]));
   const glTake = () => {
     if (gl || disabled) return;
     // An offscreen canvas: no element in the page's document.
     const OC = (
       win as { OffscreenCanvas?: new (w: number, h: number) => OffscreenCanvas }
     ).OffscreenCanvas;
-    if (!OC) return;
+    if (!OC) {
+      glw = "no-canvas";
+      return;
+    }
     try {
       const g = new OC(1, 1).getContext(
         "webgl",
       ) as WebGLRenderingContext | null;
       if (!g) {
-        // No context now (the GPU process restarting, too many contexts):
-        // said for this page, asked again on the next.
+        // No context: for now (the GPU process restarting, too many
+        // contexts) or for good (Chrome without a GPU and its software
+        // renderer): said for this page, asked again on the next.
         gl = ["", ""];
         return;
       }
@@ -486,10 +522,16 @@ export function start(
       // Released at once: the page's own contexts count against the
       // browser's limit, the oldest lost beyond it.
       g.getExtension("WEBGL_lose_context")?.loseContext();
+      // A context lost as it was made names none.
+      if (!ren) {
+        glw = "lost";
+        return;
+      }
       gl = [clip(ven, 128), clip(ren, 128)];
-      put(STORE_GL, JSON.stringify(gl));
+      glKeep(gl[0], gl[1]);
     } catch {
-      put(STORE_GL, "-");
+      glw = "threw";
+      glKeep("-", "");
     }
   };
   // Started with the first page view: never for a prerendered page nobody
@@ -513,22 +555,28 @@ export function start(
       requestIdleCallback?: (f: (d: IdleDeadline) => void) => number;
       cancelIdleCallback?: (h: number) => void;
     };
-    if (gl || kept === "-" || !w.requestIdleCallback || !w.cancelIdleCallback)
+    if (gl || glw) return;
+    if (!w.requestIdleCallback || !w.cancelIdleCallback) {
+      glw = "no-idle";
       return;
+    }
+    glw = "pending";
     let h = 0;
     let tries = 0;
     const run = (d: IdleDeadline) =>
       guard(() => {
-        if (d.timeRemaining() >= 40) glTake();
-        else if (++tries < 20) h = w.requestIdleCallback!.call(win, run);
+        if (d.timeRemaining() >= 40) {
+          glw = "";
+          glTake();
+        } else if (++tries < 20) h = w.requestIdleCallback!.call(win, run);
+        else glw = "busy";
       });
     h = w.requestIdleCallback.call(win, run);
     offs.push(() => w.cancelIdleCallback!.call(win, h));
   };
-  // Input a script dispatched (isTrusted false) on the counted events:
-  // pointerdown, keydown, touchstart. Password managers type this way too,
-  // and CDP-driven input is trusted: a figure to weigh, no verdict.
-  let synth = 0;
+  // Clicks a script made (element.click() fires no pointer or key event). A
+  // page's own code does that too: a figure to weigh.
+  let sclick = 0;
 
   const media = (q: string): boolean | undefined => {
     try {
@@ -593,7 +641,19 @@ export function start(
     ]);
     set("perm", () => perm);
     set("gl", () => gl);
-    set("synth", () => synth);
+    set("glw", () => (gl ? undefined : glw || undefined));
+    set("synth", () => inputs.synth);
+    set("sclick", () => sclick);
+    // Whether the page was ever activated: Playwright's evaluate does it
+    // without any input (measured), a press in an iframe or before the script
+    // loaded too.
+    set(
+      "act",
+      () =>
+        (nav as Navigator & { userActivation?: { hasBeenActive: boolean } })
+          .userActivation?.hasBeenActive,
+    );
+    set("pv", () => PROBES);
     // Each value is checked at depth 0, like an event's p.
     budget = LIMITS.nodes;
     const out = bound(c, "", -1) as Props;
@@ -1025,7 +1085,7 @@ export function start(
   let maxScroll = 0;
   let pageInputs = 0;
   // The page's input counts; the context carries the document's.
-  let pageIn = { pointer: 0, key: 0, touch: 0, scroll: 0, move: 0, mdown: 0 };
+  let pageIn = noInputs();
   const isActive = () => {
     try {
       return doc.visibilityState === "visible" && doc.hasFocus();
@@ -1053,7 +1113,12 @@ export function start(
   const engagement = (at?: [string, string]) => {
     tick();
     measure();
-    if (activeMs <= 0 && maxScroll <= 0 && pageInputs <= 0) return;
+    if (activeMs <= 0 && maxScroll <= 0 && pageInputs <= 0) {
+      // Mouse travel alone is no engagement, nor the next page's; on a page
+      // that stays it belongs to the press to come.
+      if (at) pageIn = noInputs();
+      return;
+    }
     record(
       "engagement",
       {
@@ -1067,7 +1132,7 @@ export function start(
     activeMs = 0;
     maxScroll = 0;
     pageInputs = 0;
-    pageIn = { pointer: 0, key: 0, touch: 0, scroll: 0, move: 0, mdown: 0 };
+    pageIn = noInputs();
   };
   // The scroll depth is measured at most once a frame, and when the
   // engagement is taken; never in the scroll handler: the page's height
@@ -1091,7 +1156,9 @@ export function start(
     // First: input that resumes an expired session belongs to the new one.
     touch();
     bump(k);
-    if (k !== "scroll" && !e.isTrusted && synth < 1e6) synth++;
+    if (k !== "scroll" && !e.isTrusted) {
+      bump("synth");
+    }
     // A mouse press, beside every press: a person's hand travels to what it
     // clicks, a script's mouse jumps there in one move.
     if (k === "pointer" && (e as PointerEvent).pointerType === "mouse")
@@ -1117,6 +1184,52 @@ export function start(
     "pointermove",
     (e) => {
       if ((e as PointerEvent).pointerType === "mouse") bump("move");
+    },
+    { capture: true, passive: true },
+  );
+  // The wheel tells a person's scrolling from a script's. Activity of its
+  // own: in a nested box or at the page's end no scroll event follows.
+  on(
+    doc,
+    "wheel",
+    (e) => {
+      if (!e.isTrusted) return;
+      touch();
+      bump("wheel");
+      pageInputs++;
+    },
+    { capture: true, passive: true },
+  );
+  // A click by a script. The stack of one made inside Playwright's evaluate
+  // holds its helper's frame (measured; Chromium only, WebKit names no
+  // class): only the token goes out, never the stack. Looked at for a few
+  // clicks, then no more: a page may click by the thousand.
+  on(
+    doc,
+    "click",
+    (e) => {
+      if (e.isTrusted) return;
+      if (sclick < 1e6) sclick++;
+      if (sclick <= 10 && autoSeen.indexOf("playwright-evaluate") < 0) {
+        // The default ten frames may all be the page's own wrappers'.
+        const V8 = Error as { stackTraceLimit?: number };
+        const limit = V8.stackTraceLimit;
+        const raise = (n: number) =>
+          guard(() => {
+            if (typeof limit === "number") V8.stackTraceLimit = n;
+          });
+        raise(Math.max(limit || 0, 50));
+        guard(() => {
+          // As text, or the frames a page's prepareStackTrace returns.
+          if (
+            /(?:^|[\s,])UtilityScript\.evaluate \(<anonymous>:/.test(
+              String(new Error().stack),
+            )
+          )
+            autoHit("playwright-evaluate");
+        });
+        raise(limit || 0);
+      }
     },
     { capture: true, passive: true },
   );

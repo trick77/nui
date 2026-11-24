@@ -41,8 +41,10 @@ On every page, in `<head>`:
 - To tell people from automated browsers it also reads: globals and attributes automation tools leave in the page
   (sent as fixed tokens, never the names), where `navigator.webdriver` is defined, window frame size, plugin count
   and `pdfViewerEnabled`, the notification permission against the Permissions API, the WebGL renderer (an offscreen
-  canvas, once per site in each browser, only in an idle period, kept in `localStorage` as `analytics.gl`; not in
-  Safari), mouse moves and presses, input events a script dispatched.
+  canvas, once per site in each browser version and month, only in an idle period, kept in `localStorage` as
+  `analytics.gl` with the time and the user agent; not in Safari, which says why instead), mouse moves and presses,
+  wheel turns, input events and clicks a script dispatched (and whether such a click came from Playwright's evaluate,
+  as a token), whether the page was ever activated.
 - Of its requests' headers the collector keeps `User-Agent`, `Accept-Language`, `Origin`, the client hints, the fetch
   metadata and `Signature-Agent`, never cookies or credentials.
 - Local development on a host not in `sites.json` is refused (403) and the script stops: no switch needed. Including
