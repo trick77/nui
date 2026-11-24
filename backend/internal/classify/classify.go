@@ -372,6 +372,9 @@ func (c *Classifier) passSite(ctx context.Context, s *sites.Site, after, upto, s
 		if err := c.beaconsElsewhere(ctx, s.ID, m, a.uas, fd); err != nil {
 			return nil, err
 		}
+		if err := c.readProbes(ctx, s.ID, m, a.uas); err != nil {
+			return nil, err
+		}
 		d := c.Decide(a, fd)
 		c.setRecheck(m, d.pending)
 		if err := c.DB.SetActorClass(ctx, store.ActorClass{SiteID: s.ID, IPKey: m.key, Day: m.day, Class: d.class,
@@ -492,7 +495,8 @@ func (c *Classifier) actorDay(ctx context.Context, site int64, key string, day i
 		SUM(source = 'server' AND `+deliveredPage+`),
 		SUM(source = 'server' AND `+signedRequest+`),
 		SUM(source = 'server' AND status >= 400 AND status < 500),
-		MAX(source = 'browser' AND props LIKE '%"webdriver":true%'),
+		MAX(CASE WHEN source = 'browser' AND props LIKE '%"webdriver":true%'
+			THEN COALESCE(json_type(props, '$.ctx.webdriver') = 'true', 0) ELSE 0 END),
 		SUM(source = 'server' AND props NOT LIKE '%"sf_mode"%'),
 		SUM(source = 'server' AND props NOT LIKE '%"lang"%'),
 		SUM(source = 'server' AND props NOT LIKE '%"sf_site"%'),
@@ -616,7 +620,7 @@ func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 	}
 	weak := c.weakSignals(people, f, nets, addr)
 	d := decision{byUA: map[string]string{}, pending: pending}
-	if automated*2 < total || (automated*2 == total && people.engaged > 0) {
+	if automated*2 < total || (automated*2 == total && people.active > 0) {
 		// Mostly people: human, the weak signals listed with the good ones.
 		d.class = "human"
 		d.reasons = append(goodSignals(people), weak...)
@@ -675,6 +679,9 @@ func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 	if d.class == "unknown" {
 		var rest uaDay // all but the API clients, whose pace is none of the others'
 		for i, g := range a.uas {
+			if d.byUA[g.ua] == "human" {
+				g.probes = 0 // a person's browser beside the program: its indicators are not the program's
+			}
 			if verdicts[i].class != "api" {
 				rest = addDay(rest, g)
 			}
@@ -881,8 +888,13 @@ func (c *Classifier) weakSignals(g uaDay, f siteFacts, nets *refdata.Networks, a
 			}
 		}
 	}
+	ind := g.probes
 	if as, ok := nets.Lookup(addr); ok && refdata.NetworkKind(as.Category) == "hosting" {
 		weak = append(weak, "hosting network")
+		ind |= famHosting
+	}
+	if r := ind.reason(); r != "" {
+		weak = append(weak, r)
 	}
 	return weak
 }
@@ -894,7 +906,7 @@ func goodSignals(g uaDay) []string {
 	} else if g.beaconElsewhere {
 		good = append(good, "script beacon from another address")
 	}
-	if g.engaged > 0 {
+	if g.active > 0 {
 		good = append(good, "engaged")
 	}
 	if g.assets > 0 {
@@ -926,6 +938,8 @@ func addDay(a, b uaDay) uaDay {
 	a.noLang += b.noLang
 	a.noSite += b.noSite
 	a.engaged += b.engaged
+	a.active += b.active
+	a.probes = a.probes.more(b.probes)
 	a.pageView += b.pageView
 	if a.first == 0 || (b.first != 0 && b.first < a.first) {
 		a.first = b.first

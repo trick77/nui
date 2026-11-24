@@ -21,6 +21,10 @@ type uaDay struct {
 	noFetch, noLang   int64
 	noSite            int64
 	engaged, pageView int64
+	// active are the engagements with input, among the rows readProbes reads: visible and focused time alone proves no
+	// person, a tool emulates focus. probes are the script's indicators of automation.
+	active int64
+	probes family
 	// first and last are the server requests' first and last time (unix ms), 0 without any.
 	first, last int64
 }

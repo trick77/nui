@@ -108,6 +108,9 @@ func (r *rig) insert(t *testing.T, evs ...store.Event) {
 
 const browserUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15"
 
+// engagedProps is an engagement with input.
+const engagedProps = `{"p":{"ms":4000,"inputs":{"pointer":1,"key":0,"touch":0,"scroll":2,"move":20,"mdown":1}}}`
+
 func req(ip, ua, name, path string, status int, props string) store.Event {
 	if props == "" {
 		props = `{"sf_mode":"navigate","lang":"de"}`
@@ -128,7 +131,7 @@ func TestPass(t *testing.T) {
 		req("192.0.2.1", browserUA, "document", "/", 200, ""),
 		req("192.0.2.1", browserUA, "script", "/assets/a.js", 200, ""),
 		store.Event{Source: "browser", Kind: "page_view", IP: "192.0.2.1", UA: browserUA, Props: `{"ctx":{"webdriver":false}}`},
-		store.Event{Source: "browser", Kind: "engagement", IP: "192.0.2.1", UA: browserUA},
+		store.Event{Source: "browser", Kind: "engagement", IP: "192.0.2.1", UA: browserUA, Props: engagedProps},
 		// Googlebot from its range.
 		req("66.249.66.1", "Mozilla/5.0 (compatible; Googlebot/2.1)", "document", "/", 200, ""),
 		// Someone claiming Googlebot from elsewhere.
@@ -327,7 +330,7 @@ func TestPass_SharedAddressAndPace(t *testing.T) {
 		"Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"} {
 		evs = append(evs, req(nat, ua, "document", "/", 200, ""), req(nat, ua, "script", "/assets/a.js", 200, ""),
 			store.Event{Source: "browser", Kind: "page_view", IP: nat, UA: ua},
-			store.Event{Source: "browser", Kind: "engagement", IP: nat, UA: ua})
+			store.Event{Source: "browser", Kind: "engagement", IP: nat, UA: ua, Props: engagedProps})
 	}
 	for range 3 {
 		evs = append(evs, req(nat, "curl/8.4.0", "", "/api/v1/ip/1", 200, ""))
@@ -1004,7 +1007,7 @@ func TestPass_SideFetches(t *testing.T) {
 	person := func(ip string) []store.Event {
 		evs := []store.Event{req(ip, browserUA, "script", "/assets/a.js", 200, ""),
 			account(req(ip, browserUA, "empty", "/api/me", 200, "")), req(ip, browserUA, "empty", "/api/me", 401, ""),
-			{Source: "browser", Kind: "engagement", IP: ip, UA: browserUA}}
+			{Source: "browser", Kind: "engagement", IP: ip, UA: browserUA, Props: engagedProps}}
 		for _, status := range []int{200, 200, 304} {
 			evs = append(evs, req(ip, browserUA, "document", "/", status, ""),
 				store.Event{Source: "browser", Kind: "page_view", IP: ip, UA: browserUA})

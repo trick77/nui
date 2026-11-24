@@ -85,10 +85,10 @@ export function WhoIsAsking({ classes }: { classes: Loaded<Classes> }) {
             <span className="font-mono">navigator.webdriver</span>
             {SEP}
             {joinSep([
-              "no script beacon after a page request",
-              "no asset requests",
-              "hosting network",
-              "no pointer, key or scroll input.",
+              "automation user agent",
+              "missing browser headers",
+              "machine pace",
+              "neither script beacon nor assets.",
             ])}
           </p>
         </>
