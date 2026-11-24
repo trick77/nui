@@ -65,35 +65,37 @@ func (a *apiStats) p95() float64 {
 	return float64(v)
 }
 
-// apiBucket reads one bucket's API figures, a piece at a time, each from its source.
-func (s *Server) apiBucket(ctx context.Context, pl *plan, aud string, from, to time.Time, short bool, a *apiStats) error {
+// apiSlots reads the slots' API figures into out, a piece at a time, each from its source.
+func (s *Server) apiSlots(ctx context.Context, pl *plan, aud string, sl slotting, short bool, out []bucketStats) error {
 	pl.need = apiBuilder
 	defer func() { pl.need = 0 }()
-	for _, pc := range pieces(from, to) {
-		if err := pl.read(ctx, pc[0], pc[1], time.Hour, short,
-			func() (bool, error) { return s.apiHours(ctx, pl.site, aud, pc[0], pc[1], a) },
-			func() error { return s.apiPiece(ctx, pl.site, aud, pc[0], pc[1], a) }); err != nil {
+	for _, pc := range pieces(sl.bounds[0], sl.bounds[sl.n()]) {
+		if err := pl.read(ctx, pc[0], pc[1], sl.grain, short,
+			func() (bool, error) { return s.apiHours(ctx, pl.site, aud, pc[0], pc[1], sl, out) },
+			func() error { return s.apiPiece(ctx, pl.site, aud, pc[0], pc[1], sl, out) }); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// apiHours adds one piece's hours from agg_hour, false when its day is not clean in the statement's snapshot.
-func (s *Server) apiHours(ctx context.Context, site int64, aud string, from, to time.Time, a *apiStats) (bool, error) {
-	rows, err := s.query(ctx, `SELECT d.ok, t.cls, t.failed, t.durations, t.callers, t.accounts`+
+// apiHours adds one piece's hours from agg_hour, false when its day is not clean in the statement's snapshot (nothing
+// added then).
+func (s *Server) apiHours(ctx context.Context, site int64, aud string, from, to time.Time, sl slotting,
+	out []bucketStats) (bool, error) {
+	rows, err := s.query(ctx, `SELECT d.ok, t.hour, t.cls, t.failed, t.durations, t.callers, t.accounts`+
 		aggFrom("agg_hour", "t.hour >= ?3 AND t.hour < ?4"), site, ms(from)/dayMS, ms(from)/hourMS, ms(to)/hourMS)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = rows.Close() }()
 	in := audCls(aud)
-	var add apiStats
+	adds := make([]apiStats, len(out))
 	ok := false
 	for rows.Next() {
-		var cls, failed sql.NullInt64
+		var hour, cls, failed sql.NullInt64
 		var durations, callers, accounts []byte
-		if err := rows.Scan(&ok, &cls, &failed, &durations, &callers, &accounts); err != nil {
+		if err := rows.Scan(&ok, &hour, &cls, &failed, &durations, &callers, &accounts); err != nil {
 			return false, err
 		}
 		if !ok {
@@ -102,6 +104,7 @@ func (s *Server) apiHours(ctx context.Context, site int64, aud string, from, to 
 		if !cls.Valid || !in(int(cls.Int64)) {
 			continue
 		}
+		add := &adds[sl.at(hour.Int64*hourMS)]
 		add.failed += float64(failed.Int64)
 		if err := add.durations.AddEncoded(durations); err != nil {
 			return false, err
@@ -116,20 +119,24 @@ func (s *Server) apiHours(ctx context.Context, site int64, aud string, from, to 
 	if err := rows.Err(); err != nil || !ok {
 		return false, err
 	}
-	a.add(&add)
+	for i := range adds {
+		out[i].api.add(&adds[i])
+	}
 	return true, nil
 }
 
 // apiPiece adds one raw piece.
-func (s *Server) apiPiece(ctx context.Context, site int64, aud string, from, to time.Time, a *apiStats) error {
+func (s *Server) apiPiece(ctx context.Context, site int64, aud string, from, to time.Time, sl slotting,
+	out []bucketStats) error {
 	where := ` FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND ` + callWhere + ` AND ` + audWhere(aud)
-	args := []any{site, ms(from), ms(to)}
-	if err := s.each(ctx, `SELECT dur_ms, SUM(`+failedSQL+`), COUNT(*)`+where+` GROUP BY dur_ms`, args,
-		func(rows *sql.Rows) error {
-			var dur, failed, n int64
-			if err := rows.Scan(&dur, &failed, &n); err != nil {
+	args := append(sl.args(), site, ms(from), ms(to))
+	if err := s.each(ctx, `SELECT `+cellSQL+` AS cell, dur_ms, SUM(`+failedSQL+`), COUNT(*)`+where+` GROUP BY cell, dur_ms`,
+		args, func(rows *sql.Rows) error {
+			var cell, dur, failed, n int64
+			if err := rows.Scan(&cell, &dur, &failed, &n); err != nil {
 				return err
 			}
+			a := &out[sl.slot(cell)].api
 			a.failed += float64(failed)
 			a.durations.Add(dur, n)
 			return nil
@@ -138,14 +145,15 @@ func (s *Server) apiPiece(ctx context.Context, site int64, aud string, from, to 
 	}
 	for _, d := range []struct {
 		col string
-		to  *uniq
-	}{{"ip_key", &a.callers}, {"account", &a.accounts}} {
-		if err := s.each(ctx, `SELECT DISTINCT `+d.col+where+` AND `+d.col+` != ''`, args, func(rows *sql.Rows) error {
+		to  func(*apiStats) *uniq
+	}{{"ip_key", func(a *apiStats) *uniq { return &a.callers }}, {"account", func(a *apiStats) *uniq { return &a.accounts }}} {
+		if err := s.each(ctx, `SELECT DISTINCT `+cellSQL+`, `+d.col+where+` AND `+d.col+` != ''`, args, func(rows *sql.Rows) error {
+			var cell int64
 			var v string
-			if err := rows.Scan(&v); err != nil {
+			if err := rows.Scan(&cell, &v); err != nil {
 				return err
 			}
-			d.to.add(v)
+			d.to(&out[sl.slot(cell)].api).add(v)
 			return nil
 		}); err != nil {
 			return err
@@ -173,33 +181,27 @@ func (s *Server) each(ctx context.Context, stmt string, args []any, f func(*sql.
 var apiTileDefs = []tileDef{
 	{key: "calls", label: "Calls", kind: "sum", server: true, of: func(b bucketStats) float64 { return b.api.calls() }},
 	{key: "accounts", label: "Accounts", kind: "sum", server: true,
-		of: func(b bucketStats) float64 { return float64(b.api.accounts.count()) }},
+		distinct: func(b *bucketStats) *uniq { return &b.api.accounts }},
 	{key: "callers", label: "Addresses", kind: "sum", server: true,
-		of: func(b bucketStats) float64 { return float64(b.api.callers.count()) }},
+		distinct: func(b *bucketStats) *uniq { return &b.api.callers }},
 	{key: "failed", label: "Failed", unit: "%", kind: "rate", server: true, upBad: true,
-		of:   func(b bucketStats) float64 { return b.api.failedShare() },
+		pool: func(bs []bucketStats) float64 {
+			var a apiStats
+			for i := range bs {
+				a.failed += bs[i].api.failed
+				a.durations.Merge(&bs[i].api.durations)
+			}
+			return round1(a.failedShare())
+		},
 		base: func(b bucketStats) float64 { return b.api.calls() }},
 	{key: "p95", label: "95th percentile", unit: "ms", kind: "sum", server: true, upBad: true,
-		of: func(b bucketStats) float64 { return b.api.p95() }},
-}
-
-// apiTotal is an API tile's figure over buckets.
-func apiTotal(key string, bs []bucketStats) float64 {
-	var all apiStats
-	for i := range bs {
-		all.add(&bs[i].api)
-	}
-	switch key {
-	case "accounts":
-		return float64(all.accounts.count())
-	case "callers":
-		return float64(all.callers.count())
-	case "failed":
-		return round1(all.failedShare())
-	case "p95":
-		return all.p95()
-	}
-	return all.calls()
+		pool: func(bs []bucketStats) float64 {
+			var a apiStats
+			for i := range bs {
+				a.durations.Merge(&bs[i].api.durations)
+			}
+			return a.p95()
+		}},
 }
 
 // scanDurations adds a raw piece's durations per key to into: a list whose rows carry percentiles.

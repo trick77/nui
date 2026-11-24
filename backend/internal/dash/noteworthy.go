@@ -187,14 +187,14 @@ func (s *Server) briefingInput(ctx context.Context, q *query) (insight.BriefingI
 	if err != nil {
 		return in, err
 	}
-	cur, prev, _, gaps, err := s.curPrev(ctx, pl, q, "all")
+	cur, prev, gaps, err := s.curPrev(ctx, pl, q, "all")
 	if err != nil {
 		return in, err
 	}
 	// Closed buckets only (as_of says until when), unlike the overview's tiles: the lists' findings are whole days, and
 	// a trend that turned within the day would have the briefing written again.
 	closed := q.p.closedN()
-	tiles := s.tiles(q, cur, prev, cur[:closed], prev[:closed], gaps)
+	tiles := s.tiles(q, cur[:closed], prev[:closed], gaps)
 	for _, t := range tiles {
 		if math.IsNaN(t.Value) { // no such figure: nothing to write about
 			continue

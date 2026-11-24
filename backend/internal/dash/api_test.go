@@ -302,21 +302,24 @@ func TestAPINoCalls(t *testing.T) {
 	r := apiRig(t, []call{{ago: 3 * day1, tmpl: "POST /mcp", status: 200, dur: 40, ip: "192.0.2.1"}})
 	_, body := r.get(t, "overview", p(apiSite, "range", "7d", "tz", "UTC"))
 	p95 := tiles(t, body)["p95"]
-	if v := num64(p95["value"]); v < 38 || v > 42 || p95["median"] != p95["value"] || p95["prev"] != nil || p95["change"] != nil {
+	if v := num64(p95["value"]); v < 38 || v > 42 || p95["prev"] != nil || p95["change"] != nil {
 		t.Errorf("one call: %v", p95)
 	}
-	nulls := 0
-	for _, x := range p95["series"].([]any) {
-		if x == nil {
-			nulls++
+	points := func(list string) (n int) {
+		for _, x := range p95[list].([]any) {
+			if x != nil {
+				n++
+			}
 		}
+		return n
 	}
-	if nulls != 6 {
-		t.Errorf("series %v, want the six days without a call null", p95["series"])
+	// The call's hour, the site's first, and the six hours' means that hold it.
+	if points("series") != 1 || points("mean") != 4 {
+		t.Errorf("series %v, mean %v, want the hours without a call null", p95["series"], p95["mean"])
 	}
 	_, body = r.get(t, "overview", p(apiSite, "range", "24h", "tz", "UTC"))
-	if got := tiles(t, body); got["p95"]["value"] != nil || got["p95"]["change"] != nil || got["p95"]["median"] != nil ||
-		got["failed"]["value"] != nil || got["failed"]["change"] != nil || got["failed"]["median"] != nil || num64(got["calls"]["value"]) != 0 {
+	if got := tiles(t, body); got["p95"]["value"] != nil || got["p95"]["change"] != nil ||
+		got["failed"]["value"] != nil || got["failed"]["change"] != nil || num64(got["calls"]["value"]) != 0 {
 		t.Errorf("no call: %v", got)
 	}
 }
@@ -340,7 +343,12 @@ func TestAPIFiguresSince(t *testing.T) {
 	}
 	calls := tiles(t, body)["calls"]
 	series := calls["series"].([]any)
-	if series[0] == nil || series[1] != nil || series[len(series)-1] == nil || num64(calls["value"]) != 96 || num64(calls["median"]) != 24 || calls["change"] != nil {
+	// Nothing before the site's first figure, nor on the days without theirs.
+	if first := body["period"].(map[string]any)["first"]; series[0] != nil || num64(first) <= 0 {
+		t.Errorf("figures begin at %v, series %v", first, series)
+	}
+	if series[24] != nil || series[3*24-1] != nil || series[3*24] == nil || series[len(series)-1] == nil ||
+		num64(calls["value"]) != 96 || calls["change"] != nil {
 		t.Errorf("calls %v", calls)
 	}
 	_, body = r.get(t, "overview", p(feedSite, "range", "7d", "tz", "UTC"))

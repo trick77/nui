@@ -266,9 +266,12 @@ func TestSources_CapCutRecentRaw(t *testing.T) {
 		case "overview":
 			for _, x := range after[i]["tiles"].([]any) {
 				tl := x.(map[string]any)
-				if tl["change"] != nil || tl["verdict"] != "flat" || tl["prev"] != nil || len(tl["prev_series"].([]any)) != 0 {
-					t.Errorf("%s: tile %v claims a change over cut raw: change %v, prev %v, prev_series %v", a.name,
-						tl["key"], tl["change"], tl["prev"], tl["prev_series"])
+				if tl["change"] != nil || tl["verdict"] != "flat" || tl["prev"] != nil || len(tl["prev_mean"].([]any)) != 0 {
+					t.Errorf("%s: tile %v claims a change over cut raw: change %v, prev %v, prev_mean %v", a.name,
+						tl["key"], tl["change"], tl["prev"], tl["prev_mean"])
+				}
+				if s := tl["series"].([]any); s[0] != nil || tl["key"] == "views" && s[len(s)-1] == nil {
+					t.Errorf("%s: tile %v draws cut raw as a quiet time: %v", a.name, tl["key"], s)
 				}
 			}
 		case "list":

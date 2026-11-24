@@ -351,7 +351,7 @@ func noNullLists(t *testing.T, where string, v any) {
 
 func listKey(k string) bool {
 	switch k {
-	case "rows", "items", "tiles", "series", "prev_series", "labels", "signals", "detail", "trail", "hours",
+	case "rows", "items", "tiles", "series", "mean", "prev_mean", "delta", "labels", "ticks", "weekends", "partial", "signals", "detail", "trail", "hours",
 		"sites", "evidence", "related", "ip_version", "browsers", "os", "devices", "ids":
 		return true
 	}
@@ -459,18 +459,21 @@ func TestOverview(t *testing.T) {
 				}
 				noNullLists(t, "overview", body)
 				period := body["period"].(map[string]any)
-				n := map[string]int{"24h": 24, "7d": 7, "30d": 30, "90d": 90, "12mo": 12}[rng]
-				if len(period["labels"].([]any)) != n || period["last_bucket_open"] != (rng != "24h") {
-					t.Errorf("%s period %v", rng, period)
+				// At 2026-11-22 14:31 in Zurich, up to the slot that is filling.
+				n := map[string]int{"24h": 144, "7d": 6*24 + 15, "30d": 29*8 + 5, "90d": 89*4 + 3, "12mo": 357}[rng]
+				if len(period["labels"].([]any)) != n || period["open"] != (rng != "24h") {
+					t.Errorf("%s: %d slots, open %v", rng, len(period["labels"].([]any)), period["open"])
 				}
 				ts := tiles(t, body)
 				if len(ts) != 6 {
 					t.Errorf("%s: %d tiles", rng, len(ts))
 				}
-				if len(ts["views"]["series"].([]any)) != n {
-					t.Errorf("%s: series length", rng)
+				for _, list := range []string{"series", "mean"} {
+					if len(ts["views"][list].([]any)) != n {
+						t.Errorf("%s: %s length", rng, list)
+					}
 				}
-				if c == "off" && (ts["views"]["change"] != nil || len(ts["views"]["prev_series"].([]any)) != 0) {
+				if c == "off" && (ts["views"]["change"] != nil || len(ts["views"]["prev_mean"].([]any)) != 0) {
 					t.Errorf("cmp off still compares: %v", ts["views"])
 				}
 				if aud == "bots" && ts["visitors"]["label"] != "Addresses" {
@@ -630,8 +633,14 @@ func TestLists(t *testing.T) {
 	_, body = r.get(t, "classes", p(feedSite, "aud", "humans"))
 	rows = listRows(body)
 	if len(rows) != 5 || rows[0]["class"] != "human" || rows[4]["class"] != "api" || rows[0]["requests"].(float64) == 0 ||
-		len(body["series"].(map[string]any)["unknown"].([]any)) != 7 {
+		len(body["series"].(map[string]any)["unknown"].([]any)) != 6*4+3 {
 		t.Errorf("classes %v", body)
+	}
+	// The weeks of 12mo, from 1 December 2025 (a Monday) to the one with the 22nd of November.
+	_, body = r.get(t, "classes", p(feedSite, "range", "12mo"))
+	names, partial := body["labels"].([]any), body["partial"].([]any)
+	if len(names) != 51 || names[0] != "01.12.–07.12." || names[50] != "16.11.–22.11." || partial[0] != false || partial[50] != true {
+		t.Errorf("weeks %v %v", names, partial)
 	}
 }
 
@@ -1496,18 +1505,18 @@ func TestPeriod(t *testing.T) {
 	zh, _ := time.LoadLocation("Europe/Zurich")
 	now := time.Date(2026, 3, 29, 12, 30, 0, 0, time.UTC) // DST change day in Zurich
 	p := newPeriod("7d", "prev", now, zh)
-	if p.n() != 7 || p.Bounds[7].Sub(p.Bounds[6]) != 23*time.Hour || p.labels[6] != "29.03." || p.prevL != "prior 7 d" {
-		t.Errorf("7d %v %v", p.Bounds, p.labels)
+	if p.n() != 7 || p.Bounds[7].Sub(p.Bounds[6]) != 23*time.Hour || p.prevL != "prior 7 d" {
+		t.Errorf("7d %v", p.Bounds)
 	}
 	if !p.Prev[7].Equal(p.Bounds[0]) {
 		t.Error("prev does not end where the range starts")
 	}
 	// 24h ends now, to the minute; the year before is on the aggregates' hours.
 	p = newPeriod("24h", "yoy", now, time.UTC)
-	if p.n() != 24 || p.labels[23] != "12:30" || p.labels[0] != "13:30" || p.prevL != "last year" || p.open ||
+	if p.n() != 24 || p.prevL != "last year" || p.open ||
 		!p.Bounds[24].Equal(now) || !p.ClosedEnd().Equal(now) || p.win.Closed != p.win.End ||
 		!p.Prev[24].Equal(time.Date(2025, 3, 29, 12, 0, 0, 0, time.UTC)) || p.prevCut != p.Prev[24] {
-		t.Errorf("24h yoy %v %v %+v %v", p.labels, p.Bounds, p.win, p.Prev)
+		t.Errorf("24h yoy %v %+v %v", p.Bounds, p.win, p.Prev)
 	}
 	// The day after 29 February, last year has 24 hours too.
 	p = newPeriod("24h", "yoy", time.Date(2028, 3, 1, 13, 31, 0, 0, time.UTC), time.UTC)
@@ -1550,8 +1559,8 @@ func TestPeriod(t *testing.T) {
 		}
 	}
 	p = newPeriod("12mo", "prev", now, time.UTC)
-	if p.labels[11] != "Mar" || p.Bounds[0].Month() != time.April || p.prevL != "prior 12 mo" {
-		t.Errorf("12mo %v", p.labels)
+	if p.n() != 12 || p.Bounds[0].Month() != time.April || p.prevL != "prior 12 mo" {
+		t.Errorf("12mo %v", p.Bounds)
 	}
 	// 12mo: the prior period is last year, both comparisons the same whole months, 29 February 2028 in the range.
 	leap := time.Date(2028, 11, 23, 12, 0, 0, 0, time.UTC)
@@ -1572,7 +1581,7 @@ func TestPeriod(t *testing.T) {
 	p = newPeriod("30d", "prev", nyNow, ny)
 	if p.win != (window{day("2026-10-23"), day("2026-11-21"), day("2026-11-23")}) ||
 		*p.prevWin != (window{day("2026-09-23"), day("2026-10-22"), day("2026-10-22")}) ||
-		!p.Bounds[0].Equal(time.Date(2026, 10, 23, 4, 0, 0, 0, time.UTC)) || p.labels[29] != "21.11." {
+		!p.Bounds[0].Equal(time.Date(2026, 10, 23, 4, 0, 0, 0, time.UTC)) {
 		t.Errorf("New York 30d: %+v %+v %v", p.win, p.prevWin, p.Bounds[0])
 	}
 	// 7d stays local and exact; against last year it reads whole days, 24h compares no list.

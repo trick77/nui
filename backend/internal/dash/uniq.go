@@ -7,7 +7,11 @@ import "github.com/trick77/stakeout/backend/internal/agg"
 type uniq struct {
 	set map[uint64]struct{}
 	sk  *agg.Sketch
+	n   int64 // after fix
 }
+
+// fix keeps the count and lets the ids go: nothing can be added or merged any more.
+func (u *uniq) fix() { *u = uniq{n: u.count()} }
 
 func (u *uniq) add(id string) { u.addHash(agg.Hash(id)) }
 
@@ -65,5 +69,5 @@ func (u *uniq) count() int64 {
 	if u.sk != nil {
 		return u.sk.Count()
 	}
-	return int64(len(u.set))
+	return u.n + int64(len(u.set))
 }
