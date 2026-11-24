@@ -78,6 +78,34 @@ func TestVisitFamilies(t *testing.T) {
 			t.Errorf("%s: %b, want %b", name, got, tt.want)
 		}
 	}
+	// Pages activated and left without any input, by what the second probe version counts; the newest document, not
+	// activated, hides nothing.
+	for name, tt := range map[string]struct {
+		act    bool
+		inputs string // of the first page's engagement, "" while it is open
+		want   family
+	}{
+		"a tool's evaluate":          {true, `"pointer":0,"key":0,"touch":0,"scroll":0,"move":0,"wheel":0,"synth":0`, famBehaviour},
+		"all input a script's":       {true, `"pointer":2,"key":1,"touch":0,"scroll":0,"move":0,"wheel":0,"synth":3`, famBehaviour},
+		"not activated":              {false, `"pointer":0,"key":0,"touch":0,"scroll":0,"move":0,"wheel":0,"synth":0`, none},
+		"still open":                 {true, ``, none},
+		"by the wheel":               {true, `"pointer":0,"key":0,"touch":0,"scroll":3,"move":0,"wheel":2,"synth":0`, none},
+		"scrolled by unknown":        {true, `"pointer":0,"key":0,"touch":0,"scroll":3,"move":0,"wheel":0,"synth":0`, none},
+		"pressed besides the script": {true, `"pointer":3,"key":0,"touch":0,"scroll":0,"move":0,"wheel":0,"synth":2`, none},
+	} {
+		ctx := func(act bool) string {
+			return fmt.Sprintf(`{"ctx":{"wdd":"proto","webdriver":false,"act":%t,"sclick":2},"hdr":{%s}}`, act, plainHdr)
+		}
+		v := newVisit()
+		v.add("page_view", "/b", ctx(false))
+		if tt.inputs != "" {
+			v.add("engagement", "/a", `{"p":{"ms":3000,"inputs":{`+tt.inputs+`}}}`)
+		}
+		v.add("page_view", "/a", ctx(tt.act))
+		if got := v.families(chromeUA); got != tt.want {
+			t.Errorf("%s: %b, want %b", name, got, tt.want)
+		}
+	}
 	// The newest known value stands; one the newest batch did not ask for is an older one's.
 	v := newVisit()
 	v.add("page_view", "/", `{"ctx":{"wdd":"proto","webdriver":false,"gl":null},"hdr":{`+plainHdr+`}}`)

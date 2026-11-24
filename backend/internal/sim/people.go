@@ -415,7 +415,7 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 	}
 	cl := &client{addr: per.addr, ua: per.prof.ua, hdr: browserHeaders(per.prof, per.loc)}
 	sid := r.hex32()
-	inputs := map[string]int{"pointer": 0, "key": 0, "touch": 0, "scroll": 0, "move": 0, "mdown": 0}
+	inputs := map[string]int{"pointer": 0, "key": 0, "touch": 0, "scroll": 0, "move": 0, "mdown": 0, "wheel": 0, "synth": 0}
 	current := func(t time.Time) int {
 		c := 0
 		for i, pg := range pages {
@@ -479,10 +479,14 @@ func engagement(r rng, pg page, pr *uaProfile, scripted bool) map[string]any {
 	if scripted {
 		pointer, key, scroll = 0, 0, 0
 	}
-	in := map[string]int{"pointer": pointer, "key": key, "touch": 0, "scroll": scroll, "move": 0, "mdown": 0}
+	in := map[string]int{"pointer": pointer, "key": key, "touch": 0, "scroll": scroll, "move": 0, "mdown": 0, "wheel": 0,
+		"synth": 0}
 	if pr.touch == 0 {
 		in["mdown"] = pointer
 		in["move"] = pointer*23 + scroll
+		in["wheel"] = scroll
+	} else {
+		in["touch"] = pointer + scroll
 	}
 	return map[string]any{"ms": ms, "scroll": 20 + r.IntN(81), "inputs": in}
 }
@@ -512,7 +516,12 @@ func (pr *uaProfile) gpu(scripted bool) [2]string {
 // chrome-headless-shell reports itself (no plugins, a window frame the viewport's size, the notification
 // permission denied where the Permissions API says prompt).
 func (pr *uaProfile) probes(scripted bool) map[string]any {
-	c := map[string]any{"auto": []string{}, "wdd": "proto", "synth": 0, "gl": pr.gpu(scripted)}
+	c := map[string]any{"auto": []string{}, "wdd": "proto", "synth": 0}
+	if !pr.chromium && !strings.Contains(pr.ua, "Firefox") {
+		c["glw"] = "no-idle" // Safari has no idle callbacks: the script asks for no renderer there
+	} else {
+		c["gl"] = pr.gpu(scripted)
+	}
 	switch {
 	case scripted:
 		c["outer"] = pr.viewport[:]
@@ -537,7 +546,10 @@ func (w *World) context(per *person, cur page, ref string, inputs map[string]int
 		"touch": pr.touch, "hc": pr.hc, "dark": strHash(per.vid)%3 == 0, "reduced_motion": false,
 		"webdriver": webdriver, "vis": "visible", "nav": "navigate", "cookies": true,
 		"inputs": map[string]int{"pointer": inputs["pointer"], "key": inputs["key"], "touch": inputs["touch"],
-			"scroll": inputs["scroll"], "move": inputs["move"], "mdown": inputs["mdown"]}}
+			"scroll": inputs["scroll"], "move": inputs["move"], "mdown": inputs["mdown"], "wheel": inputs["wheel"],
+			"synth": inputs["synth"]},
+		// A program's evaluate activates the page without any input.
+		"act": per.scripted || inputs["pointer"]+inputs["key"] > 0, "sclick": 0, "pv": 2}
 	if ref != "" {
 		c["ref"] = ref
 	}

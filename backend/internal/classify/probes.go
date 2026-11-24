@@ -21,7 +21,7 @@ const (
 	famRendering                    // a software renderer, or none
 	famWindow                       // no window frame, no plugins, permissions that contradict themselves
 	famHeaders                      // the request's headers against what the script read
-	famBehaviour                    // input a script made, or none over several pages
+	famBehaviour                    // input a script made, none over several pages, or a page activated without any
 	famHosting                      // a hosting network
 )
 
@@ -70,28 +70,41 @@ var softwareGL = []string{"swiftshader", "llvmpipe", "softpipe", "microsoft basi
 
 // visit is what one visitor's contexts and engagements say, newest first: the newest known value of each.
 type visit struct {
-	ctx    map[string]json.RawMessage // the newest value per key, never null
-	hdr    map[string]string          // the newest batch's headers
-	auto   bool
-	synth  bool
-	left   bool // a page was left: its engagement says what input it saw, a page still open not yet
-	input  bool
-	active int64
-	pages  map[string]bool
-	silent map[string]bool // the pages engaged on without input
+	ctx   map[string]json.RawMessage // the newest value per key, never null
+	hdr   map[string]string          // the newest batch's headers
+	auto  bool
+	synth bool
+	left  bool // a page was left: its engagement says what input it saw, a page still open not yet
+	input bool
+	// scrolled without input known: a screen reader's gestures scroll so, a script too. Neither input nor silence.
+	scrolled bool
+	act      bool // a page was activated
+	active   int64
+	pages    map[string]bool
+	silent   map[string]bool // the pages engaged on without input
 }
 
 func newVisit() *visit {
 	return &visit{ctx: map[string]json.RawMessage{}, pages: map[string]bool{}, silent: map[string]bool{}}
 }
 
-// inputCounts are the script's counts, per page or per document. Scroll counts as input, though a script scrolls too:
-// a person reading by the wheel alone must not read as none.
+// inputCounts are the script's counts, per page or per document. Synth is the part of pointer, key and touch a script
+// dispatched. Without the wheel (a script before probe version 2) scroll counts as input, though a script scrolls too: a
+// person reading by the wheel alone must not read as none.
 type inputCounts struct {
-	Pointer, Key, Touch, Scroll, Move float64
+	Pointer, Key, Touch, Scroll, Move, Synth float64
+	Wheel                                    *float64
 }
 
-func (n inputCounts) any() bool { return n.Pointer+n.Key+n.Touch+n.Scroll+n.Move > 0 }
+func (n inputCounts) any() bool {
+	if n.Pointer+n.Key+n.Touch-n.Synth > 0 || n.Move > 0 {
+		return true
+	}
+	if n.Wheel != nil {
+		return *n.Wheel > 0
+	}
+	return n.Scroll > 0
+}
 
 // readProbes sets each client's indicators (uaDay.probes): its visitor's with most families.
 func (c *Classifier) readProbes(ctx context.Context, site int64, m actorKey, uas []uaDay) error {
@@ -131,7 +144,7 @@ func (c *Classifier) readProbes(ctx context.Context, site int64, m actorKey, uas
 		for _, v := range vs {
 			uas[i].probes = uas[i].probes.more(v.families(g.ua))
 			uas[i].active += v.active
-			if v.left && !v.input && len(v.pages) == 1 {
+			if v.left && !v.input && !v.scrolled && len(v.pages) == 1 {
 				once++
 			}
 		}
@@ -165,6 +178,8 @@ func (v *visit) add(kind, path, props string) {
 			case e.Inputs.any():
 				v.input = true
 				v.active++
+			case e.Inputs.Scroll > 0:
+				v.scrolled = true
 			case e.MS > 0:
 				v.silent[path] = true
 			}
@@ -187,12 +202,15 @@ func (v *visit) add(kind, path, props string) {
 	var in inputCounts
 	if raw, ok := p.Ctx["inputs"]; ok && json.Unmarshal(raw, &in) == nil {
 		v.input = v.input || in.any()
+		v.scrolled = v.scrolled || in.Scroll > 0
 	}
 	// Marks of an earlier document stand: a tool once seen is seen.
 	var auto []string
 	v.auto = v.auto || json.Unmarshal(p.Ctx["auto"], &auto) == nil && len(auto) > 0
 	var synth float64
 	v.synth = v.synth || json.Unmarshal(p.Ctx["synth"], &synth) == nil && synth > 0
+	var act bool
+	v.act = v.act || json.Unmarshal(p.Ctx["act"], &act) == nil && act
 }
 
 // get decodes a context value into out; false where it was not sent or is of another type.
@@ -231,11 +249,16 @@ func (v *visit) families(ua string) family {
 	if v.contradicts(ua) {
 		f |= famHeaders
 	}
-	if v.synth || !v.input && len(v.silent) >= silentPages {
+	if v.synth || !v.input && len(v.silent) >= silentPages || v.driven() {
 		f |= famBehaviour
 	}
 	return f
 }
+
+// driven: pages were activated and left without any input (Playwright's evaluate activates, measured; so does a press in
+// an iframe or before the script loaded, on a page still open not told apart). Clicks a script made (sclick) say
+// nothing alone: a page's own code clicks too.
+func (v *visit) driven() bool { return v.act && v.left && !v.input && !v.scrolled }
 
 // patched: navigator.webdriver is not where every current browser has it, or is there without a boolean.
 func (v *visit) patched() bool {
