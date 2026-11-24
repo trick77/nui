@@ -5,6 +5,7 @@
 // UI never does.
 
 import type {
+  Axis,
   Classes,
   ClassKey,
   Clients,
@@ -66,13 +67,6 @@ export const SITES: SiteInfo[] = [
 // shows only the delivered ones, the domain footer says it of all.
 const FEEDS = ["lens.example.com", "blog.example.org", "api.example.com"];
 
-const N: Record<string, number> = {
-  "24h": 24,
-  "7d": 7,
-  "30d": 30,
-  "90d": 90,
-  "12mo": 12,
-};
 const NOW = new Date("2026-11-22T13:20:00Z");
 // Each range's start: 24 hours before now, else a midnight in Zurich.
 const FROM: Record<string, string> = {
@@ -100,23 +94,95 @@ function rng(seed: number) {
   return () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296;
 }
 
-function labels(range: string): string[] {
-  const n = N[range] ?? 7;
-  return Array.from({ length: n }, (_, i) => {
-    const back = n - 1 - i;
-    const d = new Date(NOW);
-    const two = (n: number) => String(n).padStart(2, "0");
-    // As the backend writes them: an hour's end "15:04", "Jan", "02.01.".
-    if (range === "24h") {
-      d.setUTCHours(d.getUTCHours() - back);
-      return `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;
+const HOUR = 3_600_000;
+// Each range's slots and bars (hours each), as the backend cuts them.
+const GRID: Record<
+  string,
+  { slot: string; mean: string; hours: number; window: number; bar: number }
+> = {
+  "24h": { slot: "10 min", mean: "1 h", hours: 1 / 6, window: 6, bar: 1 },
+  "7d": { slot: "hour", mean: "6 h", hours: 1, window: 6, bar: 6 },
+  "30d": { slot: "3 hours", mean: "24 h", hours: 3, window: 8, bar: 24 },
+  "90d": { slot: "6 hours", mean: "24 h", hours: 6, window: 4, bar: 24 },
+  "12mo": { slot: "day", mean: "7 d", hours: 24, window: 7, bar: 168 },
+};
+const grid = (range: string) => GRID[range] ?? GRID["7d"];
+// An instant on Zurich's winter clock, which the fixtures take all year.
+const local = (ms: number) => new Date(ms + HOUR);
+const two = (n: number) => String(n).padStart(2, "0");
+const dayOf = (d: Date) =>
+  `${two(d.getUTCDate())}.${two(d.getUTCMonth() + 1)}.`;
+const clockOf = (d: Date) =>
+  `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;
+const WEEKDAYS = "Sun Mon Tue Wed Thu Fri Sat".split(" ");
+
+// Where a range begins on that clock.
+function startOf(range: string): number {
+  const at = Date.parse(FROM[range] ?? FROM["7d"]);
+  if (range === "24h") return at;
+  const d = local(at + HOUR / 2);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - HOUR;
+}
+
+// The bounds of a range's slots of so many hours, up to the one now is in.
+function bounds(range: string, hours: number): number[] {
+  const out = [startOf(range)];
+  while (out[out.length - 1] < NOW.getTime())
+    out.push(out[out.length - 1] + hours * HOUR);
+  return out;
+}
+
+// The time axis of bounds, as the backend places it.
+function axisOf(range: string, b: number[]): Axis {
+  const at = (t: number) =>
+    Math.max(0, Math.min(b.length - 1, (t - b[0]) / (b[1] - b[0])));
+  const end = b[b.length - 1];
+  const ticks: Axis["ticks"] = [];
+  const weekends: Axis["weekends"] = [];
+  if (range === "24h") {
+    for (let t = Math.ceil(b[0] / HOUR) * HOUR; t < end; t += HOUR) {
+      const d = local(t);
+      if (d.getUTCHours() % 2 === 0)
+        ticks.push({ at: at(t), label: clockOf(d), line: !d.getUTCHours() });
     }
-    if (range === "12mo") {
-      d.setUTCMonth(d.getUTCMonth() - back);
-      return MONTHS[d.getUTCMonth()];
-    }
-    d.setUTCDate(d.getUTCDate() - back);
-    return `${two(d.getUTCDate())}.${two(d.getUTCMonth() + 1)}.`;
+    return { ticks, weekends };
+  }
+  for (let t = b[0]; t < end; t += 24 * HOUR) {
+    const d = local(t);
+    const monday = d.getUTCDay() === 1;
+    const month = d.getUTCDate() === 1;
+    if (range === "7d")
+      ticks.push({
+        at: at(t),
+        label: `${WEEKDAYS[d.getUTCDay()]} ${dayOf(d)}`,
+        line: true,
+      });
+    else if (range === "30d")
+      ticks.push({ at: at(t), label: dayOf(d), line: monday });
+    else if (range === "90d" && (monday || month))
+      ticks.push({ at: at(t), label: monday ? dayOf(d) : "", line: month });
+    else if (range === "12mo" && month)
+      ticks.push({ at: at(t), label: MONTHS[d.getUTCMonth()], line: true });
+    if (range !== "12mo" && d.getUTCDay() === 6)
+      weekends.push([at(t), at(t + 48 * HOUR)]);
+  }
+  return { ticks, weekends };
+}
+
+// The names of a range's slots, or of its bars.
+function names(range: string, b: number[], bars = false): string[] {
+  return b.slice(0, -1).map((t, i) => {
+    const d = local(t);
+    const e = local(b[i + 1]);
+    const day = `${WEEKDAYS[d.getUTCDay()]} ${dayOf(d)}`;
+    if (range === "24h")
+      return bars ? `hour to ${clockOf(e)}` : `${clockOf(d)}–${clockOf(e)}`;
+    if (range === "12mo")
+      return bars
+        ? `${dayOf(d)}–${dayOf(local(b[i + 1] - 24 * HOUR))}`
+        : `${day}${d.getUTCFullYear()}`;
+    if (bars && range !== "7d") return day;
+    return `${day} ${clockOf(d)}–${clockOf(e)}`;
   });
 }
 
@@ -128,41 +194,49 @@ const median = (a: number[]) => {
 };
 const round1 = (v: number) => Math.round(v * 10) / 10;
 
-const bucketOf = (range: string) =>
-  range === "24h" ? "hour" : range === "12mo" ? "month" : "day";
+// How much of the last slot is over: all of 24h's, which ends now.
+function lastPart(b: number[]): number {
+  const n = b.length - 1;
+  return (NOW.getTime() - b[n - 1]) / (b[n] - b[n - 1]);
+}
 
-// How much of the last bucket is over: all of 24h's, which ends now.
-const lastPart = (range: string) => (range === "24h" ? 1 : 0.56);
-
-function series(range: string, base: number, seed: number, spike = 1) {
-  const n = N[range] ?? 7;
+// base is a day's figure; a slot has its hours' part of it, by day and night.
+function series(b: number[], base: number, seed: number, spike = 1) {
+  const n = b.length - 1;
   const r = rng(seed * 7919 + n);
   const cur: number[] = [];
   const prev: number[] = [];
   const at = Math.floor(n * 0.62);
   for (let i = 0; i < n; i++) {
-    const season =
-      range === "24h"
-        ? 0.35 + 0.9 * Math.max(0, Math.sin(((i - 6) / 24) * 2 * Math.PI))
-        : range === "12mo"
-          ? 1
-          : [0.62, 1.05, 1.12, 1.1, 1.06, 0.98, 0.66][i % 7];
-    const part = i === n - 1 ? lastPart(range) : 1;
+    const hours = (b[i + 1] - b[i]) / HOUR;
+    const mid = local(b[i] + (hours * HOUR) / 2);
+    const week = [0.62, 1.05, 1.12, 1.1, 1.06, 0.98, 0.66][mid.getUTCDay()];
+    const day =
+      hours >= 24
+        ? 1
+        : 1 + 0.7 * Math.sin(((mid.getUTCHours() - 9) / 24) * 2 * Math.PI);
+    const part = i === n - 1 ? lastPart(b) : 1;
     const grow = 0.86 + (0.28 * i) / n;
+    const v = (base * hours * week * day) / 24;
     cur.push(
       Math.round(
-        base *
-          season *
-          grow *
-          (0.88 + 0.24 * r()) *
-          part *
-          (i === at ? spike : 1),
+        v * grow * (0.88 + 0.24 * r()) * part * (i === at ? spike : 1),
       ),
     );
-    prev.push(Math.round(base * season * 0.9 * (0.88 + 0.24 * r())));
+    prev.push(Math.round(v * 0.9 * (0.88 + 0.24 * r())));
   }
   return { cur, prev };
 }
+
+// The mean of the window around each slot, moved in at the edges; none for
+// the slots from end on.
+const moving = (a: number[], window: number, end: number) =>
+  a.map((_, i) => {
+    if (i >= end) return null;
+    const at = Math.min(i - Math.floor(window / 2), end - window);
+    const w = a.slice(Math.max(0, at), Math.max(0, at) + window);
+    return round1(sum(w) / w.length);
+  });
 
 function overview(
   range: string,
@@ -171,9 +245,11 @@ function overview(
   cmp: string,
 ): Overview {
   const feed = SITES.find((s) => s.site === site)?.server != null;
-  const scale = range === "12mo" ? 30 : range === "24h" ? 0.05 : 1;
   const k = aud === "humans" ? 0.8 : aud === "bots" ? 0.25 : 1;
-  const base = 410 * scale * k;
+  const base = 410 * k;
+  const g = grid(range);
+  const bs = bounds(range, g.hours);
+  const open = range !== "24h";
   const mk = (
     key: Tile["key"],
     label: string,
@@ -185,24 +261,24 @@ function overview(
       spike?: number;
     } = {},
   ): Tile => {
-    const s = series(range, b, seed, opt.spike);
-    // To now, against the prior period cut at the same time of day; the
-    // median on the buckets that are over.
-    const over = range === "24h" ? s.cur.length : s.cur.length - 1;
+    const s = series(bs, b, seed, opt.spike);
+    // To now, against the prior period cut at the same time of day.
     let value = sum(s.cur);
     let prev: number | null =
       sum(s.prev.slice(0, -1)) +
-      Math.round(s.prev[s.prev.length - 1] * lastPart(range));
+      Math.round(s.prev[s.prev.length - 1] * lastPart(bs));
     let cur = s.cur;
-    let prevSeries: number[] | null = s.prev;
+    let before = s.prev;
     if (opt.rate) {
-      cur = s.cur.map((v, i) => round1((v / (b * 10)) * 4 + (i % 3)));
-      prevSeries = s.prev.map((v, i) =>
-        round1((v / (b * 10)) * 4 + ((i + 1) % 3)),
-      );
+      const perSlot = (b * g.hours) / 24;
+      cur = s.cur.map((v, i) => round1((v / perSlot) * 4 + (i % 3)));
+      before = s.prev.map((v, i) => round1((v / perSlot) * 4 + ((i + 1) % 3)));
       value = round1(median(cur));
-      prev = round1(median(prevSeries));
+      prev = round1(median(before));
     }
+    const over = open ? cur.length - 1 : cur.length;
+    const mean = moving(cur, g.window, over);
+    let prevMean = moving(before, g.window, over);
     const diff = opt.rate
       ? round1(value - prev)
       : round1(((value - prev) / prev) * 100);
@@ -216,7 +292,7 @@ function overview(
           : "bad";
     // As the backend answers with the comparison off: an empty series, a
     // flat verdict.
-    if (cmp === "off") prevSeries = [];
+    if (cmp === "off") prevMean = [];
     return {
       key,
       label,
@@ -227,10 +303,13 @@ function overview(
       change: cmp === "off" ? null : opt.rate ? { pp: diff } : { pct: diff },
       verdict: cmp === "off" ? "flat" : verdict,
       series: cur,
-      prev_series: prevSeries,
-      median: opt.rate
-        ? round1(median(cur.slice(0, over)))
-        : Math.round(median(cur.slice(0, over))),
+      mean,
+      prev_mean: prevMean,
+      delta: prevMean.map((p, i) => {
+        const m = mean[i];
+        if (m == null || p == null || (!opt.rate && !p)) return null;
+        return round1(opt.rate ? m - p : ((m - p) / p) * 100);
+      }),
       server: opt.server ?? false,
     };
   };
@@ -270,13 +349,14 @@ function overview(
       }),
     ].filter((t) => feed || !t.server);
   }
-  const ls = labels(range);
   return {
     period: {
       from: FROM[range] ?? FROM["7d"],
       to: NOW.toISOString(),
-      bucket: bucketOf(range),
-      labels: ls,
+      slot: g.slot,
+      mean: g.mean,
+      labels: names(range, bs),
+      ...axisOf(range, bs),
       // Empty with the comparison off.
       prev_label:
         cmp === "off"
@@ -284,7 +364,8 @@ function overview(
           : cmp === "yoy"
             ? "last year"
             : `prior ${range.replace(/(\d+)/, "$1 ")}`,
-      last_bucket_open: range !== "24h",
+      open,
+      first: null,
       since: null,
     },
     live: { humans: 7, automated: feed ? 3 : 1 },
@@ -437,14 +518,19 @@ const CLASS_ROWS: Classes["rows"] = [
 ];
 
 function classes(range: string): Classes {
-  const ls = labels(range);
-  const scale = range === "12mo" ? 30 : range === "24h" ? 0.05 : 1;
+  const bs = bounds(range, grid(range).bar);
   const s = (b: number, seed: number, spike = 1) =>
-    series(range, b * scale, seed, spike).cur;
+    series(bs, b, seed, spike).cur;
+  const open = range !== "24h";
+  const axis = axisOf(range, bs);
+  // A bar that is a day has its label under it.
+  if (grid(range).bar === 24)
+    axis.ticks = axis.ticks.map((t) => ({ ...t, at: t.at + 0.5 }));
   return {
-    bucket: bucketOf(range),
-    labels: ls,
-    last_bucket_open: range !== "24h",
+    labels: names(range, bs, true),
+    ...axis,
+    open,
+    partial: bs.slice(1).map((_, i) => open && i === bs.length - 2),
     series: {
       human: s(2500, 11),
       bot: s(1400, 12),

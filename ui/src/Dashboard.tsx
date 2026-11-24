@@ -408,7 +408,7 @@ function FilterBar({
           className={`text-[12.5px] text-muted ${busy ? "busy" : ""}`}
           aria-busy={busy || undefined}
         >
-          one point per <span className="text-ink-dim">{p.bucket}</span>
+          one point per <span className="text-ink-dim">{p.slot}</span>
           {SEP}
           {view.cmp === "off" ? (
             "no comparison"
