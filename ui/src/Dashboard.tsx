@@ -11,6 +11,7 @@ import {
   type Range,
   type Scope,
   type SiteInfo,
+  frameOf,
 } from "./api";
 import { ApiSection } from "./Calls";
 import { Content } from "./Content";
@@ -369,6 +370,10 @@ function FilterBar({
     else products.push([s.product, [s]]);
   }
   const p = overview?.period;
+  // Every tile's slot; none said where only some are quiet, the chart's
+  // heading says its own (and the bar wrapped with both).
+  const slots = p ? overview.tiles.map((t) => frameOf(p, t).slot) : [];
+  const slot = slots.every((s) => s === slots[0]) ? slots[0] : undefined;
   const dash = view.page === "dash";
   return (
     <div className="panel mb-4 flex flex-wrap items-center gap-3.5 px-4 py-3">
@@ -408,8 +413,12 @@ function FilterBar({
           className={`text-[12.5px] text-muted ${busy ? "busy" : ""}`}
           aria-busy={busy || undefined}
         >
-          one point per <span className="text-ink-dim">{p.slot}</span>
-          {SEP}
+          {slot && (
+            <>
+              one point per <span className="text-ink-dim">{slot}</span>
+              {SEP}
+            </>
+          )}
           {view.cmp === "off" ? (
             "no comparison"
           ) : (

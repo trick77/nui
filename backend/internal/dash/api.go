@@ -195,6 +195,7 @@ var apiTileDefs = []tileDef{
 		},
 		base: func(b bucketStats) float64 { return b.api.calls() }},
 	{key: "p95", label: "95th percentile", unit: "ms", kind: "sum", server: true, upBad: true,
+		base: func(b bucketStats) float64 { return b.api.calls() },
 		pool: func(bs []bucketStats) float64 {
 			var a apiStats
 			for i := range bs {

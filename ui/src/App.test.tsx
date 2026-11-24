@@ -1783,6 +1783,50 @@ describe("an API", () => {
     );
   });
 
+  it("draws a quiet tile on the low frame, the others on theirs", async () => {
+    startEdited(
+      "/dashboard/?site=api.example.com&range=24h",
+      "/api/dash/overview",
+      (b) => {
+        b.period.low = {
+          slot: "30 min",
+          mean: "3 h",
+          labels: ["13:50–14:20", "14:20–14:50"],
+          ticks: [],
+          weekends: [],
+          open: false,
+          first: null,
+        };
+        const t = b.tiles.find((x: { key: string }) => x.key === "accounts");
+        Object.assign(t, {
+          low: true,
+          series: [2, 3],
+          mean: [2, 2.5],
+          prev_mean: [1, 1],
+          delta: [100, 150],
+        });
+      },
+    );
+    const ov = await screen.findByRole("region", { name: "Overview" });
+    await within(ov).findByText(`Calls per 10 min${SEP}all`, asIs);
+    // Two grids: the bar names neither, the chart's heading its own.
+    expect(screen.queryByText(/one point per/)).toBeNull();
+    expect(screen.getByText(/compared with the/)).toBeInTheDocument();
+    const hit = () => within(ov).getByTestId("chart-hit");
+    fireEvent.pointerMove(hit(), { clientX: 5000, clientY: 100 });
+    expect(screen.getByRole("tooltip").textContent).toMatch(/^14:10–14:20/);
+    fireEvent.pointerLeave(hit());
+    fireEvent.click(within(ov).getByRole("button", { name: /^Accounts/ }));
+    expect(
+      within(ov).getByText(`Accounts per 30 min${SEP}all`, asIs),
+    ).toBeInTheDocument();
+    expect(within(ov).getByText("3 h average")).toBeInTheDocument();
+    fireEvent.pointerMove(hit(), { clientX: 5000, clientY: 100 });
+    expect(screen.getByRole("tooltip").textContent).toMatch(
+      /^14:20–14:50Accounts33 h average2\.5/,
+    );
+  });
+
   it("draws a series broken where it has no figure", () => {
     const { container } = render(
       <MainChart
@@ -2248,6 +2292,32 @@ describe("main chart", () => {
       expect(draw(kind, unit).slots).toMatch(/^M[^z]*$/);
       expect(draw(kind, unit, true).open).toBeNull();
     }
+  });
+
+  it("keeps a bar in its slot, however narrow", () => {
+    const n = 2000;
+    render(
+      <MainChart
+        {...CHART}
+        labels={Array.from({ length: n }, (_, i) => `${i}`)}
+        cur={Array.from({ length: n }, (_, i) => (i === 1 ? 0 : 5))}
+        mean={Array.from({ length: n }, () => 5)}
+        prev={null}
+        kind="sum"
+      />,
+    );
+    const xs = screen
+      .getByTestId("slots")
+      .getAttribute("d")!
+      .split("z")
+      .slice(0, 2)
+      .map((b) => Number(b.match(/^M([\d.]+)/)![1]));
+    const w = screen
+      .getByTestId("slots")
+      .getAttribute("d")!
+      .match(/q\S+ \S+ ([\d.]+) \S+h(-?[\d.]+)q/)!;
+    // Between the first and the third, the empty second.
+    expect(xs[1] - xs[0]).toBeGreaterThan(Number(w[1]) * 2 + Number(w[2]));
   });
 
   it("lights the bar under the pointer", () => {

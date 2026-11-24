@@ -166,9 +166,11 @@ func TestExact_Last24Hours(t *testing.T) {
 		if num64(v["value"]) != 2 || num64(v["prev"]) != 1 || changeOf(v["change"]) != `{"pct":100}` {
 			t.Errorf("%s tile %v", key, v)
 		}
-		// b came 10 minutes into the range, in the second slot; a and c five and ten minutes before an end.
-		if s, ps := v["series"].([]any), v["prev_mean"].([]any); num64(s[0]) != 0 || num64(s[1]) != 1 || num64(s[143]) != 1 ||
-			num64(ps[140]) != 0 || num64(ps[141]) != 0.17 || num64(ps[143]) != 0.17 {
+		// Half hours, of so little. b came 10 minutes into the range; a and c five and ten minutes before an end, d in the
+		// half hour before the prior one, which its third mean still holds.
+		if s, ps := v["series"].([]any), v["prev_mean"].([]any); len(s) != 48 || num64(s[0]) != 1 || num64(s[1]) != 0 ||
+			num64(s[47]) != 1 || ps[1] != nil || num64(ps[2]) != 0.17 || num64(ps[44]) != 0 || num64(ps[45]) != 0.17 ||
+			num64(ps[47]) != 0.17 {
 			t.Errorf("%s series %v, prior %v", key, s, ps)
 		}
 	}

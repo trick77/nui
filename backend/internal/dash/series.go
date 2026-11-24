@@ -20,18 +20,27 @@ type grid struct {
 	step   time.Duration
 	// wall cuts at the viewer's wall clock (a day of 23 hours has a shorter slot, not one fewer).
 	wall bool
+	// low is the grid of a tile with little to draw (quiet), whose step is a multiple of step.
+	low *grid
 }
 
+// lowSlot is the figure per slot below which a tile is quiet.
+const lowSlot = 5
+
 var grids = map[string]grid{
-	"24h":  {slot: "10 min", mean: "1 h", window: 6, step: 10 * time.Minute},
+	// A call every 15 minutes is 1, 1, 0 in slots of 10: steady traffic read as a saw. 30 minutes hold as many of any
+	// call every 5, 10, 15 or 30; a day of few visitors is 0 or 1 in 10.
+	"24h": {slot: "10 min", mean: "1 h", window: 6, step: 10 * time.Minute,
+		low: &grid{slot: "30 min", mean: "3 h", window: 6, step: 30 * time.Minute}},
 	"7d":   {slot: "hour", mean: "6 h", window: 6, step: time.Hour},
 	"30d":  {slot: "3 hours", mean: "24 h", window: 8, step: 3 * time.Hour, wall: true},
 	"90d":  {slot: "6 hours", mean: "24 h", window: 4, step: 6 * time.Hour, wall: true},
 	"12mo": {slot: "day", mean: "7 d", window: 7, step: 24 * time.Hour, wall: true},
 }
 
-// hourGrid is the prior line of 24h against last year, whose raw may be gone: its buckets, the hours.
-var hourGrid = grid{window: 1, step: time.Hour}
+// hourGrid is the prior line of 24h against last year, whose raw may be gone: its buckets, the hours, and a lead for the
+// longest mean it is compared with.
+var hourGrid = grid{window: 3, step: time.Hour}
 
 // inDay is an instant inside the local day whose midnight t is: t itself may be before it, floored to the UTC hour (a
 // zone on a half hour) or on a day without a midnight (clocks that go forward at 00:00: Go has 23:00).
@@ -73,6 +82,9 @@ func (g grid) lead(from time.Time, loc *time.Location, floor bool) []time.Time {
 		return nil
 	}
 	start := from.Add(-time.Duration(g.window-1) * g.step)
+	if g.low != nil {
+		start = from.Add(-time.Duration(g.low.window-1) * g.low.step)
+	}
 	if g.wall {
 		days := 1
 		if g.step == 24*time.Hour {
@@ -168,32 +180,58 @@ type track struct {
 	grid   grid
 	points []point // the lead first
 	lead   int
-	start  int            // the first whole point, 0 without one
+	start  int            // the first whole point, -1 without one
 	at     map[[2]int]int // a place's index in points
 	// missing says which buckets are not whole (bucketStats.missing).
 	missing []bool
 	// total is all a tile's figure is of, up to the cut, as one. The points keep a count of their ids only: a year's
 	// days and its comparison's, each with its ids, would be hundreds of sketches held until the answer is written.
 	total bucketStats
+	// low is the same slots on the grid's low one, nil without.
+	low *track
+}
+
+// add appends a slot. first is the site's first figure.
+func (t *track) add(first, from, to time.Time, bucket, k int, st bucketStats) {
+	for _, u := range []*uniq{&st.visitors, &st.api.callers, &st.api.accounts} {
+		u.fix()
+	}
+	p := point{from: from, to: to, bucket: bucket, k: k, st: st,
+		known: !st.missing && !st.gap && !first.IsZero() && to.After(first)}
+	p.whole = p.known && !from.Before(first)
+	if p.whole && t.start < 0 {
+		t.start = len(t.points)
+	}
+	if bucket >= 0 {
+		t.at[[2]int{bucket, k}] = len(t.points)
+	}
+	t.points = append(t.points, p)
+}
+
+// addLow appends the slots between edges to the low track, as many to one as its step holds, their ids together: a
+// distinct count of three slots is not the sum of theirs.
+func (t *track) addLow(first time.Time, edges []time.Time, bucket int, st []bucketStats) {
+	if t.low == nil {
+		return
+	}
+	per := int(t.low.grid.step / t.grid.step)
+	for i := 0; i < len(st); i += per {
+		end := min(i+per, len(st))
+		whole := bucketStats{missing: st[i].missing, gap: st[i].gap} // of its own: add merges into its sets
+		for j := i; j < end; j++ {
+			whole.add(&st[j])
+		}
+		t.low.add(first, edges[i], edges[end], bucket, i/per, whole)
+	}
 }
 
 // readTrack reads the slots of bounds' buckets and the lead before them. A bucket that is not whole has no known slot,
 // nor has the time before the site's first figure. cut, inside the last bucket when set, is where total ends.
 func (s *Server) readTrack(ctx context.Context, pl *plan, q *query, g grid, bounds []time.Time, floor bool,
 	first, cut time.Time) (*track, error) {
-	t := &track{grid: g, at: map[[2]int]int{}}
-	found := false
-	add := func(from, to time.Time, bucket, k int, st bucketStats) {
-		for _, u := range []*uniq{&st.visitors, &st.api.callers, &st.api.accounts} {
-			u.fix()
-		}
-		p := point{from: from, to: to, bucket: bucket, k: k, st: st,
-			known: !st.missing && !st.gap && !first.IsZero() && to.After(first)}
-		p.whole = p.known && !from.Before(first)
-		if p.whole && !found {
-			t.start, found = len(t.points), true
-		}
-		t.points = append(t.points, p)
+	t := &track{grid: g, at: map[[2]int]int{}, start: -1}
+	if g.low != nil {
+		t.low = &track{grid: *g.low, at: map[[2]int]int{}, start: -1}
 	}
 	if lead := g.lead(bounds[0], q.loc, floor); lead != nil {
 		gaps, older := pl.gaps, pl.older
@@ -202,10 +240,14 @@ func (s *Server) readTrack(ctx context.Context, pl *plan, q *query, g grid, boun
 			return nil, err
 		}
 		if pl.gaps == gaps { // else the first means have fewer slots: before the range, so no figure of it is short
+			t.addLow(first, lead, -1, st)
 			for k := range st {
-				add(lead[k], lead[k+1], -1, k, st[k])
+				t.add(first, lead[k], lead[k+1], -1, k, st[k])
 			}
 			t.lead = len(t.points)
+			if t.low != nil {
+				t.low.lead = len(t.low.points)
+			}
 		}
 		pl.gaps, pl.older = gaps, older
 	}
@@ -233,6 +275,7 @@ func (s *Server) readTrack(ctx context.Context, pl *plan, q *query, g grid, boun
 			st = slices.Delete(st, split+1, split+2)
 			edges = slices.Delete(edges, split+1, split+2)
 		}
+		t.addLow(first, edges, i, st)
 		for j := range st {
 			k := j
 			if q.rng == "7d" && j > 0 { // the first is hour 0, whatever the clock says (inDay)
@@ -241,8 +284,7 @@ func (s *Server) readTrack(ctx context.Context, pl *plan, q *query, g grid, boun
 					k += 24
 				}
 			}
-			t.at[[2]int{i, k}] = len(t.points)
-			add(edges[j], edges[j+1], i, k, st[j])
+			t.add(first, edges[j], edges[j+1], i, k, st[j])
 		}
 	}
 	return t, nil
@@ -298,7 +340,7 @@ func (d tileDef) one(b *bucketStats) float64 {
 func (t *track) window(i, end int) (from, to int) {
 	w := t.grid.window
 	from = min(i-w/2, end-w+1)
-	if i >= t.start {
+	if t.start >= 0 && i >= t.start {
 		from = max(from, t.start)
 	}
 	return from, min(from+w, end+1)
@@ -330,8 +372,40 @@ func (t *track) mean(d tileDef, i, from, to int) float64 {
 	return sum / float64(len(win))
 }
 
-// chart fills a tile's series from the range's track and its comparison's (nil: none).
+// quiet: the tile has too little in a slot to draw one, over the range and its comparison (both, so that one day at the
+// limit does not turn the chart over with every request). A share or a percentile by what it is of.
+func (d tileDef) quiet(cur, prev *track) bool {
+	of := d.base
+	if of == nil {
+		of = allRequests
+	}
+	if d.pool == nil {
+		of = func(b bucketStats) float64 { return d.one(&b) }
+	}
+	var sum, n float64
+	for _, t := range []*track{cur, prev} {
+		if t == nil || t.grid.step != cur.grid.step {
+			continue
+		}
+		for _, p := range t.points[t.lead:] {
+			if p.whole {
+				sum += of(p.st)
+				n++
+			}
+		}
+	}
+	return n > 0 && sum/n < lowSlot
+}
+
+// chart fills a tile's series from the range's track and its comparison's (nil: none), or from their low ones.
 func (d tileDef) chart(t *tile, cur, prev *track, now time.Time) {
+	if cur.low != nil && d.quiet(cur, prev) {
+		t.Low = true
+		if prev != nil && prev.low != nil {
+			prev = prev.low
+		}
+		cur = cur.low
+	}
 	pts := cur.shown(now)
 	t.Series, t.Mean = make([]float64, len(pts)), make([]float64, len(pts))
 	t.PrevMean, t.Delta = []float64{}, []float64{}
@@ -348,8 +422,8 @@ func (d tileDef) chart(t *tile, cur, prev *track, now time.Time) {
 		}
 		t.Series[i], t.Mean[i] = round1(d.value(p)), round2(means[i])
 	}
-	// Hours beside ten minutes (24h against last year): a count is spread over the hour's slots, but the distinct of an
-	// hour are not the sum of its slots'.
+	// Hours beside shorter slots (24h against last year): a count is spread over the hour's slots, but the distinct of an
+	// hour are not the sum of its slots'. Their mean is of as many hours as the window is long, the nearest to it.
 	hours := prev != nil && prev.grid.step != cur.grid.step
 	if prev == nil || hours && d.distinct != nil {
 		return
@@ -364,9 +438,12 @@ func (d tileDef) chart(t *tile, cur, prev *track, now time.Time) {
 		// morning must not be compared with a noon.
 		if j, ok := prev.at[at]; ok && cur.lead+i <= end {
 			from, to := cur.window(cur.lead+i, end)
-			from, to = from+j-(cur.lead+i), to+j-(cur.lead+i)
 			if hours {
-				from, to = j, j+1
+				h := float64(prev.grid.step)
+				from = prev.lead + int(math.Floor(float64(from-cur.lead)*float64(cur.grid.step)/h+0.5))
+				to = from + int(float64(cur.grid.window)*float64(cur.grid.step)/h)
+			} else {
+				from, to = from+j-(cur.lead+i), to+j-(cur.lead+i)
 			}
 			if v = prev.mean(d, j, from, to); hours && d.pool == nil {
 				v /= float64(prev.grid.step / cur.grid.step)
@@ -481,6 +558,40 @@ func newAxis(rng string, bounds []time.Time, loc *time.Location) axis {
 			mark(t, day.Format("Jan"), true)
 		}
 	}
+}
+
+// frame is what a chart's points are, the same for every tile drawn on it.
+type frame struct {
+	// Slot is what a point covers, Mean the moving mean's window; Labels name the slots.
+	Slot   string   `json:"slot"`
+	Mean   string   `json:"mean"`
+	Labels []string `json:"labels"`
+	axis
+	// Open says whether the last slot is still filling.
+	Open bool `json:"open"`
+	// First is the place (axis) the site's figures begin at, null when that is before the range: the slots before it
+	// are null.
+	First *float64 `json:"first"`
+}
+
+// frame is the track's, first the site's first figure.
+func (t *track) frame(q *query, first time.Time) frame {
+	f := frame{Slot: t.grid.slot, Mean: t.grid.mean, Labels: []string{}}
+	bounds := []time.Time{q.p.From()}
+	for _, pt := range t.shown(q.p.Now) {
+		f.Labels = append(f.Labels, slotName(q.rng, pt.from, pt.to, q.loc))
+		bounds = append(bounds, pt.to)
+	}
+	end := bounds[len(bounds)-1]
+	f.Open, f.axis = end.After(q.p.Now), newAxis(q.rng, bounds, q.loc)
+	if first.IsZero() {
+		first = end
+	}
+	if first.After(bounds[0]) {
+		at := place(bounds, first)
+		f.First = &at
+	}
+	return f
 }
 
 // slotName is a slot in a tooltip.
