@@ -867,13 +867,14 @@ func TestSources_RebuildWhileRead(t *testing.T) {
 	if _, err := r.s.DB.DB.Exec(`DELETE FROM agg_hour WHERE site_id = ?`, site.ID); err != nil {
 		t.Fatal(err)
 	}
-	b, err := r.s.bucket(t.Context(), pl, "all", time.UnixMilli(day*dayMS), time.UnixMilli((day+1)*dayMS), false)
-	if err != nil || b.views != 1 || b.visitors.count() != 1 {
+	// In two slots, the event in the first.
+	bounds := []time.Time{time.UnixMilli(day * dayMS), time.UnixMilli(day*dayMS + dayMS/2), time.UnixMilli((day + 1) * dayMS)}
+	b, err := r.s.slots(t.Context(), pl, "all", bounds, false)
+	if err != nil || b[0].views != 1 || b[0].visitors.count() != 1 || b[1].views != 0 {
 		t.Errorf("a day rebuilt while read: %+v, %v", b, err)
 	}
 	pl.src = SourceAgg
-	if _, err := r.s.bucket(t.Context(), pl, "all", time.UnixMilli(day*dayMS), time.UnixMilli((day+1)*dayMS),
-		false); !errors.Is(err, ErrNoAggregates) {
+	if _, err := r.s.slots(t.Context(), pl, "all", bounds, false); !errors.Is(err, ErrNoAggregates) {
 		t.Errorf("SourceAgg on a day rebuilt while read: %v", err)
 	}
 }

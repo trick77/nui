@@ -196,14 +196,17 @@ func TestSourcesAgreeFeedGaps(t *testing.T) {
 							continue
 						}
 						// Requests stop with the history: the last three days froze empty.
-						var series []any
+						var perDay [7]float64
 						for _, x := range gb["tiles"].([]any) {
 							if m := x.(map[string]any); m["key"] == "requests" || m["key"] == "calls" {
-								series = m["series"].([]any)
+								for i, v := range m["series"].([]any) {
+									f, _ := v.(float64)
+									perDay[i/24] += f
+								}
 							}
 						}
-						if len(series) != 7 || series[6] != 0.0 || series[5] != 0.0 || series[2] == 0.0 {
-							t.Errorf("%s: requests %v", s.Domain, series)
+						if perDay[6] != 0 || perDay[5] != 0 || perDay[2] == 0 {
+							t.Errorf("%s: requests per day %v", s.Domain, perDay)
 						}
 					}
 				}

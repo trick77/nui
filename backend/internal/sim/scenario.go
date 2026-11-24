@@ -240,6 +240,15 @@ func tileSeries(body map[string]any, key string) []float64 {
 	return nil
 }
 
+// perDay sums 7d's hours (UTC: 24 a day).
+func perDay(hours []float64) []float64 {
+	out := make([]float64, (len(hours)+23)/24)
+	for i, v := range hours {
+		out[i/24] += v
+	}
+	return out
+}
+
 func expectBaseline(w *World, _ *Scenario) []Expectation {
 	var out []Expectation
 	for _, s := range w.Sites {
@@ -382,7 +391,7 @@ func expectOutage(w *World, sc *Scenario) []Expectation {
 	}
 	return []Expectation{{Says: "the requests series drops to zero for the outage's hours and comes back",
 		Endpoint: "overview", Params: params(s, "24h"), Check: func(b map[string]any) error {
-			// The longest run of empty hours with requests on both sides of it.
+			// The longest run of empty slots with requests on both sides of it.
 			ser := tileSeries(b, "requests")
 			best, run, seen := 0, 0, false
 			for _, v := range ser {
@@ -396,7 +405,7 @@ func expectOutage(w *World, sc *Scenario) []Expectation {
 					run, seen = 0, true
 				}
 			}
-			if best < 5 {
+			if best < 5*6 { // five hours of ten minutes
 				return fmt.Errorf("no outage then recovery in %v", ser)
 			}
 			return nil
@@ -412,7 +421,7 @@ func expectLateFeed(w *World, sc *Scenario) []Expectation {
 	}
 	return []Expectation{{Says: s + ": no requests before the feed's start, page views all along",
 		Endpoint: "overview", Params: params(s, "7d"), Check: func(b map[string]any) error {
-			req, views := tileSeries(b, "requests"), tileSeries(b, "views")
+			req, views := perDay(tileSeries(b, "requests")), perDay(tileSeries(b, "views"))
 			if len(req) != 7 || req[0] != 0 || req[1] != 0 || req[5] == 0 || views[0] == 0 {
 				return fmt.Errorf("requests %v, views %v", req, views)
 			}

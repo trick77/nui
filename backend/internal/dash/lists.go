@@ -1076,7 +1076,8 @@ func (s *Server) handleClasses(w http.ResponseWriter, r *http.Request, q *query)
 		s.fail(w, r, err)
 		return
 	}
-	n := q.p.n()
+	bars := q.p.bars(q.rng, q.loc)
+	n := len(bars) - 1
 	gaps := pl.gaps
 	series := map[string][]float64{}
 	cur, prev := classSums{}, classSums{}
@@ -1085,7 +1086,7 @@ func (s *Server) handleClasses(w http.ResponseWriter, r *http.Request, q *query)
 		cur[c], prev[c] = &classAcc{}, &classAcc{}
 	}
 	for i := 0; i < n; i++ {
-		b, err := s.classSpan(ctx, pl, q.p.Bounds[i], q.p.Bounds[i+1], !q.p.agg)
+		b, err := s.classSpan(ctx, pl, bars[i], bars[i+1], !q.p.agg)
 		if err != nil {
 			s.fail(w, r, err)
 			return
@@ -1119,8 +1120,34 @@ func (s *Server) handleClasses(w http.ResponseWriter, r *http.Request, q *query)
 		row.Verdict = classVerdict(c, row.Change)
 		rows = append(rows, row)
 	}
-	apix.JSON(w, http.StatusOK, map[string]any{"bucket": q.p.Bucket, "labels": q.p.labels,
-		"last_bucket_open": q.p.open, "series": series, "rows": rows})
+	// Nothing has come in yet for the bars after the one now is in.
+	for n > 1 && bars[n-1].After(q.p.Now) {
+		n--
+	}
+	bars = bars[:n+1]
+	names, partial := []string{}, []bool{}
+	for i := range n {
+		names = append(names, barName(q.rng, bars[i], bars[i+1], q.loc))
+		// Still filling, or a week the range cuts.
+		partial = append(partial, bars[i+1].After(q.p.Now) || i == 0 && q.rng == "12mo" && !monday(bars[0], q.loc))
+	}
+	for c := range series {
+		series[c] = series[c][:n]
+	}
+	ax := newAxis(q.rng, bars, q.loc)
+	if q.rng == "30d" || q.rng == "90d" { // a bar is the day its label names: under it, not where it begins
+		for i := range ax.Ticks {
+			ax.Ticks[i].At += 0.5
+		}
+	}
+	apix.JSON(w, http.StatusOK, struct {
+		Labels []string `json:"labels"`
+		axis
+		Open    bool                 `json:"open"`
+		Partial []bool               `json:"partial"`
+		Series  map[string][]float64 `json:"series"`
+		Rows    []classRow           `json:"rows"`
+	}{names, ax, bars[n].After(q.p.Now), partial, series, rows})
 }
 
 // classAcc is one class's server requests and distinct addresses.

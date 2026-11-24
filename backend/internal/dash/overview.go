@@ -16,23 +16,6 @@ import (
 // visitor did.
 const eventKinds = `kind NOT IN ('page_view', 'session_start', 'engagement', 'vital')`
 
-// bucket reads one bucket, a piece (at most a day) at a time, each from its source. short: a 24h or 7d range or its
-// prior period, read raw first.
-func (s *Server) bucket(ctx context.Context, pl *plan, aud string, from, to time.Time, short bool) (bucketStats, error) {
-	var b bucketStats
-	for _, pc := range pieces(from, to) {
-		if err := pl.read(ctx, pc[0], pc[1], time.Hour, short,
-			func() (bool, error) { return s.bucketHours(ctx, pl.site, aud, pc[0], pc[1], &b) },
-			func() error { return s.bucketPiece(ctx, pl.site, aud, pc[0], pc[1], &b) }); err != nil {
-			return b, err
-		}
-	}
-	if pl.api {
-		return b, s.apiBucket(ctx, pl, aud, from, to, short, &b.api)
-	}
-	return b, nil
-}
-
 // audCls is the agg_hour classes of an audience (pending is stored as 4, unknown automated).
 func audCls(aud string) func(cls int) bool {
 	switch aud {
@@ -44,23 +27,24 @@ func audCls(aud string) func(cls int) bool {
 	return func(int) bool { return true }
 }
 
-// bucketHours adds one piece's hours from agg_hour to b, false when its day is not clean in the statement's
-// snapshot (nothing added then).
-func (s *Server) bucketHours(ctx context.Context, site int64, aud string, from, to time.Time, b *bucketStats) (bool, error) {
-	rows, err := s.query(ctx, `SELECT d.ok, t.cls, t.views, t.actions, t.requests, t.errors, t.browser_ids, t.addrs`+
+// bucketHours adds one piece's hours from agg_hour to the slots they are in, false when its day is not clean in the
+// statement's snapshot (nothing added then).
+func (s *Server) bucketHours(ctx context.Context, site int64, aud string, from, to time.Time, sl slotting,
+	out []bucketStats) (bool, error) {
+	rows, err := s.query(ctx, `SELECT d.ok, t.hour, t.cls, t.views, t.actions, t.requests, t.errors, t.browser_ids, t.addrs`+
 		aggFrom("agg_hour", "t.hour >= ?3 AND t.hour < ?4"), site, ms(from)/dayMS, ms(from)/hourMS, ms(to)/hourMS)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = rows.Close() }()
 	in := audCls(aud)
-	var add bucketStats
+	adds := make([]bucketStats, len(out))
 	ok := false
 	for rows.Next() {
-		var cls sql.NullInt64
+		var hour, cls sql.NullInt64
 		var views, actions, requests, errs sql.NullInt64
 		var ids, addrs []byte
-		if err := rows.Scan(&ok, &cls, &views, &actions, &requests, &errs, &ids, &addrs); err != nil {
+		if err := rows.Scan(&ok, &hour, &cls, &views, &actions, &requests, &errs, &ids, &addrs); err != nil {
 			return false, err
 		}
 		if !ok {
@@ -69,6 +53,7 @@ func (s *Server) bucketHours(ctx context.Context, site int64, aud string, from, 
 		if !cls.Valid { // a day without an hour of events
 			continue
 		}
+		add := &adds[sl.at(hour.Int64*hourMS)]
 		c := int(cls.Int64)
 		add.allReq += float64(requests.Int64)
 		if c == 4 {
@@ -92,7 +77,9 @@ func (s *Server) bucketHours(ctx context.Context, site int64, aud string, from, 
 	if err := rows.Err(); err != nil || !ok {
 		return false, err
 	}
-	b.add(&add)
+	for i := range adds {
+		out[i].add(&adds[i])
+	}
 	return true, nil
 }
 
@@ -108,45 +95,49 @@ func (b *bucketStats) add(o *bucketStats) {
 	b.api.add(&o.api)
 }
 
-// bucketPiece adds one piece to b: two short statements (the sums, the distinct visitors).
-func (s *Server) bucketPiece(ctx context.Context, site int64, aud string, from, to time.Time, b *bucketStats) error {
-	var views, events, requests, unknown, allReq, errs float64
+// bucketPiece adds one raw piece to the slots its events are in: two short statements (the sums, the distinct
+// visitors).
+func (s *Server) bucketPiece(ctx context.Context, site int64, aud string, from, to time.Time, sl slotting,
+	out []bucketStats) error {
 	cond := audWhere(aud)
-	err := s.row(ctx, `SELECT
-		COALESCE(SUM(`+cond+` AND kind = 'page_view'), 0),
-		COALESCE(SUM(`+cond+` AND source = 'browser' AND `+eventKinds+`), 0),
-		COALESCE(SUM(`+cond+` AND source = 'server'), 0),
-		COALESCE(SUM(source = 'server' AND cls IN (0, 4)), 0),
-		COALESCE(SUM(source = 'server'), 0),
-		COALESCE(SUM(`+cond+` AND (kind = 'js_error' OR (source = 'server' AND status >= 500))), 0)
-		FROM event WHERE site_id = ? AND ts >= ? AND ts < ?`, site, ms(from), ms(to)).
-		Scan(&views, &events, &requests, &unknown, &allReq, &errs)
-	if err != nil {
-		return err
-	}
-	b.views += views
-	b.events += events
-	b.requests += requests
-	b.unknown += unknown
-	b.allReq += allReq
-	b.errors += errs
-	vq := `SELECT DISTINCT visitor FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND source = 'browser' AND ` + cond
-	if aud == "bots" {
-		vq = `SELECT DISTINCT ip_key FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND ` + cond
-	}
-	rows, err := s.query(ctx, vq, site, ms(from), ms(to))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var v string
-		if err := rows.Scan(&v); err != nil {
+	args := append(sl.args(), site, ms(from), ms(to))
+	if err := s.each(ctx, `SELECT `+cellSQL+` AS cell,
+		SUM(`+cond+` AND kind = 'page_view'),
+		SUM(`+cond+` AND source = 'browser' AND `+eventKinds+`),
+		SUM(`+cond+` AND source = 'server'),
+		SUM(source = 'server' AND cls IN (0, 4)),
+		SUM(source = 'server'),
+		SUM(`+cond+` AND (kind = 'js_error' OR (source = 'server' AND status >= 500)))
+		FROM event WHERE site_id = ? AND ts >= ? AND ts < ? GROUP BY cell`, args, func(rows *sql.Rows) error {
+		var cell int64
+		var views, events, requests, unknown, allReq, errs float64
+		if err := rows.Scan(&cell, &views, &events, &requests, &unknown, &allReq, &errs); err != nil {
 			return err
 		}
-		b.visitors.add(v)
+		b := &out[sl.slot(cell)]
+		b.views += views
+		b.events += events
+		b.requests += requests
+		b.unknown += unknown
+		b.allReq += allReq
+		b.errors += errs
+		return nil
+	}); err != nil {
+		return err
 	}
-	return rows.Err()
+	ids := `visitor FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND source = 'browser' AND `
+	if aud == "bots" {
+		ids = `ip_key FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND `
+	}
+	return s.each(ctx, `SELECT DISTINCT `+cellSQL+`, `+ids+cond, args, func(rows *sql.Rows) error {
+		var cell int64
+		var v string
+		if err := rows.Scan(&cell, &v); err != nil {
+			return err
+		}
+		out[sl.slot(cell)].visitors.add(v)
+		return nil
+	})
 }
 
 // buckets reads every bucket of bounds, one at a time.
@@ -154,54 +145,36 @@ func (s *Server) buckets(ctx context.Context, pl *plan, aud string, bounds []tim
 	out := make([]bucketStats, 0, len(bounds))
 	for i := 0; i+1 < len(bounds); i++ {
 		older := pl.older
-		b, err := s.bucket(ctx, pl, aud, bounds[i], bounds[i+1], short)
+		b, err := s.slots(ctx, pl, aud, bounds[i:i+2], short)
 		if err != nil {
 			return nil, err
 		}
-		b.missing = pl.older > older
-		out = append(out, b)
+		b[0].missing = pl.older > older
+		out = append(out, b[0])
 	}
 	return out, nil
 }
 
-// prevBuckets reads the comparison's buckets and, apart, those a figure that runs to now is compared with: the same,
-// the last one only to the cut. The last bucket is read in its two parts, so nothing is read twice.
-func (s *Server) prevBuckets(ctx context.Context, pl *plan, q *query, aud string) (all, toCut []bucketStats, err error) {
-	n, short := q.p.n(), !q.p.prevAgg
-	if all, err = s.buckets(ctx, pl, aud, q.p.Prev[:n], short); err != nil {
-		return nil, nil, err
-	}
-	head, err := s.bucket(ctx, pl, aud, q.p.Prev[n-1], q.p.prevCut, short)
-	if err != nil {
-		return nil, nil, err
-	}
-	rest, err := s.bucket(ctx, pl, aud, q.p.prevCut, q.p.Prev[n], short)
-	if err != nil {
-		return nil, nil, err
-	}
-	var last bucketStats // of its own: add merges into the sets it holds
-	last.add(&head)
-	last.add(&rest)
-	return append(slices.Clone(all), last), append(slices.Clone(all), head), nil
-}
-
 type tile struct {
-	Key        string    `json:"key"`
-	Label      string    `json:"label"`
-	Unit       string    `json:"unit"`
-	Kind       string    `json:"kind"`
-	Value      float64   `json:"value"`
-	Prev       *float64  `json:"prev"`
-	Change     change    `json:"change"`
-	Verdict    string    `json:"verdict"`
-	Sub        string    `json:"sub"`
-	Series     []float64 `json:"series"`
-	PrevSeries []float64 `json:"prev_series"`
-	Median     float64   `json:"median"`
-	Server     bool      `json:"server"`
+	Key     string   `json:"key"`
+	Label   string   `json:"label"`
+	Unit    string   `json:"unit"`
+	Kind    string   `json:"kind"`
+	Value   float64  `json:"value"`
+	Prev    *float64 `json:"prev"`
+	Change  change   `json:"change"`
+	Verdict string   `json:"verdict"`
+	Sub     string   `json:"sub"`
+	// Series is the figure of each slot, Mean its moving mean; PrevMean the comparison's, Delta the one against the
+	// other.
+	Series   []float64 `json:"series"`
+	Mean     []float64 `json:"mean"`
+	PrevMean []float64 `json:"prev_mean"`
+	Delta    []float64 `json:"delta"`
+	Server   bool      `json:"server"`
 }
 
-// MarshalJSON writes a figure that does not exist (NaN: a percentile of no calls, a bucket without figures) as null.
+// MarshalJSON writes a figure that does not exist (NaN: a percentile of no calls, a slot without figures) as null.
 func (t tile) MarshalJSON() ([]byte, error) {
 	orNull := func(v float64) *float64 {
 		if math.IsNaN(v) {
@@ -219,34 +192,46 @@ func (t tile) MarshalJSON() ([]byte, error) {
 	type plain tile
 	return json.Marshal(struct {
 		plain
-		Value      *float64   `json:"value"`
-		Series     []*float64 `json:"series"`
-		PrevSeries []*float64 `json:"prev_series"`
-		Median     *float64   `json:"median"`
-	}{plain(t), orNull(t.Value), list(t.Series), list(t.PrevSeries), orNull(t.Median)})
+		Value    *float64   `json:"value"`
+		Series   []*float64 `json:"series"`
+		Mean     []*float64 `json:"mean"`
+		PrevMean []*float64 `json:"prev_mean"`
+		Delta    []*float64 `json:"delta"`
+	}{plain(t), orNull(t.Value), list(t.Series), list(t.Mean), list(t.PrevMean), list(t.Delta)})
 }
 
 type overview struct {
 	Period struct {
-		From           any      `json:"from"`
-		To             any      `json:"to"`
-		Bucket         string   `json:"bucket"`
-		Labels         []string `json:"labels"`
-		PrevLabel      string   `json:"prev_label"`
-		LastBucketOpen bool     `json:"last_bucket_open"`
+		From      any    `json:"from"`
+		To        any    `json:"to"`
+		PrevLabel string `json:"prev_label"`
+		// Slot is what a point of the chart covers, Mean the moving mean's window; Labels name the slots.
+		Slot   string   `json:"slot"`
+		Mean   string   `json:"mean"`
+		Labels []string `json:"labels"`
+		axis
+		// Open says whether the last slot is still filling.
+		Open bool `json:"open"`
+		// First is the place (axis) the site's figures begin at, null when that is before the range: the slots before it
+		// are null.
+		First *float64 `json:"first"`
 		// Since is set when the figures begin only within the range (an API's, over days an older builder made and
-		// whose raw is gone): the buckets before it are null.
+		// whose raw is gone): the slots before it are null.
 		Since any `json:"since"`
 	} `json:"period"`
 	Live  live   `json:"live"`
 	Tiles []tile `json:"tiles"`
 }
 
-// tileDef is how one tile reads a bucket and judges its change.
+// tileDef is how one tile reads a slot and judges its change.
 type tileDef struct {
 	key, label, unit, kind string
 	server, upBad          bool
-	of                     func(b bucketStats) float64
+	// One of three reads it: of a count, distinct a count of ids, pool a figure that does not add up (a share, a
+	// percentile), of all the slots given together, NaN when they hold nothing it could be of.
+	of       func(b bucketStats) float64
+	distinct func(b *bucketStats) *uniq
+	pool     func(bs []bucketStats) float64
 	// base is what a rate is a share of; nil: all requests.
 	base func(b bucketStats) float64
 }
@@ -259,13 +244,21 @@ func (q *query) tileDefsOf() []tileDef {
 	return tileDefs
 }
 
+func allRequests(b bucketStats) float64 { return b.allReq }
+
 var tileDefs = []tileDef{
-	{key: "visitors", label: "Unique visitors", kind: "sum", of: func(b bucketStats) float64 { return float64(b.visitors.count()) }},
+	{key: "visitors", label: "Unique visitors", kind: "sum", distinct: func(b *bucketStats) *uniq { return &b.visitors }},
 	{key: "views", label: "Page views", kind: "sum", of: func(b bucketStats) float64 { return b.views }},
 	{key: "events", label: "Events", kind: "sum", of: func(b bucketStats) float64 { return b.events }},
 	{key: "requests", label: "Requests", kind: "sum", server: true, of: func(b bucketStats) float64 { return b.requests }},
 	{key: "auto_share", label: "Unknown automated", unit: "%", kind: "rate", server: true, upBad: true,
-		of: func(b bucketStats) float64 { return pct(b.unknown, b.allReq) }},
+		pool: func(bs []bucketStats) float64 {
+			all := totalOf(bs, allRequests)
+			if all == 0 {
+				return math.NaN()
+			}
+			return round1(pct(totalOf(bs, func(b bucketStats) float64 { return b.unknown }), all))
+		}},
 	{key: "errors", label: "Errors", kind: "sum", upBad: true, of: func(b bucketStats) float64 { return b.errors }},
 }
 
@@ -284,48 +277,98 @@ func (s *Server) overview(ctx context.Context, q *query) (overview, error) {
 	if err != nil {
 		return ov, err
 	}
-	cur, prev, prevToCut, gaps, err := s.curPrev(ctx, pl, q, q.aud)
+	first, err := pl.first(ctx)
 	if err != nil {
 		return ov, err
 	}
-	ov.Period.From, ov.Period.To = iso(q.p.From()), iso(q.p.Now)
-	ov.Period.Bucket, ov.Period.Labels, ov.Period.PrevLabel = q.p.Bucket, q.p.labels, q.p.prevL
-	ov.Period.LastBucketOpen = q.p.open
+	cur, prev, gaps, err := s.tracks(ctx, pl, q, first)
+	if err != nil {
+		return ov, err
+	}
+	p := &ov.Period
+	p.From, p.To, p.PrevLabel = iso(q.p.From()), iso(q.p.Now), q.p.prevL
+	p.Slot, p.Mean, p.Labels = cur.grid.slot, cur.grid.mean, []string{}
+	bounds := []time.Time{q.p.From()}
+	for _, pt := range cur.shown(q.p.Now) {
+		p.Labels = append(p.Labels, slotName(q.rng, pt.from, pt.to, q.loc))
+		bounds = append(bounds, pt.to)
+	}
+	end := bounds[len(bounds)-1]
+	p.Open, p.axis = end.After(q.p.Now), newAxis(q.rng, bounds, q.loc)
+	if first.IsZero() {
+		first = end
+	}
+	if first.After(bounds[0]) {
+		at := place(bounds, first)
+		p.First = &at
+	}
 	if ov.Live, err = s.live(ctx, q.site.ID); err != nil {
 		return ov, err
 	}
-	for i, b := range cur {
-		if b.missing {
-			ov.Period.Since = iso(q.p.Bounds[i+1])
+	for i, missing := range cur.missing {
+		if missing {
+			p.Since = iso(q.p.Bounds[i+1])
 		}
 	}
-	ov.Tiles = s.tiles(q, cur, prev, cur, prevToCut, gaps)
+	var prevTotal []bucketStats
+	if prev != nil {
+		prevTotal = []bucketStats{prev.total}
+	}
+	if gaps[1] { // no line of a short prior period
+		prev = nil
+	}
+	ov.Tiles = s.tiles(q, []bucketStats{cur.total}, prevTotal, gaps)
+	for _, d := range q.tileDefsOf() {
+		if i := slices.IndexFunc(ov.Tiles, func(t tile) bool { return t.Key == d.key }); i >= 0 {
+			d.chart(&ov.Tiles[i], cur, prev, q.p.Now)
+		}
+	}
 	return ov, nil
 }
 
-// curPrev reads the range's buckets and its comparison's (nil without one; toCut: up to the cut, prevBuckets), and
-// which of the two had a gap (plan.gaps): [0] the range, [1] the comparison.
-func (s *Server) curPrev(ctx context.Context, pl *plan, q *query, aud string) (cur, prev, toCut []bucketStats,
-	gaps [2]bool, err error) {
-	g := pl.gaps
-	if cur, err = s.buckets(ctx, pl, aud, q.p.Bounds, !q.p.agg); err != nil {
-		return nil, nil, nil, gaps, err
+// tracks reads the range's slots and its comparison's (nil without one), and which of the two had a gap (plan.gaps):
+// [0] the range, [1] the comparison.
+func (s *Server) tracks(ctx context.Context, pl *plan, q *query, first time.Time) (cur, prev *track, gaps [2]bool,
+	err error) {
+	gr, g := grids[q.rng], pl.gaps
+	if cur, err = s.readTrack(ctx, pl, q, gr, q.p.Bounds, q.p.agg, first, time.Time{}); err != nil {
+		return nil, nil, gaps, err
 	}
 	gaps[0], g = pl.gaps > g, pl.gaps
 	if q.p.Prev != nil {
-		if prev, toCut, err = s.prevBuckets(ctx, pl, q, aud); err != nil {
-			return nil, nil, nil, gaps, err
+		if q.rng == "24h" && q.p.prevAgg {
+			gr = hourGrid
+		}
+		if prev, err = s.readTrack(ctx, pl, q, gr, q.p.Prev, q.p.prevAgg, first, q.p.prevCut); err != nil {
+			return nil, nil, gaps, err
 		}
 	}
 	gaps[1] = pl.gaps > g
-	return cur, prev, toCut, gaps, nil
+	return cur, prev, gaps, nil
 }
 
-// tiles builds the tiles: the series from the buckets cur and prev (nil: no comparison), value, prev and change from
-// total and prevTotal, what the caller's figures cover of them. The median leaves the open bucket out. A gap in the
-// range (gaps[0]) leaves every change unknown (null); one in the comparison (gaps[1]) its prior figures too, never a
-// short prior period's dip or a percentage against it.
-func (s *Server) tiles(q *query, cur, prev, total, prevTotal []bucketStats, gaps [2]bool) []tile {
+// curPrev reads the range's buckets and its comparison's (nil without one), and which of the two had a gap
+// (plan.gaps): [0] the range, [1] the comparison.
+func (s *Server) curPrev(ctx context.Context, pl *plan, q *query, aud string) (cur, prev []bucketStats, gaps [2]bool,
+	err error) {
+	g := pl.gaps
+	if cur, err = s.buckets(ctx, pl, aud, q.p.Bounds, !q.p.agg); err != nil {
+		return nil, nil, gaps, err
+	}
+	gaps[0], g = pl.gaps > g, pl.gaps
+	if q.p.Prev != nil {
+		if prev, err = s.buckets(ctx, pl, aud, q.p.Prev, !q.p.prevAgg); err != nil {
+			return nil, nil, gaps, err
+		}
+	}
+	gaps[1] = pl.gaps > g
+	return cur, prev, gaps, nil
+}
+
+// tiles builds the tiles without their series: value, prev and change from total and prevTotal (nil: no comparison). A
+// gap in the range (gaps[0]) leaves every change unknown (null); one in the comparison (gaps[1]) its prior figures too,
+// never a percentage against a short prior period.
+func (s *Server) tiles(q *query, total, prevTotal []bucketStats, gaps [2]bool) []tile {
 	// A bucket that is not whole is in no figure, as in no series.
 	total = slices.DeleteFunc(slices.Clone(total), func(b bucketStats) bool { return b.missing })
 	out := []tile{}
@@ -333,26 +376,12 @@ func (s *Server) tiles(q *query, cur, prev, total, prevTotal []bucketStats, gaps
 		if d.server && !q.site.HasFeed {
 			continue
 		}
-		t := tile{Key: d.key, Label: d.label, Unit: d.unit, Kind: d.kind, Server: d.server,
-			Series: make([]float64, len(cur)), PrevSeries: []float64{}}
+		t := tile{Key: d.key, Label: d.label, Unit: d.unit, Kind: d.kind, Server: d.server}
 		if d.key == "visitors" && q.aud == "bots" {
 			t.Label = "Addresses"
 		}
-		for i, b := range cur {
-			t.Series[i] = math.NaN()
-			if !b.missing {
-				t.Series[i] = round1(d.of(b))
-			}
-		}
-		t.Median = math.NaN()
-		if xs := slices.DeleteFunc(slices.Clone(t.Series[:q.p.closedN()]), math.IsNaN); len(xs) > 0 {
-			t.Median = round1(median(xs))
-		}
 		t.Value = s.total(d, total)
-		if prev != nil && !gaps[1] {
-			for _, b := range prev {
-				t.PrevSeries = append(t.PrevSeries, round1(d.of(b)))
-			}
+		if prevTotal != nil && !gaps[1] {
 			pv := s.total(d, prevTotal)
 			if !math.IsNaN(pv) {
 				t.Prev = &pv
@@ -360,7 +389,7 @@ func (s *Server) tiles(q *query, cur, prev, total, prevTotal []bucketStats, gaps
 			if d.kind == "rate" {
 				base := d.base
 				if base == nil {
-					base = func(b bucketStats) float64 { return b.allReq }
+					base = allRequests
 				}
 				t.Change = rateChange(t.Value, pv, !gaps[0] && !math.IsNaN(t.Value), totalOf(prevTotal, base) > 0)
 			} else {
@@ -373,20 +402,22 @@ func (s *Server) tiles(q *query, cur, prev, total, prevTotal []bucketStats, gaps
 	return out
 }
 
-// total is a tile's figure over buckets: distinct visitors across them, a rate over the sums, else the sum.
+// total is a tile's figure over slots: the distinct across them, a share or a percentile of all they hold, else the
+// sum.
 func (s *Server) total(d tileDef, bs []bucketStats) float64 {
-	switch d.key {
-	case "visitors":
+	switch {
+	case d.distinct != nil:
 		var all uniq
 		for i := range bs {
-			all.merge(&bs[i].visitors)
+			all.merge(d.distinct(&bs[i]))
 		}
 		return float64(all.count())
-	case "auto_share":
-		return round1(pct(totalOf(bs, func(b bucketStats) float64 { return b.unknown }),
-			totalOf(bs, func(b bucketStats) float64 { return b.allReq })))
-	case "calls", "accounts", "callers", "failed", "p95":
-		return apiTotal(d.key, bs)
+	case d.pool != nil:
+		v := d.pool(bs)
+		if d.key == "auto_share" && math.IsNaN(v) { // a tile says 0 of no requests; a line has no point there
+			return 0
+		}
+		return v
 	}
 	return totalOf(bs, d.of)
 }

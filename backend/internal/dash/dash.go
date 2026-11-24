@@ -154,8 +154,10 @@ func (q *query) holdFrom(from string) error {
 }
 
 // period is a range's buckets in the viewer's zone. Bounds holds n+1 instants for n buckets, Prev the comparison's, nil
-// when cmp is off. Every range ends now: 24h is the 24 hours before now (the last bucket ends now, a label is its
-// bucket's end, to the minute), any other range's last bucket is today or this month, open (it ends in the future).
+// when cmp is off. Every range ends now: 24h is the 24 hours before now (the last bucket ends now), any other range's
+// last bucket is today or this month, open (it ends in the future). What the chart draws is finer (series.go); the
+// buckets are what is compared, and what of a range is over: a finer one here would have Noteworthy's briefing
+// written again with every slot.
 //
 // An aggregate period (30d, 90d, 12mo, and every yoy comparison) is one the daily and hourly tables can serve: its
 // bucket bounds are floored to the UTC hour (a zone on a half hour moves 30 min earlier), and its daily figures read
@@ -171,7 +173,6 @@ type period struct {
 	// prevCut is where the comparison of a figure that runs to now ends: now's own time of day in the prior period,
 	// floored to the hour (the aggregates' grain: a cut inside an hour is read raw, and nothing where raw is gone).
 	prevCut time.Time
-	labels  []string
 	prevL   string
 	// agg and prevAgg say whether the range, and its comparison, is an aggregate period.
 	agg, prevAgg bool
@@ -195,7 +196,9 @@ func utcDay(t time.Time) time.Time {
 func newPeriod(rng, cmp string, now time.Time, loc *time.Location) period {
 	t := now.In(loc)
 	var n int
-	var step func(time.Time, int) time.Time
+	// step is k buckets on at the same time of day, bound the k-th bound from a bucket's start, each at its own day's
+	// midnight: one that does not exist must not move those after it (inDay).
+	var step, bound func(time.Time, int) time.Time
 	var start time.Time
 	p := period{Now: now, agg: rng != "24h" && rng != "7d", open: rng != "24h"}
 	p.prevAgg = p.agg || cmp == "yoy"
@@ -204,31 +207,33 @@ func newPeriod(rng, cmp string, now time.Time, loc *time.Location) period {
 		n, p.Bucket = 24, "hour"
 		start = t.Add(-time.Hour)
 		step = func(x time.Time, k int) time.Time { return x.Add(time.Duration(k) * time.Hour) }
+		bound = step
 	case "12mo":
 		n, p.Bucket = 12, "month"
 		start = time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, loc)
 		step = func(x time.Time, k int) time.Time { return x.AddDate(0, k, 0) }
+		bound = func(x time.Time, k int) time.Time {
+			y, m, _ := localDay(x, loc)
+			return time.Date(y, m+time.Month(k), 1, 0, 0, 0, 0, loc)
+		}
 	default:
 		n, _ = strconv.Atoi(strings.TrimSuffix(rng, "d"))
 		p.Bucket = "day"
 		start = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
 		step = func(x time.Time, k int) time.Time { return x.AddDate(0, 0, k) }
+		bound = func(x time.Time, k int) time.Time {
+			y, m, d := localDay(x, loc)
+			return time.Date(y, m, d+k, 0, 0, 0, 0, loc)
+		}
 	}
-	first := step(start, -(n - 1))
+	first := bound(start, -(n - 1))
 	for i := 0; i <= n; i++ {
-		p.Bounds = append(p.Bounds, step(first, i))
-	}
-	named := p.Bounds[:n]
-	if rng == "24h" { // by its hours' ends
-		named = p.Bounds[1:]
-	}
-	for _, b := range named {
-		p.labels = append(p.labels, label(b, p.Bucket))
+		p.Bounds = append(p.Bounds, bound(first, i))
 	}
 	switch cmp {
 	case "prev":
 		for i := 0; i <= n; i++ {
-			p.Prev = append(p.Prev, step(first, i-n))
+			p.Prev = append(p.Prev, bound(first, i-n))
 		}
 		p.prevCut = step(t, -n)
 		p.prevL = "prior " + strings.Replace(strings.Replace(rng, "h", " h", 1), "d", " d", 1)
@@ -239,11 +244,11 @@ func newPeriod(rng, cmp string, now time.Time, loc *time.Location) period {
 		// As many buckets on from the start's last year, not each bound's own: 29 February's would be 1 March's, and
 		// the day empty.
 		for i := 0; i <= n; i++ {
-			p.Prev = append(p.Prev, step(first.AddDate(-1, 0, 0), i))
+			p.Prev = append(p.Prev, bound(first.AddDate(-1, 0, 0), i))
 		}
 		p.prevCut = t.AddDate(-1, 0, 0)
 		if p.Bucket == "day" { // now's time of the last of those days
-			y, m, d := p.Prev[n-1].Date()
+			y, m, d := localDay(p.Prev[n-1], loc)
 			p.prevCut = time.Date(y, m, d, t.Hour(), t.Minute(), t.Second(), 0, loc)
 		}
 		p.prevL = "last year"
@@ -315,16 +320,6 @@ func hoursPeriod(now time.Time, loc *time.Location) period {
 	p.prevWin.Closed = p.Prev[p.closedN()]
 	p.prevWin.End = p.prevWin.Closed
 	return p
-}
-
-func label(t time.Time, bucket string) string {
-	switch bucket {
-	case "hour":
-		return t.Format("15:04")
-	case "month":
-		return t.Format("Jan")
-	}
-	return t.Format("02.01.")
 }
 
 // readSpan is the longest span one bucket statement reads. A month bucket (12mo) is read in day pieces: a month of a

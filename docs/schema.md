@@ -353,11 +353,12 @@ Checks:
 
 ### dash.bucketStats
 
-In `internal/dash`. bucketStats is one bucket's overview figures, sums over events.
+In `internal/dash`. bucketStats is one bucket's (or one of its slots') overview figures, sums over events.
 
 | Field | Type | Doc |
 | --- | --- | --- |
 | `missing` | `bool` | part of it holds no figures (plan.older) |
+| `gap` | `bool` | part of it was read as nothing (plan.gaps) |
 | `visitors` | `uniq` | visitor ids (aud bots: address keys) |
 | `views` | `float64` |  |
 | `events` | `float64` |  |

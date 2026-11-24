@@ -74,14 +74,28 @@ func TestExact_BothSourcesOpenBucketPrevious(t *testing.T) {
 	tl := tiles(t, ov)
 	vis := tl["visitors"]
 	if num64(vis["value"]) != 2 || num64(vis["prev"]) != 2 || changeOf(vis["change"]) != `{"pct":0}` ||
-		vis["verdict"] != "flat" || num64(vis["median"]) != 0 {
+		vis["verdict"] != "flat" {
 		t.Errorf("visitors tile %v", vis)
 	}
-	if s := vis["series"].([]any); len(s) != 7 || num64(s[4]) != 1 || num64(s[6]) != 1 || num64(s[0]) != 0 {
+	// The hours of 16.11. 00:00 to the 22nd's 14:00, the one filling, in Zurich.
+	if s := vis["series"].([]any); len(s) != 6*24+15 || num64(s[4*24+11]) != 1 || num64(s[6*24+11]) != 1 || num64(s[0]) != 0 {
 		t.Errorf("visitors series %v", s)
 	}
-	if ps := vis["prev_series"].([]any); num64(ps[3]) != 1 || num64(ps[6]) != 2 {
-		t.Errorf("visitors prev series %v", ps)
+	// Six hours' mean: one visitor in the three before or the two after, the last six before the open slot, which has
+	// none.
+	m := vis["mean"].([]any)
+	for i, want := range map[int]float64{4*24 + 8: 0, 4*24 + 9: 0.17, 4*24 + 14: 0.17, 4*24 + 15: 0, 6*24 + 8: 0,
+		6*24 + 9: 0.17, 6*24 + 13: 0.17} {
+		if num64(m[i]) != want {
+			t.Errorf("mean[%d] %v, want %v", i, m[i], want)
+		}
+	}
+	if m[6*24+14] != nil {
+		t.Errorf("the open slot has a mean: %v", m[6*24+14])
+	}
+	// The site's first figure is c's: no mean of the same six hours as this period's reaches back before it.
+	if ps := vis["prev_mean"].([]any); ps[3*24+13] != nil || num64(ps[3*24+14]) != 0.17 || num64(ps[3*24+15]) != 0 || num64(ps[6*24+9]) != 0.17 || num64(ps[6*24+8]) != 0 {
+		t.Errorf("visitors prior means %v", ps)
 	}
 	if v := tl["views"]; num64(v["value"]) != 2 || num64(v["prev"]) != 2 {
 		t.Errorf("views tile %v", v)
@@ -142,8 +156,8 @@ func TestExact_Last24Hours(t *testing.T) {
 
 	_, ov := r.get(t, "overview", p(feedSite, "range", "24h"))
 	period := ov["period"].(map[string]any)
-	if labels := period["labels"].([]any); period["last_bucket_open"] != false || labels[23] != "14:31" ||
-		labels[0] != "15:31" || period["from"] != "2026-11-21T13:31:00Z" {
+	if labels := period["labels"].([]any); period["open"] != false || labels[143] != "14:21–14:31" ||
+		labels[0] != "14:31–14:41" || period["from"] != "2026-11-21T13:31:00Z" {
 		t.Errorf("period %v", period)
 	}
 	tl := tiles(t, ov)
@@ -152,8 +166,9 @@ func TestExact_Last24Hours(t *testing.T) {
 		if num64(v["value"]) != 2 || num64(v["prev"]) != 1 || changeOf(v["change"]) != `{"pct":100}` {
 			t.Errorf("%s tile %v", key, v)
 		}
-		if s, ps := v["series"].([]any), v["prev_series"].([]any); num64(s[0]) != 1 || num64(s[23]) != 1 ||
-			num64(ps[23]) != 1 || num64(ps[0]) != 0 {
+		// b came 10 minutes into the range, in the second slot; a and c five and ten minutes before an end.
+		if s, ps := v["series"].([]any), v["prev_mean"].([]any); num64(s[0]) != 0 || num64(s[1]) != 1 || num64(s[143]) != 1 ||
+			num64(ps[140]) != 0 || num64(ps[141]) != 0.17 || num64(ps[143]) != 0.17 {
 			t.Errorf("%s series %v, prior %v", key, s, ps)
 		}
 	}

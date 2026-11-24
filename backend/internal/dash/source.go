@@ -220,7 +220,7 @@ func (pl *plan) rawCovers(ctx context.Context, from, to time.Time) (bool, error)
 	return !cut, err
 }
 
-// pick is the source of the piece [lo, hi). unit is the table's grain (an hour, a day): a piece not on it is no
+// pick is the source of the piece [lo, hi). unit is the table's grain (an hour, a day; 0: onGrain): a piece not on it is no
 // aggregate's and is read raw; with its day's raw cut by retention nothing can answer it, and it counts as a gap
 // (never an empty piece taken for a quiet one). short marks a 24h or 7d range and its prior period: raw first.
 func (pl *plan) pick(ctx context.Context, lo, hi time.Time, unit time.Duration, short bool) (how, error) {
@@ -235,7 +235,7 @@ func (pl *plan) pick(ctx context.Context, lo, hi time.Time, unit time.Duration, 
 		return readNone, err
 	}
 	st, ok := pl.days[day]
-	if !lo.Equal(lo.Truncate(unit)) || !hi.Equal(hi.Truncate(unit)) {
+	if !onGrain(lo, hi, unit) {
 		if ok && !st.raw {
 			pl.gaps++
 			return readNone, nil
@@ -292,8 +292,13 @@ func (pl *plan) read(ctx context.Context, lo, hi time.Time, unit time.Duration, 
 	if h != readRaw {
 		return nil
 	}
-	pl.s.traced(false, lo.Equal(lo.Truncate(unit)) && hi.Equal(hi.Truncate(unit)))
+	pl.s.traced(false, onGrain(lo, hi, unit))
 	return fromRaw()
+}
+
+// onGrain: a table of that grain can serve [lo, hi); none has grain 0 (what is read is finer than any table).
+func onGrain(lo, hi time.Time, unit time.Duration) bool {
+	return unit > 0 && lo.Equal(lo.Truncate(unit)) && hi.Equal(hi.Truncate(unit))
 }
 
 // aggFrom is the FROM clause of an aggregate read of one day: the day's agg_day row (?1 site, ?2 day), and the
