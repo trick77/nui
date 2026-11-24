@@ -130,7 +130,7 @@ func (d *Data) installCountries(c *Countries) {
 
 func (d *Data) logRejected(what string, r Rejected) {
 	if r.Count > 0 {
-		d.o.Log.Warn("Reference data prefixes rejected as implausibly broad", "data", what, "count", r.Count,
+		d.o.Log.Warn("Reference data rejected as implausibly broad or unreadable", "data", what, "count", r.Count,
 			"first", strings.Join(r.First, ", "))
 	}
 }

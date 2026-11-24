@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 )
@@ -39,9 +40,11 @@ type Verifier struct {
 }
 
 type verdict struct {
-	host   string // the confirmed PTR name, "" when none confirmed
-	failed bool   // the lookup failed: nothing is known, ask again after failRetry
-	at     time.Time
+	hosts   []string // the confirmed PTR names
+	unnamed bool     // the address has no PTR name at all
+	failed  bool     // the lookup failed: nothing is known, ask again after failRetry
+	partial bool     // beside hosts, names were left unchecked: no match refutes nothing
+	at      time.Time
 }
 
 // Verdict is what the verifier knows about an address's claim to be a provider's.
@@ -49,7 +52,7 @@ type Verdict int
 
 const (
 	// Unverified means no lookup answers it now (the network's daily lookup budget is spent, the provider names no
-	// rDNS pattern, no address); nothing is known either way.
+	// rDNS pattern, no address, more names than are looked up); nothing is known either way.
 	Unverified Verdict = iota
 	// Pending means a lookup is queued, or will be on a later pass; ask again then.
 	Pending
@@ -57,8 +60,10 @@ const (
 	Failed
 	// Confirmed means the address's forward-confirmed PTR name matches the provider's rDNS glob.
 	Confirmed
-	// Refuted means a completed lookup found no forward-confirmed PTR name matching it.
+	// Refuted means a completed lookup found PTR names, none of them forward-confirmed and matching it.
 	Refuted
+	// Unnamed means a completed lookup found no PTR name: Meta's crawlers send from 57.141.0.0/16, which has none.
+	Unnamed
 )
 
 const (
@@ -72,6 +77,8 @@ const (
 	LookupsPerPass    = 32
 	lookupsPerNetwork = 16
 	queueSize         = 64
+	// maxNames bounds the PTR names of one address looked up: whoever owns the reverse zone sets their number.
+	maxNames = 8
 )
 
 // NewVerifier asks r, each lookup bounded by timeout.
@@ -90,10 +97,17 @@ func (v *Verifier) StartPass() {
 	v.mu.Unlock()
 }
 
-// Check reports what is known of ip's forward-confirmed PTR name against patterns, from the cache, and queues a
-// lookup when nothing is: Pending then, ask again later. Only a completed lookup refutes; a claim past its network's
-// daily budget is Unverified.
-func (v *Verifier) Check(ip string, patterns []string) Verdict {
+// Check reports what is known of ip's forward-confirmed PTR names against patterns, from the cache, and queues a
+// lookup when nothing is: Pending then, ask again later. Only a completed lookup that found names refutes; a claim past
+// its network's daily budget is Unverified. For a client that claims to be the provider inside its ranges.
+func (v *Verifier) Check(ip string, patterns []string) Verdict { return v.check(ip, patterns, anyRun) }
+
+// CheckClose is Check for any other client: the name must be right under the pattern (oneLabel).
+func (v *Verifier) CheckClose(ip string, patterns []string) Verdict {
+	return v.check(ip, patterns, oneLabel)
+}
+
+func (v *Verifier) check(ip string, patterns []string, star string) Verdict {
 	if len(patterns) == 0 {
 		return Unverified
 	}
@@ -106,10 +120,14 @@ func (v *Verifier) Check(ip string, patterns []string) Verdict {
 	if c, ok := v.cache[ip]; ok {
 		age := v.now().Sub(c.at)
 		switch {
+		case age < 24*time.Hour && slices.ContainsFunc(c.hosts, func(h string) bool { return matchRdns(h, patterns, star) }):
+			return Confirmed
 		case c.failed && age < failRetry:
 			return Failed
-		case !c.failed && age < 24*time.Hour && c.host != "" && MatchRdnsGlob(c.host, patterns):
-			return Confirmed
+		case c.partial && !c.failed && age < 24*time.Hour:
+			return Unverified
+		case c.unnamed && age < 24*time.Hour:
+			return Unnamed
 		case !c.failed && age < 24*time.Hour:
 			return Refuted
 		}
@@ -174,7 +192,7 @@ func (v *Verifier) Work(ctx context.Context) {
 }
 
 func (v *Verifier) answer(ctx context.Context, ip string) {
-	host, err := v.lookup(ctx, ip)
+	res := v.lookup(ctx, ip)
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	delete(v.queued, ip)
@@ -184,41 +202,51 @@ func (v *Verifier) answer(ctx context.Context, ip string) {
 	if len(v.cache) >= maxVerdicts {
 		clear(v.cache)
 	}
-	v.cache[ip] = verdict{host: host, failed: err != nil, at: v.now()}
+	res.at = v.now()
+	v.cache[ip] = res
 }
 
-// lookup is ip's forward-confirmed PTR name, "" for none. An error means no answer: the reverse lookup or a forward
-// one that might have confirmed failed otherwise than with "no such name".
-func (v *Verifier) lookup(ctx context.Context, ip string) (string, error) {
+// lookup is what DNS says of ip, every PTR name forward-confirmed (an address may have several, the provider's among
+// them), at once: a slow name's lookup must not take the others' time. Failed is no answer: the reverse lookup, or
+// with no name confirmed a forward one, failed otherwise than with "no such name".
+func (v *Verifier) lookup(ctx context.Context, ip string) verdict {
 	want, err := netip.ParseAddr(ip)
 	if err != nil {
-		return "", nil
+		return verdict{}
 	}
 	ctx, cancel := context.WithTimeout(ctx, v.timeout)
 	defer cancel()
 	names, err := v.r.LookupAddr(ctx, ip)
-	if err != nil {
-		if notFound(err) {
-			return "", nil
-		}
-		return "", err
+	switch {
+	case err != nil && !notFound(err):
+		return verdict{failed: true}
+	case len(names) == 0:
+		return verdict{unnamed: true}
 	}
-	var failed error
-	for _, name := range names {
-		addrs, err := v.r.LookupHost(ctx, name)
-		if err != nil {
-			if !notFound(err) {
-				failed = err
-			}
-			continue
-		}
-		for _, a := range addrs {
-			if got, err := netip.ParseAddr(a); err == nil && got.Unmap() == want.Unmap() {
-				return name, nil
-			}
+	res := verdict{partial: len(names) > maxNames}
+	names = names[:min(len(names), maxNames)]
+	confirmed, failed := make([]bool, len(names)), make([]bool, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Go(func() {
+			addrs, err := v.r.LookupHost(ctx, name)
+			failed[i] = err != nil && !notFound(err)
+			confirmed[i] = slices.ContainsFunc(addrs, func(a string) bool {
+				got, err := netip.ParseAddr(a)
+				return err == nil && got.Unmap() == want.Unmap()
+			})
+		})
+	}
+	wg.Wait()
+	for i, name := range names {
+		if confirmed[i] {
+			res.hosts = append(res.hosts, name)
 		}
 	}
-	return "", failed
+	if slices.Contains(failed, true) {
+		res.partial, res.failed = true, len(res.hosts) == 0
+	}
+	return res
 }
 
 // notFound reports a definite "no such name": an answer, unlike a timeout or a server failure.
