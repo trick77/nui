@@ -363,6 +363,8 @@ describe("dashboard on a domain with a server feed", () => {
     // The slot and its mean, nothing else.
     expect(tip.querySelectorAll(".tr")).toHaveLength(2);
     expect(ov.querySelector('[stroke="var(--color-reference)"]')).toBeNull();
+    // No tile has a change, so none keeps a line for one.
+    expect(ov.querySelector(".tile-delta")).toBeNull();
   });
 
   it("asks for the briefing again only when the domain or range changes", async () => {
@@ -1768,6 +1770,8 @@ describe("an API", () => {
     });
     expect(tile).toHaveTextContent("–");
     expect(tile).not.toHaveTextContent("ms");
+    // Its change's line is kept empty: level with its neighbours.
+    expect(tile.querySelector(".tile-delta")).toBeEmptyDOMElement();
     fireEvent.click(tile);
     expect(screen.getByText(/figures since/)).toHaveTextContent("2026");
     // The largest on the chart has the unit, and its time.

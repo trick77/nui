@@ -450,7 +450,11 @@ body:has(.gate) {
 .tile {
   all: unset;
   cursor: pointer;
-  display: block;
+  /* A button centres what is in it: a tile with less than its neighbours
+     would sit lower. */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
   padding: 16px 18px 14px;
   box-shadow: inset -1px 0 0 var(--color-border-soft);
 }
@@ -473,6 +477,12 @@ body:has(.gate) {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   margin-top: 4px;
+}
+
+/* A tile's change, kept a line high without one (nothing to compare): the
+   lines under it stay level with the neighbours'. */
+.tile-delta {
+  min-height: 1lh;
 }
 
 .delta {

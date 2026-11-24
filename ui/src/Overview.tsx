@@ -86,7 +86,10 @@ export function OverviewSection({
                       <div className="tile-value">
                         <TileValue t={t} />
                       </div>
-                      <Delta change={t.change} verdict={t.verdict} />
+                      {/* With the comparison off, no tile has one. */}
+                      <div className={p.prev_label ? "tile-delta" : undefined}>
+                        <Delta change={t.change} verdict={t.verdict} />
+                      </div>
                     </div>
                     <Spark cur={t.mean} prev={t.prev_mean} />
                   </div>
