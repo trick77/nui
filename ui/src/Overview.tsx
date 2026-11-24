@@ -88,11 +88,7 @@ export function OverviewSection({
                       </div>
                       <Delta change={t.change} verdict={t.verdict} />
                     </div>
-                    <Spark
-                      cur={t.series}
-                      prev={t.prev_series}
-                      open={p.last_bucket_open}
-                    />
+                    <Spark cur={t.mean} prev={t.prev_mean} />
                   </div>
                   <div className="mt-0.5 text-[12px] text-muted">
                     {prevText(t, p.prev_label)}
@@ -104,32 +100,33 @@ export function OverviewSection({
               <div className="card">
                 <div className="mb-2.5 flex flex-wrap items-center gap-2.5">
                   <h3 className="m-0 text-[15px] font-medium">
-                    {sel.label} per {p.bucket}
+                    {sel.label} per {p.slot}
                     {SEP}
                     {AUD_WORD[aud]}
                   </h3>
                   <div className="legend ml-auto">
                     <span>
                       <i
+                        className="sw line thin"
+                        style={{ background: "var(--color-s1)" }}
+                      />
+                      per {p.slot}
+                    </span>
+                    <span>
+                      <i
                         className="sw line"
                         style={{ background: "var(--color-s1)" }}
                       />
-                      this period
+                      {p.mean} average
                     </span>
-                    {/* [] with the comparison off: no entry. */}
-                    {sel.prev_series?.length ? (
+                    {/* [] with nothing to compare: no entry. */}
+                    {sel.prev_mean.length > 0 && (
                       <span>
                         <i
                           className="sw line"
                           style={{ background: "var(--color-reference)" }}
                         />
-                        {p.prev_label}
-                      </span>
-                    ) : null}
-                    {sel.median != null && (
-                      <span>
-                        <i className="sw dash" />
-                        median
+                        {p.prev_label} average
                       </span>
                     )}
                     {p.since && (
@@ -137,22 +134,20 @@ export function OverviewSection({
                         figures since {rawSince(p.since)}
                       </span>
                     )}
-                    {p.last_bucket_open && (
-                      <span className="text-muted">
-                        dashed end = {p.bucket} still filling
-                      </span>
-                    )}
                   </div>
                 </div>
                 <MainChart
                   labels={p.labels}
                   cur={sel.series}
-                  prev={sel.prev_series}
-                  median={sel.median}
+                  mean={sel.mean}
+                  prev={sel.prev_mean}
+                  delta={sel.delta}
+                  meanLabel={p.mean}
+                  axis={p}
+                  first={p.first}
                   kind={sel.kind}
                   unit={sel.unit}
-                  open={p.last_bucket_open}
-                  hourly={p.bucket === "hour"}
+                  open={p.open}
                   title={sel.label}
                   prevLabel={p.prev_label}
                 />

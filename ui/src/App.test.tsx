@@ -9,9 +9,9 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setFetcher } from "./api";
 import App from "./App";
-import { MainChart, StackChart } from "./charts";
+import { MainChart, StackChart, scaleLines } from "./charts";
 import { type FixtureOptions, TRAIL_NEXT, fixtureFetch } from "./fixtures";
-import { SEP } from "./format";
+import { SEP, pct } from "./format";
 import { VitalHint } from "./ui";
 
 let calls: string[] = [];
@@ -56,6 +56,15 @@ function startHeld(url: string) {
   });
   return render(<App />);
 }
+
+// A main chart's props, but for its figures.
+const CHART = {
+  axis: { ticks: [], weekends: [] },
+  meanLabel: "6 h",
+  open: false,
+  title: "T",
+  prevLabel: "before",
+};
 
 const panel = (name: string) => screen.getByRole("region", { name });
 // Text as rendered: the default normalizer folds an en space into a plain
@@ -291,62 +300,67 @@ describe("dashboard on a domain with a server feed", () => {
   it("switches the main chart with a tile", async () => {
     start();
     const ov = await screen.findByRole("region", { name: "Overview" });
-    await within(ov).findByText(`Unique visitors per day${SEP}all`, asIs);
+    await within(ov).findByText(`Unique visitors per hour${SEP}all`, asIs);
     fireEvent.click(within(ov).getByRole("button", { name: /Page views/ }));
     expect(
-      within(ov).getByText(`Page views per day${SEP}all`, asIs),
+      within(ov).getByText(`Page views per hour${SEP}all`, asIs),
     ).toBeInTheDocument();
     const hit = within(ov).getByTestId("chart-hit");
-    fireEvent.mouseMove(hit, { clientX: 500, clientY: 100 });
+    fireEvent.pointerMove(hit, { clientX: 500, clientY: 100 });
     const tip = screen.getByRole("tooltip");
-    expect(tip).toHaveTextContent("Page views");
-    expect(tip).toHaveTextContent("Median");
-    fireEvent.mouseLeave(hit);
+    expect(tip.querySelector("h4")).toHaveTextContent(
+      /^\w{3} \d\d\.11\. \d\d:00–\d\d:00$/,
+    );
+    expect(
+      [...tip.querySelectorAll(".tr span")].map((s) => s.textContent),
+    ).toEqual(["Page views", "6 h average", "prior 7 d average"]);
+    // The mean against the prior one, as the backend computed it.
+    expect(tip.querySelector(".tr:last-child b")!.textContent).toMatch(
+      new RegExp(`^[\\d.]+${SEP}[↑↓→] [\\d.]+ %$`),
+    );
+    fireEvent.pointerLeave(hit);
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("runs every range to now: 24h ends at the minute, nothing filling", async () => {
     start();
     const ov = await screen.findByRole("region", { name: "Overview" });
-    await within(ov).findByText(`Unique visitors per day${SEP}all`, asIs);
-    expect(screen.queryByText(/excluded/)).toBeNull();
-    expect(
-      within(ov).getByText("dashed end = day still filling"),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "24h" }));
     await within(ov).findByText(`Unique visitors per hour${SEP}all`, asIs);
     expect(screen.queryByText(/excluded/)).toBeNull();
-    expect(within(ov).queryByText(/still filling/)).toBeNull();
+    expect(ov.querySelector('[fill^="url(#hatch"]')).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "24h" }));
+    await within(ov).findByText(`Unique visitors per 10 min${SEP}all`, asIs);
+    expect(screen.queryByText(/excluded/)).toBeNull();
     expect(ov.querySelector('[fill^="url(#hatch"]')).toBeNull();
-    // The last hour, in both charts.
-    fireEvent.mouseMove(within(ov).getByTestId("chart-hit"), {
+    // The last point and the last hour.
+    fireEvent.pointerMove(within(ov).getByTestId("chart-hit"), {
       clientX: 5000,
       clientY: 100,
     });
-    expect(screen.getByRole("tooltip").textContent).toMatch(/^hour to 13:20/);
+    expect(screen.getByRole("tooltip").textContent).toMatch(/^14:10–14:20/);
     expect(screen.getByRole("tooltip")).not.toHaveTextContent("still filling");
-    fireEvent.mouseLeave(within(ov).getByTestId("chart-hit"));
+    fireEvent.pointerLeave(within(ov).getByTestId("chart-hit"));
     const bars = await screen.findAllByTestId("stack-hit");
     fireEvent.mouseMove(bars[bars.length - 1], { clientX: 10, clientY: 10 });
     await waitFor(() =>
-      expect(screen.getByRole("tooltip").textContent).toMatch(/^hour to 13:20/),
+      expect(screen.getByRole("tooltip").textContent).toMatch(/^hour to 14:20/),
     );
   });
 
   it("draws no comparison with the comparison off", async () => {
     start("/dashboard/?cmp=off");
     const ov = await screen.findByRole("region", { name: "Overview" });
-    await within(ov).findByText(`Unique visitors per day${SEP}all`, asIs);
+    await within(ov).findByText(`Unique visitors per hour${SEP}all`, asIs);
     // The backend sends an empty previous series, not none.
     expect(lastCall("/api/dash/overview").get("cmp")).toBe("off");
-    fireEvent.mouseMove(within(ov).getByTestId("chart-hit"), {
+    fireEvent.pointerMove(within(ov).getByTestId("chart-hit"), {
       clientX: 500,
       clientY: 100,
     });
     const tip = screen.getByRole("tooltip");
     expect(tip).toHaveTextContent("Unique visitors");
     expect(tip).not.toHaveTextContent(/prior/);
-    // This period and the median, nothing else.
+    // The slot and its mean, nothing else.
     expect(tip.querySelectorAll(".tr")).toHaveLength(2);
     expect(ov.querySelector('[stroke="var(--color-reference)"]')).toBeNull();
   });
@@ -372,7 +386,7 @@ describe("dashboard on a domain with a server feed", () => {
 
   it("keeps range, audience and comparison in the URL", async () => {
     start();
-    await screen.findByText(`Unique visitors per day${SEP}all`, asIs);
+    await screen.findByText(`Unique visitors per hour${SEP}all`, asIs);
     fireEvent.click(screen.getByRole("button", { name: "30d" }));
     expect(window.location.search).toContain("range=30d");
     await waitFor(() =>
@@ -382,7 +396,7 @@ describe("dashboard on a domain with a server feed", () => {
     expect(window.location.search).toContain("aud=bots");
     expect(localStorage.getItem("app.aud")).toBe("bots");
     expect(
-      await screen.findByText(`Addresses per day${SEP}bots`, asIs),
+      await screen.findByText(`Addresses per 3 hours${SEP}bots`, asIs),
     ).toBeInTheDocument();
     // Traffic and the errors show every class whatever the switch says.
     await waitFor(() =>
@@ -836,12 +850,13 @@ describe("dashboard on a domain with a server feed", () => {
     start();
     const t = await screen.findByRole("region", { name: "Requests by class" });
     const bars = await within(t).findAllByTestId("stack-hit");
-    expect(bars).toHaveLength(7);
-    fireEvent.mouseMove(bars[6], { clientX: 900, clientY: 100 });
-    expect(screen.getByRole("tooltip").textContent).toContain(
-      `${SEP}still filling`,
+    // Six hours each, up to the one now is in.
+    expect(bars).toHaveLength(27);
+    fireEvent.mouseMove(bars[26], { clientX: 900, clientY: 100 });
+    expect(screen.getByRole("tooltip").textContent).toMatch(
+      new RegExp(`^Sun 22.11. 12:00–18:00${SEP}still filling`),
     );
-    fireEvent.mouseLeave(bars[6]);
+    fireEvent.mouseLeave(bars[26]);
     const who = screen.getByRole("region", { name: "Who is asking" });
     const parts = within(who).getAllByTestId("strip-part");
     fireEvent.mouseMove(parts[0], { clientX: 10, clientY: 10 });
@@ -1209,7 +1224,7 @@ describe("while an answer is on its way", () => {
   it("keeps the same domain's answer dimmed, without paging from it", async () => {
     startHeld("/dashboard/");
     const ov = await screen.findByRole("region", { name: "Overview" });
-    await within(ov).findByText(`Unique visitors per day${SEP}all`, asIs);
+    await within(ov).findByText(`Unique visitors per hour${SEP}all`, asIs);
     const v = panel("Visitors by address");
     await within(v).findByText("198.51.100.7");
     const mainChart = () => within(ov).getByTestId("chart-hit").closest("svg");
@@ -1755,53 +1770,55 @@ describe("an API", () => {
     expect(tile).not.toHaveTextContent("ms");
     fireEvent.click(tile);
     expect(screen.getByText(/figures since/)).toHaveTextContent("2026");
-    // The median on the chart has the unit.
-    expect(screen.getByText(/^median .* ms$/)).toBeInTheDocument();
+    // The largest on the chart has the unit, and its time.
+    expect(screen.getByTestId("peak").textContent).toMatch(
+      new RegExp(`ms${SEP}\\w{3} \\d\\d\\.11\\.`),
+    );
   });
 
   it("draws a series broken where it has no figure", () => {
     const { container } = render(
       <MainChart
+        {...CHART}
         labels={["a", "b", "c", "d", "e"]}
         cur={[null, 4, null, 6, 8]}
+        mean={[null, 4, null, 5, 7]}
         prev={[1, null, null, 2, 3]}
-        median={null}
         kind="sum"
-        open={false}
-        title="T"
-        prevLabel="before"
       />,
     );
-    const line = container.querySelector("path.chart-line:last-of-type");
-    expect(line!.getAttribute("d")).toMatch(/^M\S+ \S+h0M\S+ \S+L\S+ \S+$/);
+    for (const id of ["slots", "mean"])
+      expect(screen.getByTestId(id).getAttribute("d")).toMatch(
+        /^M\S+ \S+h0M\S+ \S+L\S+ \S+$/,
+      );
     expect(container.innerHTML).not.toMatch(/NaN|null/);
     // Nothing at all.
-    const none = render(
+    for (const kind of ["sum", "rate"] as const) {
+      const none = render(
+        <MainChart
+          {...CHART}
+          labels={["a", "b"]}
+          cur={[null, null]}
+          mean={[null, null]}
+          prev={null}
+          kind={kind}
+        />,
+      );
+      expect(none.container).toHaveTextContent("No data in this range yet.");
+    }
+    // The previous period's line stands without this one's.
+    const before = render(
       <MainChart
+        {...CHART}
         labels={["a", "b"]}
         cur={[null, null]}
-        prev={null}
-        median={null}
-        kind="sum"
-        open={false}
-        title="T"
-        prevLabel="before"
-      />,
-    );
-    expect(none.container.innerHTML).not.toMatch(/NaN|Infinity/);
-    const rate = render(
-      <MainChart
-        labels={["a", "b"]}
-        cur={[null, null]}
-        prev={null}
-        median={null}
+        mean={[null, null]}
+        prev={[3, 4]}
         kind="rate"
-        open={false}
-        title="T"
-        prevLabel="before"
       />,
     );
-    expect(rate.container.innerHTML).not.toMatch(/NaN|Infinity/);
+    expect(within(before.container).getByTestId("prev")).toBeInTheDocument();
+    expect(before.container.innerHTML).not.toMatch(/NaN|Infinity|null/);
   });
 
   it("shows a request's account and duration in the log", async () => {
@@ -2021,20 +2038,20 @@ describe("separators", () => {
     // Each chart's tooltip on its last point, still filling.
     const ov = panel("Overview");
     const hit = within(ov).getByTestId("chart-hit");
-    fireEvent.mouseMove(hit, { clientX: 1e6, clientY: 100 });
+    fireEvent.pointerMove(hit, { clientX: 1e6, clientY: 100 });
     expect(screen.getByRole("tooltip").textContent).toContain(
       `${SEP}still filling`,
     );
     expect(plainDots()).toEqual([]);
-    fireEvent.mouseLeave(hit);
+    fireEvent.pointerLeave(hit);
     const t = screen.getByRole("region", { name: "Requests by class" });
     const bars = await within(t).findAllByTestId("stack-hit");
-    fireEvent.mouseMove(bars[6], { clientX: 900, clientY: 100 });
+    fireEvent.mouseMove(bars[26], { clientX: 900, clientY: 100 });
     expect(screen.getByRole("tooltip").textContent).toContain(
       `${SEP}still filling`,
     );
     expect(plainDots()).toEqual([]);
-    fireEvent.mouseLeave(bars[6]);
+    fireEvent.mouseLeave(bars[26]);
 
     // A full list cut at its limit.
     fireEvent.click(within(pages).getByRole("button", { name: /Show all 8/ }));
@@ -2098,14 +2115,12 @@ describe("main chart", () => {
     const axis = (cur: number[], kind: "sum" | "rate") => {
       const { container, unmount } = render(
         <MainChart
+          {...CHART}
           labels={cur.map((_, i) => `${i}`)}
           cur={cur}
+          mean={cur}
           prev={null}
-          median={null}
           kind={kind}
-          open={false}
-          title="t"
-          prevLabel="p"
         />,
       );
       const texts = [...container.querySelectorAll("text[text-anchor=end]")];
@@ -2115,10 +2130,23 @@ describe("main chart", () => {
     };
     // An empty range: 0 and 1, not a rounded 0.5 printed as a second 1.
     expect(axis([0, 0, 0], "sum")).toEqual(["0", "1"]);
-    expect(axis([0, 4, 3], "sum")).toEqual(["0", "5"]);
-    expect(axis([0, 8, 3], "sum")).toEqual(["0", "5", "10"]);
-    // A rate keeps its half-way label.
-    expect(axis([0, 0.4, 0.2], "rate")).toHaveLength(3);
+    expect(axis([0, 4, 3], "sum")).toEqual(["0", "1", "2", "3", "4"]);
+    expect(axis([0, 5, 3], "sum")).toEqual(["0", "2", "4", "6"]);
+    // As close above the largest as round steps allow, not at 20'000.
+    expect(axis([0, 11432], "sum")).toHaveLength(5);
+    expect(scaleLines(11432, "sum")).toEqual([0, 3000, 6000, 9000, 12000]);
+    expect(scaleLines(16, "sum")).toEqual([0, 4, 8, 12, 16]);
+    // A share is never past all of it.
+    expect(scaleLines(97, "rate")).toEqual([0, 25, 50, 75, 100]);
+    expect(scaleLines(0.4, "rate")).toEqual([0, 0.1, 0.2, 0.3, 0.4]);
+    // Every line of a share prints as its own label, to the tenth.
+    for (const v of [0.004, 0.05, 0.3, 1, 2.3, 5, 9.7, 12, 33, 61, 100]) {
+      const printed = scaleLines(v, "rate").map((x) => pct(x));
+      expect(new Set(printed).size).toBe(printed.length);
+      expect(scaleLines(v, "rate").at(-1)).toBeGreaterThanOrEqual(v);
+      for (const x of scaleLines(v, "rate"))
+        expect(Math.abs(x * 10 - Math.round(x * 10))).toBeLessThan(1e-9);
+    }
     // The requests by class, stacked: the same for its counts.
     const zero = [0, 0];
     const { container } = render(
@@ -2131,7 +2159,9 @@ describe("main chart", () => {
           monitor: zero,
           unknown: zero,
         }}
+        axis={CHART.axis}
         open={false}
+        partial={[true, false]}
       />,
     );
     expect(
@@ -2139,5 +2169,78 @@ describe("main chart", () => {
         (t) => t.textContent,
       ),
     ).toEqual(["0", "1"]);
+    // A week the range cuts is no week that is filling.
+    fireEvent.mouseMove(screen.getAllByTestId("stack-hit")[0]);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("part of a week");
+  });
+
+  it("says where the figures begin, and what is the weekend", () => {
+    const { container } = render(
+      <MainChart
+        {...CHART}
+        labels={["a", "b", "c", "d"]}
+        cur={[null, null, 7, 3]}
+        mean={[null, null, 7, 5]}
+        prev={[]}
+        kind="sum"
+        first={2}
+        axis={{
+          ticks: [
+            { at: 1, label: "Mon", line: true },
+            { at: 2, label: "", line: true },
+          ],
+          weekends: [[0, 1]],
+        }}
+      />,
+    );
+    expect(screen.getByTestId("no-data")).toHaveTextContent("no data yet");
+    expect(screen.getAllByTestId("weekend")).toHaveLength(1);
+    expect(container.querySelectorAll("[stroke-dasharray='2 4']")).toHaveLength(
+      2,
+    );
+    expect(screen.getByText("Mon")).toBeInTheDocument();
+    expect(screen.getByTestId("peak").textContent).toBe(`7${SEP}c`);
+    expect(screen.queryByTestId("prev")).toBeNull();
+  });
+
+  it("names no largest share", () => {
+    render(
+      <MainChart
+        {...CHART}
+        labels={["a", "b"]}
+        cur={[100, 3]}
+        mean={[100, 4]}
+        prev={[2, 3]}
+        kind="rate"
+      />,
+    );
+    expect(screen.queryByTestId("peak")).toBeNull();
+  });
+
+  it("prints labels apart", () => {
+    const { container } = render(
+      <MainChart
+        {...CHART}
+        labels={Array.from({ length: 30 }, (_, i) => `${i}`)}
+        cur={Array.from({ length: 30 }, () => 1)}
+        mean={Array.from({ length: 30 }, () => 1)}
+        prev={null}
+        kind="sum"
+        axis={{
+          ticks: Array.from({ length: 30 }, (_, i) => ({
+            at: i,
+            label: `2${i % 10}.11.`,
+            line: false,
+          })),
+          weekends: [],
+        }}
+      />,
+    );
+    const xs = [...container.querySelectorAll("text[text-anchor=middle]")]
+      .filter((t) => t.textContent!.endsWith(".11."))
+      .map((t) => Number(t.getAttribute("x")));
+    expect(xs.length).toBeGreaterThan(5);
+    for (let i = 1; i < xs.length; i++)
+      expect(xs[i] - xs[i - 1]).toBeGreaterThan(6 * 6.4);
   });
 });

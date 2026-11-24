@@ -3,34 +3,103 @@
 // Scaling only: every value drawn is the backend's.
 
 import { type ReactNode, useId, useRef, useState } from "react";
-import type { Change, ClassKey, Verdict } from "./api";
-import { SEP, num, pct, value as fmtValue } from "./format";
+import type { Axis, Change, ClassKey, Tick, Verdict } from "./api";
+import { SEP, changeText, num, pct, value as fmtValue } from "./format";
 import { useWidth } from "./hooks";
 import { CLASSES, Delta, Tip, useTip } from "./ui";
 
-// The axis top: 1, 2 or 5 times a power of ten at or above v.
-export function nice(v: number): number {
-  if (!(v > 0)) return 1;
-  const p = Math.pow(10, Math.floor(Math.log10(v)));
-  const f = v / p;
-  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
+const STEPS = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+
+// The axis' lines from 0 to at or above v, at most five of them a round step
+// apart: whole numbers for a count, tenths for a share and never past 100.
+export function scaleLines(v: number, kind: "sum" | "rate"): number[] {
+  if (!(v > 0)) return [0, 1];
+  const p = Math.pow(10, Math.floor(Math.log10(v / 4)));
+  let step =
+    STEPS.map((s) => Number((s * p).toPrecision(2))).find(
+      // A share is written to a tenth.
+      (s) => s * 4 >= v && Number.isInteger(kind === "rate" ? s * 10 : s),
+    ) ?? (kind === "rate" ? 0.1 : 1);
+  if (kind === "rate" && v <= 100 && step * Math.ceil(v / step) > 100)
+    step = 25;
+  const n = Math.max(1, Math.ceil(v / step - 1e-9));
+  return Array.from({ length: n + 1 }, (_, i) =>
+    Number((i * step).toPrecision(12)),
+  );
 }
 
-// Every step-th label from the last one back, so they never overprint.
-function labelStep(n: number, width: number): number {
-  return Math.max(1, Math.ceil(n / Math.max(1, width / 80)));
+// A mono character of the axis' texts, in px.
+const CHAR = 6.4;
+
+// The labels that fit, every so-manyth from the last one back, so they never
+// overprint; x is a place's. One near the right edge moves in.
+function TickLabels({
+  ticks,
+  x,
+  right,
+  y,
+}: {
+  ticks: Tick[];
+  x: (place: number) => number;
+  right: number;
+  y: number;
+}) {
+  const named = ticks.filter((t) => t.label);
+  if (!named.length) return null;
+  const last = named.length - 1;
+  const longest = Math.max(...named.map((t) => t.label.length)) * CHAR;
+  const apart = last ? (x(named[last].at) - x(named[0].at)) / last : Infinity;
+  const step = Math.max(1, Math.ceil((longest + 16) / Math.max(1, apart)));
+  return named.map((t, i) =>
+    (last - i) % step ? null : (
+      <text
+        key={t.at}
+        x={Math.min(x(t.at), right - (t.label.length * CHAR) / 2)}
+        y={y}
+        textAnchor="middle"
+      >
+        {t.label}
+      </text>
+    ),
+  );
 }
 
-// A tile's small trend: this period in s1, the previous one grey. The open
-// bucket is left out, it would always read as a drop.
+// The rules where a day, a week or a month begins.
+function TickRules({
+  ticks,
+  x,
+  top,
+  bottom,
+}: {
+  ticks: Tick[];
+  x: (place: number) => number;
+  top: number;
+  bottom: number;
+}) {
+  return ticks.map((t) =>
+    t.line && t.at > 0 ? (
+      <line
+        key={t.at}
+        x1={x(t.at)}
+        x2={x(t.at)}
+        y1={top}
+        y2={bottom}
+        stroke="var(--color-grid-minor)"
+        strokeDasharray="2 4"
+      />
+    ) : null,
+  );
+}
+
+type Figures = (number | null)[];
+
 // The comparison series, or null when there is none: with the comparison
 // off the backend sends an empty one.
-const series = (s: (number | null)[] | null | undefined) =>
-  s?.length ? s : null;
+const series = (s: Figures | null | undefined) => (s?.length ? s : null);
 
 // The area under a series, one for each of its unbroken runs.
 function areaPath(
-  a: (number | null)[],
+  a: Figures,
   x: (i: number) => number,
   y: (v: number) => number,
   base: number,
@@ -46,13 +115,13 @@ function areaPath(
   return d;
 }
 
-// What a series has: it may lack a bucket's figure (null).
-const known = (a: (number | null)[]) => a.filter((v) => v != null);
+// What a series has: it may lack a slot's figure (null).
+const known = (a: Figures) => a.filter((v) => v != null);
 
 // A series as a path over its points, broken where a figure is missing; one
 // that stands alone is a dot (its line needs a round cap).
 function brokenPath(
-  a: (number | null)[],
+  a: Figures,
   from: number,
   to: number,
   x: (i: number) => number,
@@ -69,27 +138,25 @@ function brokenPath(
   return d;
 }
 
+// A tile's small trend: this period's mean in s1, the previous one's grey.
 export function Spark({
   cur,
   prev: prevIn,
-  open,
 }: {
-  cur: (number | null)[];
-  prev: (number | null)[] | null;
-  open: boolean;
+  cur: Figures;
+  prev: Figures | null;
 }) {
   const prev = series(prevIn);
   const W = 84;
   const H = 30;
   const n = cur.length;
-  const shown = open ? cur.slice(0, -1) : cur;
-  const all = known([...shown, ...(prev ?? [])]);
+  const all = known([...cur, ...(prev ?? [])]);
   if (n < 2 || !all.length)
     return <svg width={W} height={H} aria-hidden="true" />;
   const max = Math.max(...all);
   const min = Math.min(...all) * 0.9;
   const span = max - min || 1;
-  const pts = (a: (number | null)[]) =>
+  const pts = (a: Figures) =>
     brokenPath(
       a,
       0,
@@ -115,10 +182,11 @@ export function Spark({
         />
       )}
       <path
-        d={pts(shown)}
+        d={pts(cur)}
         fill="none"
         stroke="var(--color-s1)"
-        strokeWidth="2"
+        // More than a point a pixel: a thick line of a share is a block.
+        strokeWidth={n > W * 2 ? 1.1 : 1.75}
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -126,36 +194,38 @@ export function Spark({
   );
 }
 
-// A bucket's name in a tooltip. An hour's label is its end: 24h ends now, and
-// its hours begin and end at now's minute.
-const bucketName = (label: string, hourly: boolean, filling: boolean) =>
-  (hourly ? `hour to ${label}` : label) +
-  (filling ? `${SEP}still filling` : "");
-
-// The overview's main line: this period with an area under it, the
-// previous period grey, the median dashed with a label chip, the open
-// bucket dashed over a hatch.
+// The overview's main chart, two layers of one figure: a pale line through
+// every slot (the detail) with an area under it, and over it the moving mean
+// (the trend), which the previous period's grey mean is compared with. The
+// weekends are tinted, the time before the domain's first figure is not a
+// quiet one, the open slot is dashed over a hatch.
 export function MainChart({
   labels,
   cur,
+  mean,
   prev: prevIn,
-  median,
+  delta = [],
+  meanLabel,
+  axis,
+  first = null,
   kind,
   unit = "",
   open,
-  hourly = false,
   title,
   prevLabel,
 }: {
   labels: string[];
-  cur: (number | null)[];
-  prev: (number | null)[] | null;
-  median: number | null;
+  cur: Figures;
+  mean: Figures;
+  prev: Figures | null;
+  delta?: Figures;
+  meanLabel: string;
+  axis: Axis;
+  first?: number | null;
   kind: "sum" | "rate";
   // Shown after every figure; a rate has its own.
   unit?: string;
   open: boolean;
-  hourly?: boolean;
   title: string;
   prevLabel: string;
 }) {
@@ -166,57 +236,89 @@ export function MainChart({
   const [hover, setHover] = useState<number | null>(null);
   const { tip, show, hide } = useTip();
   const n = cur.length;
-  if (!n)
+  // The previous period's line stands without this one's.
+  if (![cur, mean, prev ?? []].some((s) => known(s).length))
     return (
       <div ref={ref} className="py-10 text-center text-[13px] text-muted">
         No data in this range yet.
       </div>
     );
-  const H = 250;
-
-  const T = 12;
+  const H = 320;
+  const T = 26;
   const B = 26;
-  const fmt = (v: number | null) =>
-    fmtValue(v, kind) + (v != null && kind === "sum" && unit ? ` ${unit}` : "");
-  const vals = known([...cur, ...(prev ?? []), median]);
-  const lo =
-    kind === "sum" || !vals.length
-      ? 0
-      : Math.max(0, Math.floor((Math.min(...vals) * 0.8) / 10) * 10);
-  const hi = lo + nice((Math.max(lo, ...vals) - lo) * 1.05);
-  // The gutters hold the longest label: the top tick, the median's chip
-  // (mono, 6.4 px a character).
-  const medLabel = median != null ? `median ${fmt(median)}` : "";
-  const L = Math.max(52, fmt(hi).length * 6.4 + 14);
-  const R = Math.max(92, medLabel.length * 6.4 + 19);
-  const x = (i: number) =>
-    n < 2 ? L + (W - L - R) / 2 : L + ((W - L - R) * i) / (n - 1);
-  const y = (v: number) => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
-  const path = (a: (number | null)[], from: number, to: number) =>
+  const R = 14;
+  const tail = kind === "sum" && unit ? ` ${unit}` : "";
+  const fmt = (v: number | null | undefined) =>
+    fmtValue(v, kind) + (v != null ? tail : "");
+  // A mean of small counts is a fraction.
+  const fmtMean = (v: number | null | undefined) =>
+    v == null || kind === "rate" || v >= 10 || Number.isInteger(v)
+      ? fmt(v)
+      : num(v, v < 1 ? 2 : 1) + tail;
+  const lines = scaleLines(
+    Math.max(0, ...known([...cur, ...mean, ...(prev ?? [])])),
+    kind,
+  );
+  const hi = lines[lines.length - 1];
+  const L = Math.max(52, fmt(hi).length * CHAR + 14);
+  const base = H - B;
+  // A place on the axis, and the point of a slot: its middle.
+  const at = (place: number) => L + ((W - L - R) * place) / n;
+  const x = (i: number) => at(i + 0.5);
+  const y = (v: number) => T + (base - T) * (1 - v / hi);
+  const path = (a: Figures, from = 0, to = a.length) =>
     brokenPath(a, from, to, x, y);
-  const openLast = open && n >= 2;
-  const solidTo = openLast ? n - 1 : n;
-  const step = labelStep(n, W - L - R);
-  const ticks: number[] = [];
-  for (let i = n - 1; i >= 0; i -= step) ticks.push(i);
+  const solidTo = open ? n - 1 : n;
+  // The largest, named: the first of equals, of a figure that is not a share
+  // (a slot of one request reaches 100 %).
+  const peak = kind === "sum" ? cur.indexOf(Math.max(...known(cur))) : -1;
+  const peakLabel =
+    peak >= 0 && (cur[peak] ?? 0) > 0
+      ? `${fmt(cur[peak])}${SEP}${labels[peak]}`
+      : "";
+  const half = (peakLabel.length * CHAR) / 2;
+  const empty = first == null ? 0 : at(first) - L;
 
-  const onMove = (e: React.MouseEvent<SVGRectElement>) => {
+  const onMove = (e: React.PointerEvent<SVGRectElement>) => {
     const box = (
       e.currentTarget.ownerSVGElement ?? e.currentTarget
     ).getBoundingClientRect();
-    const rel =
-      n < 2 ? 0 : ((e.clientX - box.left - L) / (W - L - R)) * (n - 1);
-    const i = Math.max(0, Math.min(n - 1, Math.round(rel)));
+    const rel = ((e.clientX - box.left - L) / (W - L - R)) * n;
+    const i = Math.max(0, Math.min(n - 1, Math.floor(rel)));
     setHover(i);
-    const rows: [string, string][] = [[title, fmt(cur[i])]];
-    if (prev) rows.push([prevLabel, prev[i] != null ? fmt(prev[i]) : "–"]);
-    if (median != null) rows.push(["Median", fmt(median)]);
-    show(e, bucketName(labels[i], hourly, openLast && i === n - 1), rows);
+    const rows: [string, string][] = [
+      [title, fmt(cur[i])],
+      [`${meanLabel} average`, fmtMean(mean[i])],
+    ];
+    if (prev) {
+      const d = delta[i];
+      const by =
+        d == null ? "" : changeText(kind === "rate" ? { pp: d } : { pct: d });
+      rows.push([
+        `${prevLabel} average`,
+        fmtMean(prev[i]) + (by ? `${SEP}${by}` : ""),
+      ]);
+    }
+    show(
+      e,
+      labels[i] + (open && i === n - 1 ? `${SEP}still filling` : ""),
+      rows,
+    );
   };
 
-  const lastSolid = cur[solidTo - 1];
   const last = cur[n - 1];
-  const hovered = hover == null ? null : cur[hover];
+  const hovered = hover == null || hover >= n ? null : hover;
+  const dot = (i: number, v: number | null | undefined, r = 4) =>
+    v != null && (
+      <circle
+        cx={x(i)}
+        cy={y(v)}
+        r={r}
+        fill="var(--color-s1)"
+        stroke="var(--color-panel)"
+        strokeWidth="2"
+      />
+    );
   return (
     <div ref={ref} className="relative">
       <svg
@@ -224,12 +326,12 @@ export function MainChart({
         height={H}
         viewBox={`0 0 ${W} ${H}`}
         role="img"
-        aria-label={`${title}, ${hourly ? `${n} hours` : labels[0]} to ${labels[n - 1]}`}
+        aria-label={`${title}, ${labels[0]} to ${labels[n - 1]}`}
         className="block max-w-full"
       >
         <defs>
           <linearGradient id={`ag${id}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="var(--color-s1)" stopOpacity=".34" />
+            <stop offset="0" stopColor="var(--color-s1)" stopOpacity=".18" />
             <stop offset="1" stopColor="var(--color-s1)" stopOpacity="0" />
           </linearGradient>
           <pattern
@@ -249,56 +351,100 @@ export function MainChart({
             />
           </pattern>
         </defs>
-        {[0, 0.5, 1].map((f) => {
-          const v = lo + (hi - lo) * f;
-          return (
-            <g key={f}>
-              <line
-                x1={L}
-                x2={W - R}
-                y1={y(v)}
-                y2={y(v)}
-                stroke={f ? "var(--color-grid-minor)" : "var(--color-axis)"}
-              />
-              {/* A count's half-way line between whole numbers (0.5 of
-                  an empty range's 1, 2.5 of 5) would print rounded, a
-                  wrong figure: the line stays, its label goes. */}
-              {(kind !== "sum" || Number.isInteger(v)) && (
-                <text x={L - 8} y={y(v) + 3.5} textAnchor="end">
-                  {fmt(v)}
-                </text>
-              )}
-            </g>
-          );
-        })}
-        {ticks.map((i) => (
-          <text key={i} x={x(i)} y={H - 7} textAnchor="middle">
-            {labels[i]}
-          </text>
+        {axis.weekends.map(([a, b]) => (
+          <rect
+            key={a}
+            data-testid="weekend"
+            x={at(a)}
+            y={T}
+            width={at(b) - at(a)}
+            height={base - T}
+            fill="var(--color-ink)"
+            opacity=".028"
+          />
         ))}
-        {openLast && (
+        {empty > 0 && (
+          <g data-testid="no-data">
+            <rect
+              x={L}
+              y={T}
+              width={empty}
+              height={base - T}
+              fill="var(--color-bg)"
+              opacity=".6"
+            />
+            {empty > 100 && (
+              <text
+                x={L + empty / 2}
+                // Between two lines, never through one.
+                y={y((lines[0] + lines[1]) / 2) + 3.5}
+                textAnchor="middle"
+              >
+                no data yet
+              </text>
+            )}
+          </g>
+        )}
+        <TickRules ticks={axis.ticks} x={at} top={T} bottom={base} />
+        {lines.map((v) => (
+          <g key={v}>
+            <line
+              x1={L}
+              x2={W - R}
+              y1={y(v)}
+              y2={y(v)}
+              stroke={v ? "var(--color-grid-minor)" : "var(--color-axis)"}
+            />
+            <text x={L - 8} y={y(v) + 3.5} textAnchor="end">
+              {fmt(v)}
+            </text>
+          </g>
+        ))}
+        <TickLabels ticks={axis.ticks} x={at} right={W} y={H - 7} />
+        {open && (
           <rect
             className="chart-fill"
-            x={x(n - 2)}
+            x={at(n - 1)}
             y={T}
-            width={x(n - 1) - x(n - 2)}
-            height={H - T - B}
+            width={at(n) - at(n - 1)}
+            height={base - T}
             fill={`url(#hatch${id})`}
             opacity=".55"
           />
         )}
-        {n >= 2 && (
+        <path
+          className="chart-fill"
+          d={areaPath(cur.slice(0, solidTo), x, y, base)}
+          fill={`url(#ag${id})`}
+        />
+        <path
+          className="chart-fill"
+          data-testid="slots"
+          d={path(cur, 0, solidTo)}
+          fill="none"
+          stroke="var(--color-s1)"
+          strokeOpacity=".6"
+          strokeWidth="1.25"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        {open && n >= 2 && (
           <path
             className="chart-fill"
-            d={areaPath(cur, x, y, H - B)}
-            fill={`url(#ag${id})`}
+            d={path(cur, n - 2, n)}
+            fill="none"
+            stroke="var(--color-s1)"
+            strokeOpacity=".7"
+            strokeWidth="1.25"
+            strokeDasharray="2 3"
           />
         )}
-        {prev && n >= 2 && (
+        {prev && (
           <path
             className="chart-line"
+            data-testid="prev"
             pathLength={1}
-            d={path(prev, 0, n)}
+            d={path(prev)}
             fill="none"
             stroke="var(--color-reference)"
             strokeWidth="1.5"
@@ -306,108 +452,67 @@ export function MainChart({
             strokeLinejoin="round"
           />
         )}
-        {median != null && (
-          <g>
-            <line
-              x1={L}
-              x2={W - R}
-              y1={y(median)}
-              y2={y(median)}
-              stroke="var(--color-ink-dim)"
-              strokeWidth="1.5"
-              strokeDasharray="5 4"
-            />
-            <rect
-              x={W - R + 5}
-              y={y(median) - 9}
-              width={medLabel.length * 6.4 + 12}
-              height="18"
-              rx="5"
-              fill="var(--color-panel)"
-              stroke="var(--color-border)"
-            />
+        <path
+          className="chart-line"
+          data-testid="mean"
+          pathLength={1}
+          d={path(mean)}
+          fill="none"
+          stroke="var(--color-s1)"
+          strokeWidth="2.25"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ filter: "drop-shadow(0 0 6px rgba(57,135,229,.55))" }}
+        />
+        {peakLabel && (
+          <g className="chart-fill" data-testid="peak">
+            {dot(peak, cur[peak], 3.5)}
             <text
-              x={W - R + 11}
-              y={y(median) + 3.5}
+              x={Math.max(L + half, Math.min(W - half, x(peak)))}
+              y={y(cur[peak] ?? 0) - 9}
+              textAnchor="middle"
               style={{ fill: "var(--color-ink-dim)" }}
             >
-              {medLabel}
+              {peakLabel}
             </text>
           </g>
         )}
-        {solidTo >= 2 && (
-          <path
-            className="chart-line"
-            pathLength={1}
-            d={path(cur, 0, solidTo)}
-            fill="none"
-            stroke="var(--color-s1)"
-            strokeWidth="2.25"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{ filter: "drop-shadow(0 0 6px rgba(57,135,229,.55))" }}
-          />
-        )}
-        {openLast && (
-          <path
-            className="chart-fill"
-            d={path(cur, n - 2, n)}
-            fill="none"
-            stroke="var(--color-s1)"
-            strokeWidth="2"
-            strokeDasharray="3 4"
-          />
-        )}
-        {lastSolid != null && (
-          <circle
-            cx={x(solidTo - 1)}
-            cy={y(lastSolid)}
-            r="4"
-            fill="var(--color-s1)"
-            stroke="var(--color-panel)"
-            strokeWidth="2"
-          />
-        )}
-        {openLast && last != null && (
+        {/* Now: the right edge's one point. */}
+        {last != null && (open || peak !== n - 1) && (
           <circle
             cx={x(n - 1)}
             cy={y(last)}
             r="3.5"
-            fill="var(--color-panel)"
-            stroke="var(--color-s1)"
+            fill={open ? "var(--color-panel)" : "var(--color-s1)"}
+            stroke={open ? "var(--color-s1)" : "var(--color-panel)"}
             strokeWidth="1.5"
           />
         )}
-        {hover != null && (
+        {hovered != null && (
           <g pointerEvents="none">
             <line
-              x1={x(hover)}
-              x2={x(hover)}
+              x1={x(hovered)}
+              x2={x(hovered)}
               y1={T}
-              y2={H - B}
+              y2={base}
               stroke="var(--color-axis)"
             />
-            {hovered != null && (
-              <circle
-                cx={x(hover)}
-                cy={y(hovered)}
-                r="4"
-                fill="var(--color-s1)"
-                stroke="var(--color-panel)"
-                strokeWidth="2"
-              />
-            )}
+            {dot(hovered, cur[hovered], 3.5)}
+            {dot(hovered, mean[hovered])}
           </g>
         )}
+        {/* Pointer events: a finger reads the chart as a mouse does. */}
         <rect
           data-testid="chart-hit"
           x={L}
           y={T}
           width={W - L - R}
-          height={H - T - B}
+          height={base - T}
           fill="transparent"
-          onMouseMove={onMove}
-          onMouseLeave={() => {
+          style={{ touchAction: "pan-y" }}
+          onPointerDown={onMove}
+          onPointerMove={onMove}
+          onPointerLeave={() => {
             setHover(null);
             hide();
           }}
@@ -418,27 +523,28 @@ export function MainChart({
   );
 }
 
-// Requests per class per bucket, stacked in the fixed class order.
+// Requests per class per bar, stacked in the fixed class order.
 export function StackChart({
   labels,
   series,
   classes = CLASSES,
+  axis,
   open,
-  hourly = false,
+  partial,
 }: {
   labels: string[];
   series: Record<ClassKey, number[]>;
   // Those the tooltip lists.
   classes?: typeof CLASSES;
+  axis: Axis;
   open: boolean;
-  hourly?: boolean;
+  partial: boolean[];
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const W = Math.max(280, useWidth(ref, 560));
   const { tip, show, hide } = useTip();
   const n = labels.length;
   const H = 250;
-  const L = 52;
   const R = 8;
   const T = 12;
   const B = 26;
@@ -448,16 +554,19 @@ export function StackChart({
         No requests in this range yet.
       </div>
     );
-  const stackTop = labels.map((_, i) =>
-    CLASSES.reduce((a, c) => a + (series[c.key]?.[i] ?? 0), 0),
+  const lines = scaleLines(
+    Math.max(
+      ...labels.map((_, i) =>
+        CLASSES.reduce((a, c) => a + (series[c.key]?.[i] ?? 0), 0),
+      ),
+    ),
+    "sum",
   );
-  const hi = nice(Math.max(...stackTop) * 1.02);
+  const hi = lines[lines.length - 1];
+  const L = Math.max(52, num(hi).length * CHAR + 14);
   const slot = (W - L - R) / n;
   const bw = Math.max(2, Math.min(34, slot - (slot > 8 ? 4 : 1)));
   const h = (v: number) => ((H - T - B) * v) / hi;
-  const step = labelStep(n, W - L - R);
-  const ticks: number[] = [];
-  for (let i = n - 1; i >= 0; i -= step) ticks.push(i);
   return (
     <div ref={ref}>
       <svg
@@ -468,31 +577,26 @@ export function StackChart({
         aria-label="Requests by class"
         className="block max-w-full"
       >
-        {[0, 0.5, 1].map((f) => {
-          const yy = H - B - h(hi * f);
-          return (
-            <g key={f}>
-              <line
-                x1={L}
-                x2={W - R}
-                y1={yy}
-                y2={yy}
-                stroke={f ? "var(--color-grid-minor)" : "var(--color-axis)"}
-              />
-              {/* Counts: no label where half-way is no whole number. */}
-              {Number.isInteger(hi * f) && (
-                <text x={L - 8} y={yy + 3.5} textAnchor="end">
-                  {num(hi * f)}
-                </text>
-              )}
-            </g>
-          );
-        })}
-        {ticks.map((i) => (
-          <text key={i} x={L + slot * (i + 0.5)} y={H - 7} textAnchor="middle">
-            {labels[i]}
-          </text>
+        {lines.map((v) => (
+          <g key={v}>
+            <line
+              x1={L}
+              x2={W - R}
+              y1={H - B - h(v)}
+              y2={H - B - h(v)}
+              stroke={v ? "var(--color-grid-minor)" : "var(--color-axis)"}
+            />
+            <text x={L - 8} y={H - B - h(v) + 3.5} textAnchor="end">
+              {num(v)}
+            </text>
+          </g>
         ))}
+        <TickLabels
+          ticks={axis.ticks}
+          x={(place) => L + slot * place}
+          right={W}
+          y={H - 7}
+        />
         {labels.map((lab, i) => {
           let base = H - B;
           const gap = bw > 5 ? 2 : 0;
@@ -501,6 +605,9 @@ export function StackChart({
             (c) => h(series[c.key]?.[i] ?? 0) >= 1,
           );
           const top = present[present.length - 1]?.key;
+          const note = !partial[i]
+            ? ""
+            : `${SEP}${open && i === n - 1 ? "still filling" : "part of a week"}`;
           return (
             <g key={i}>
               {present.map((c) => {
@@ -516,7 +623,7 @@ export function StackChart({
                     className="chart-bar"
                     style={{ animationDelay: `${Math.round((i * 380) / n)}ms` }}
                     fill={c.color}
-                    opacity={open && i === n - 1 ? 0.55 : 1}
+                    opacity={partial[i] ? 0.55 : 1}
                   />
                 );
               })}
@@ -530,7 +637,7 @@ export function StackChart({
                 onMouseMove={(e) =>
                   show(
                     e,
-                    bucketName(lab, hourly, open && i === n - 1),
+                    lab + note,
                     classes.map((c) => [c.label, num(series[c.key]?.[i] ?? 0)]),
                   )
                 }

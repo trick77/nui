@@ -26,13 +26,32 @@ export type SiteInfo = {
   feed: boolean;
 };
 
-export type Period = {
+// A mark on a chart's time axis. A place counts the chart's slots (or bars)
+// from its left edge.
+export type Tick = {
+  at: number;
+  label: string;
+  // Something begins there: a rule across the chart.
+  line: boolean;
+};
+
+// A chart's time axis: its ticks, and the weekends from place to place.
+export type Axis = { ticks: Tick[]; weekends: [number, number][] };
+
+export type Period = Axis & {
   from: string;
   to: string;
-  bucket: "hour" | "day" | "month";
-  labels: string[];
   prev_label: string;
-  last_bucket_open: boolean;
+  // What a point of the chart covers ("3 hours"), and the moving mean's
+  // window ("24 h").
+  slot: string;
+  mean: string;
+  // The slots' names.
+  labels: string[];
+  // The last slot is still filling.
+  open: boolean;
+  // The place the domain's figures begin at, null when before the range.
+  first: number | null;
   // Where the figures begin, when that is within the range; null otherwise.
   since: string | null;
 };
@@ -61,11 +80,15 @@ export type Tile = {
   value: number | null;
   prev: number | null;
   change: Change;
-  // flat with the comparison off; prev_series then empty.
+  // flat with the comparison off.
   verdict: Verdict;
+  // A figure per slot, and the moving mean of those over.
   series: (number | null)[];
-  prev_series: (number | null)[];
-  median: number | null;
+  mean: (number | null)[];
+  // The comparison's mean, and the one against the other (percent, points of
+  // a rate); both empty when there is none to draw.
+  prev_mean: (number | null)[];
+  delta: (number | null)[];
   server: boolean;
 };
 
@@ -122,10 +145,14 @@ export type ClassRow = {
   verdict: Verdict;
 };
 
-export type Classes = {
-  bucket: Period["bucket"];
+export type Classes = Axis & {
+  // The bars' names.
   labels: string[];
-  last_bucket_open: boolean;
+  // The last bar is still filling.
+  open: boolean;
+  // The bars that are less than a whole one: the open one, a week the range
+  // cuts.
+  partial: boolean[];
   series: Record<ClassKey, number[]>;
   rows: ClassRow[];
 };

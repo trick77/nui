@@ -210,8 +210,9 @@ function TrafficPanels({ classes }: { classes: Loaded<Classes> }) {
               labels={c.labels}
               series={c.series}
               classes={shown}
-              open={c.last_bucket_open}
-              hourly={c.bucket === "hour"}
+              axis={c}
+              open={c.open}
+              partial={c.partial}
             />
           )}
         </Panel>

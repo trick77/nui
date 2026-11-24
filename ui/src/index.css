@@ -507,12 +507,9 @@ body:has(.gate) {
   border-radius: 0;
   vertical-align: 3px;
 }
-.sw.dash {
-  height: 0;
-  width: 14px;
-  border-top: 2px dashed var(--color-ink-dim);
-  border-radius: 0;
-  vertical-align: 3px;
+.sw.line.thin {
+  height: 1px;
+  opacity: 0.6;
 }
 
 svg text {
