@@ -43,6 +43,8 @@ On every page, in `<head>`:
   and `pdfViewerEnabled`, the notification permission against the Permissions API, the WebGL renderer (an offscreen
   canvas, once per site in each browser, only in an idle period, kept in `localStorage` as `analytics.gl`; not in
   Safari), mouse moves and presses, input events a script dispatched.
+- Of its requests' headers the collector keeps `User-Agent`, `Accept-Language`, `Origin`, the client hints, the fetch
+  metadata and `Signature-Agent`, never cookies or credentials.
 - Local development on a host not in `sites.json` is refused (403) and the script stops: no switch needed. Including
   the tag only in production builds is fine too.
 

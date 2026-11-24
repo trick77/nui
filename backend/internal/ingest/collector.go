@@ -59,13 +59,15 @@ const (
 	feedBodyTimeout    = 30 * time.Second
 )
 
-// browserHeaders are the request headers the collector keeps, lower-case: the client hints and fetch metadata a
-// browser sends, and the agent a Web Bot Auth client names. Only these: the names are the caller's to choose, any
-// number of them.
+// browserHeaders are the request headers the collector keeps, lower-case: the client hints, Origin and fetch metadata
+// a browser sends, and the agent a Web Bot Auth client names. Only these: the names are the caller's to choose, any
+// number of them. Origin is kept for its presence alone: a browser sends it with the script's POST, a program need not.
+// Only its first value's host is checked (HandleBrowser), the text is the caller's: last in the list, it takes no other
+// header's room.
 var browserHeaders = []string{"accept-language", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
 	"sec-ch-ua-platform-version", "sec-ch-ua-model", "sec-ch-ua-arch", "sec-ch-ua-bitness",
 	"sec-ch-ua-full-version-list", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-user",
-	"signature-agent"}
+	"signature-agent", "origin"}
 
 // The browser rate limit (contract: 60 events / min per address or /64, 600 per /48; RateRule states it). The /64
 // burst admits the largest batch; the /48 tier (an IPv4 /24) bounds a caller rotating through its block.

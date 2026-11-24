@@ -423,6 +423,21 @@ func TestSignatureAgentKept(t *testing.T) {
 	}
 }
 
+// A beacon's Origin is kept with its headers; one without is still taken, and stores none.
+func TestOriginKept(t *testing.T) {
+	r := newRig(t, 0, true)
+	for i, origin := range []string{"https://" + domain, ""} {
+		if w := r.browser(batch(domain, 1, ""), fmt.Sprintf("203.0.113.%d", 20+i), origin); w.Code != http.StatusNoContent {
+			t.Fatalf("origin %q: %d %s", origin, w.Code, w.Body)
+		}
+		waitEvents(t, r.st, i+1)
+	}
+	_, props := storedRows(t, r.st)
+	if len(props) != 2 || !strings.Contains(props[0], `"origin":"https://`+domain+`"`) || strings.Contains(props[1], `"origin"`) {
+		t.Errorf("props %q", props)
+	}
+}
+
 // op and err are names: cleaned and clipped, never refused, and a field Trakk does not know (an emitter newer than
 // it) is ignored.
 func TestFeed_OperationAndFailure(t *testing.T) {
@@ -811,6 +826,7 @@ func TestBrowser_FirstRowBounds(t *testing.T) {
 	for _, name := range browserHeaders {
 		req.Header.Set(name, strings.Repeat(`"`, 300))
 	}
+	req.Header.Set("Origin", "https://"+domain) // any other is refused
 	w := httptest.NewRecorder()
 	r.c.HandleBrowser(w, req)
 	if w.Code != http.StatusNoContent {
