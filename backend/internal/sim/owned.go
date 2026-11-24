@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // The simulator marks what it writes, so nothing it leaves behind passes for real data. OwnerFile in a data
@@ -21,7 +21,7 @@ const (
 
 // mark writes a marker file saying who wrote the directory and why it matters.
 func mark(path, what string) error {
-	b, err := json.MarshalIndent(map[string]string{"written_by": "stakeout sim", "what": what}, "", "  ")
+	b, err := json.MarshalIndent(map[string]string{"written_by": "sim", "what": what}, "", "  ")
 	if err != nil {
 		return err
 	}

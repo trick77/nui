@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/apix"
-	"github.com/trick77/stakeout/backend/internal/app"
-	"github.com/trick77/stakeout/backend/internal/ingest"
-	"github.com/trick77/stakeout/backend/internal/sim"
-	"github.com/trick77/stakeout/backend/internal/sites"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/apix"
+	"github.com/trick77/trakk/backend/internal/app"
+	"github.com/trick77/trakk/backend/internal/ingest"
+	"github.com/trick77/trakk/backend/internal/sim"
+	"github.com/trick77/trakk/backend/internal/sites"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
@@ -37,9 +37,9 @@ func run(t *testing.T, vars map[string]string, args ...string) (int, string, str
 func TestExport(t *testing.T) {
 	t.Parallel()
 	// The ranges exported are the package's tests' (TestMain).
-	vars := map[string]string{"STAKEOUT_SIM_DAYS": "3", "STAKEOUT_SIM_SCALE": "0.3", "STAKEOUT_SIM_SCENARIOS": "api-walker"}
+	vars := map[string]string{"BACKEND_SIM_DAYS": "3", "BACKEND_SIM_SCALE": "0.3", "BACKEND_SIM_SCENARIOS": "api-walker"}
 	if raceOn {
-		vars["STAKEOUT_SIM_DAYS"], vars["STAKEOUT_SIM_SCALE"] = "1", "0.1"
+		vars["BACKEND_SIM_DAYS"], vars["BACKEND_SIM_SCALE"] = "1", "0.1"
 	}
 	dirs := []string{filepath.Join(t.TempDir(), "a"), filepath.Join(t.TempDir(), "b")}
 	for _, d := range dirs {
@@ -126,28 +126,28 @@ func TestCommands(t *testing.T) {
 	}
 	// The port server -sim listens on, as make sim hands it to the UI: the knob, or its default when it is bad.
 	for raw, want := range map[string]string{"9123": "9123\n", "x": "8080\n", "70000": "8080\n"} {
-		if code, out, _ := run(t, map[string]string{"STAKEOUT_SIM_PORT": raw}, "port"); code != 0 || out != want {
-			t.Errorf("port with STAKEOUT_SIM_PORT=%s: %d %q", raw, code, out)
+		if code, out, _ := run(t, map[string]string{"BACKEND_SIM_PORT": raw}, "port"); code != 0 || out != want {
+			t.Errorf("port with BACKEND_SIM_PORT=%s: %d %q", raw, code, out)
 		}
 	}
 	code, out, _ := run(t, nil, "scenarios")
 	if code != 0 || !strings.Contains(out, "api-walker (always)") || !strings.Contains(out, "Noteworthy lists the new referrer") {
 		t.Errorf("scenarios: %d %s", code, out)
 	}
-	code, out, errs := run(t, map[string]string{"STAKEOUT_SIM_DAYS": "2", "STAKEOUT_SIM_SCALE": "0.3",
-		"STAKEOUT_SIM_SCENARIOS": "cred-prober"}, "check")
+	code, out, errs := run(t, map[string]string{"BACKEND_SIM_DAYS": "2", "BACKEND_SIM_SCALE": "0.3",
+		"BACKEND_SIM_SCENARIOS": "cred-prober"}, "check")
 	if code != 0 || !strings.Contains(out, "cred-prober: ") {
 		t.Errorf("check: %d %s %s", code, out, errs)
 	}
 	// Backfill into an absent data directory: its sites file and reference data written, both marked as the
 	// simulator's; a second run refused (it would double the history), one with -wipe written anew.
 	dir := filepath.Join(t.TempDir(), "data")
-	vars := map[string]string{"STAKEOUT_SIM_DAYS": "1", "STAKEOUT_SIM_SCALE": "0.2", "STAKEOUT_SIM_SEED": "x"}
+	vars := map[string]string{"BACKEND_SIM_DAYS": "1", "BACKEND_SIM_SCALE": "0.2", "BACKEND_SIM_SEED": "x"}
 	backfill := func(args ...string) (int, string, string) {
 		return run(t, vars, append([]string{"backfill", "-data", dir, "-seed", "3"}, args...)...)
 	}
 	if code, out, errs := backfill(); code != 0 || !strings.Contains(out, "backfilled 1 days") ||
-		!strings.Contains(errs, "STAKEOUT_SIM_SEED=x") {
+		!strings.Contains(errs, "BACKEND_SIM_SEED=x") {
 		t.Fatalf("backfill: %d %s %s", code, out, errs)
 	}
 	for _, f := range []string{"app.db", "sites.json", "ref/crawlers.json", "ref/as-ip-blocks.tar.gz", sim.OwnerFile,
@@ -177,7 +177,7 @@ func TestCommands(t *testing.T) {
 		t.Errorf("the refused directory changed: %v", entries)
 	}
 	empty := filepath.Join(t.TempDir(), "empty")
-	if code, _, errs := run(t, map[string]string{"PUBLIC_FQDN": "stakeout.example.com"}, "backfill", "-data", empty); code != 1 ||
+	if code, _, errs := run(t, map[string]string{"PUBLIC_FQDN": "trakk.example.com"}, "backfill", "-data", empty); code != 1 ||
 		!strings.Contains(errs, "PUBLIC_FQDN") {
 		t.Errorf("a public host: %d %s", code, errs)
 	}
@@ -199,8 +199,8 @@ func TestCheckCountsTheBaseline(t *testing.T) {
 		}
 		return nil, nil
 	}
-	code, out, errs := run(t, map[string]string{"STAKEOUT_SIM_DAYS": "0", "STAKEOUT_SIM_SCALE": "0.01",
-		"STAKEOUT_SIM_CLASSIFY": "false"}, "check", "-scenarios", "cred-prober")
+	code, out, errs := run(t, map[string]string{"BACKEND_SIM_DAYS": "0", "BACKEND_SIM_SCALE": "0.01",
+		"BACKEND_SIM_CLASSIFY": "false"}, "check", "-scenarios", "cred-prober")
 	if code != 1 || !strings.Contains(out, "FAIL baseline") || !strings.Contains(out, "the baseline's), 1 failed") ||
 		!strings.Contains(errs, "not met") {
 		t.Errorf("a baseline failure: %d %s %s", code, out, errs)
@@ -248,7 +248,7 @@ func TestLiveCommand(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	code, out, errs := run(t, map[string]string{"STAKEOUT_SIM_SPEED": "3600"}, "live", "-target", srv.URL, "-for", "1s",
+	code, out, errs := run(t, map[string]string{"BACKEND_SIM_SPEED": "3600"}, "live", "-target", srv.URL, "-for", "1s",
 		"-rate", "200", "-key", "lens.example.com=custom-key")
 	if code != 0 || !strings.Contains(out, "live:") || feeds.Load() == 0 || unauthorized.Load() != 0 {
 		t.Errorf("live: %d %s %s, lens feeds %d, unauthorized %d", code, out, errs, feeds.Load(), unauthorized.Load())
@@ -257,7 +257,7 @@ func TestLiveCommand(t *testing.T) {
 		t.Errorf("a key for no site: %d", code)
 	}
 	// A wrong key is refused for good: the run stops, non-zero, and says so.
-	code, _, errs = run(t, map[string]string{"STAKEOUT_SIM_SPEED": "3600"}, "live", "-target", srv.URL, "-for", "20s",
+	code, _, errs = run(t, map[string]string{"BACKEND_SIM_SPEED": "3600"}, "live", "-target", srv.URL, "-for", "20s",
 		"-key", "lens.example.com=wrong-key")
 	if code != 1 || !strings.Contains(errs, "feed key is wrong") {
 		t.Errorf("a wrong key: %d %s", code, errs)
@@ -272,7 +272,7 @@ func TestServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	cfg := app.Config{PublicFQDN: "stakeout.example.com"}
+	cfg := app.Config{PublicFQDN: "trakk.example.com"}
 	if s.Configure(&cfg) == nil {
 		t.Error("a public host accepted")
 	}
@@ -340,7 +340,7 @@ func TestDemo(t *testing.T) {
 	}
 }
 
-// STAKEOUT_SIM_START is the world's anchor, not the wall time live mode begins: in the past or the future, the live
+// BACKEND_SIM_START is the world's anchor, not the wall time live mode begins: in the past or the future, the live
 // world starts at the anchor when serving begins, so the behaviours a minute after the start come a minute later.
 func TestServerStartsLiveAtTheAnchor(t *testing.T) {
 	for _, start := range []time.Time{time.Now().Add(-7 * 24 * time.Hour), time.Now().Add(7 * 24 * time.Hour)} {

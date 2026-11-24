@@ -1,4 +1,4 @@
-// Package sim is Stakeout's traffic simulator: one seeded model of a world (sites, the people visiting them, known
+// Package sim is Trakk's traffic simulator: one seeded model of a world (sites, the people visiting them, known
 // bots, uptime probes and unknown automation, and named scenarios on top) that delivers its traffic two ways. Backfill
 // drives the real collector in-process on a virtual clock, so a history goes through the same validation,
 // templating, enrichment, counters and classifier as real traffic; live sends the same requests to a running
@@ -14,7 +14,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/sites"
+	"github.com/trick77/trakk/backend/internal/sites"
 )
 
 // Site is one simulated site: what delivers its events and the shape of its paths.
@@ -67,7 +67,7 @@ func DefaultSites() []*Site {
 	}
 }
 
-// EmptySite is the configured site that never delivers (STAKEOUT_SIM_EMPTY_SITE).
+// EmptySite is the configured site that never delivers (BACKEND_SIM_EMPTY_SITE).
 func EmptySite() *Site {
 	return &Site{Domain: "new.example.net", Product: "Blog", Kind: "site", Script: true, Silent: true}
 }

@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/agg"
-	"github.com/trick77/stakeout/backend/internal/dash"
-	"github.com/trick77/stakeout/backend/internal/ingest"
-	"github.com/trick77/stakeout/backend/internal/sim"
-	"github.com/trick77/stakeout/backend/internal/sites"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/agg"
+	"github.com/trick77/trakk/backend/internal/dash"
+	"github.com/trick77/trakk/backend/internal/ingest"
+	"github.com/trick77/trakk/backend/internal/sim"
+	"github.com/trick77/trakk/backend/internal/sites"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // Dashboard is the dashboard API over st as of a minute after the world's anchor, its reference data the world's.

@@ -1,4 +1,4 @@
-module github.com/trick77/stakeout/backend
+module github.com/trick77/trakk/backend
 
 go 1.27.2
 

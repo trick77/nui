@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/sim"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/sim"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 var anchor = time.Date(2026, 11, 22, 13, 30, 0, 0, time.UTC)
@@ -108,7 +108,7 @@ func TestMain(m *testing.M) {
 func (h *sharedHistory) build(seed uint64, scale float64, days int, scenarios string, classifyLast int) error {
 	ctx := context.Background()
 	var err error
-	if h.dir, err = os.MkdirTemp("", "stakeout-simcli-test-"); err != nil {
+	if h.dir, err = os.MkdirTemp("", "trakk-simcli-test-"); err != nil {
 		return err
 	}
 	ref, err := sim.OpenReference(filepath.Join(h.dir, "ref"))

@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/agg"
-	"github.com/trick77/stakeout/backend/internal/classify"
-	"github.com/trick77/stakeout/backend/internal/plancheck"
-	"github.com/trick77/stakeout/backend/internal/sim"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/agg"
+	"github.com/trick77/trakk/backend/internal/classify"
+	"github.com/trick77/trakk/backend/internal/plancheck"
+	"github.com/trick77/trakk/backend/internal/sim"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // writeBeside keeps inserting into a site, as the collector does, until stop, which checks that it went well.

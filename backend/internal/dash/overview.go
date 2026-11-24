@@ -9,7 +9,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/apix"
+	"github.com/trick77/trakk/backend/internal/apix"
 )
 
 // browserNoise are the automatic kinds the Events tile leaves out: they describe a view, they are not something a

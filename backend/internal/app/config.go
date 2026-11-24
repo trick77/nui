@@ -38,7 +38,7 @@ type Config struct {
 	MaxDBMB int
 
 	// SessionSecret keys the session cookie's signature (with the admin token, sessionKey), 32+ characters; empty
-	// uses a secret Stakeout makes once in DataDir (SessionSecretFile).
+	// uses a secret Trakk makes once in DataDir (SessionSecretFile).
 	SessionSecret string
 
 	// OIDC: all four of issuer, client id, secret and redirect URL, or none; the group is optional.

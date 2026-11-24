@@ -13,17 +13,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/classify"
-	"github.com/trick77/stakeout/backend/internal/plancheck"
-	"github.com/trick77/stakeout/backend/internal/sim"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/classify"
+	"github.com/trick77/trakk/backend/internal/plancheck"
+	"github.com/trick77/trakk/backend/internal/sim"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 var anchor = time.Date(2026, 11, 22, 13, 30, 0, 0, time.UTC)
 
 func openStore(t *testing.T) *store.Store {
 	t.Helper()
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "trakk.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ var history = sync.OnceValues(func() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, "stakeout.db")
+	path := filepath.Join(dir, "trakk.db")
 	st, err := store.Open(ctxBackground(), path)
 	if err != nil {
 		return "", err
@@ -76,7 +76,7 @@ func historyCopy(t *testing.T) *store.Store {
 var historyDir string
 
 func tempDir() (string, error) {
-	d, err := os.MkdirTemp("", "stakeout-agg-")
+	d, err := os.MkdirTemp("", "trakk-agg-")
 	historyDir = d
 	return d, err
 }

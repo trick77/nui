@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 func TestLastDue(t *testing.T) {

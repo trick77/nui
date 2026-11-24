@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/trick77/stakeout/backend/internal/apix"
+	"github.com/trick77/trakk/backend/internal/apix"
 )
 
 func looksLikeBrowser(ua string) bool {

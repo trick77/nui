@@ -34,7 +34,7 @@ func newAuth(t *testing.T, disabled bool) *Auth {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Auth{Sessions: s, Group: "stakeout-admins", Disabled: disabled}
+	return &Auth{Sessions: s, Group: "trakk-admins", Disabled: disabled}
 }
 
 func routes(_ *testing.T, a *Auth) http.Handler {
@@ -70,12 +70,12 @@ func TestRoutes(t *testing.T) {
 		t.Errorf("GET / headers %v, an unknown path's %v", root.Header(), other.Header())
 	}
 	for path, want := range map[string]string{"/dashboard/": "dashboard /", "/dashboard/log": "dashboard /log",
-		"/stakeout.js": "tracker /stakeout.js"} {
+		"/trakk.js": "tracker /trakk.js"} {
 		if w := do(h, httptest.NewRequest("GET", path, nil)); w.Code != http.StatusOK || w.Body.String() != want {
 			t.Errorf("GET %s: %d %q", path, w.Code, w.Body)
 		}
 	}
-	w := do(h, httptest.NewRequest("GET", "/stakeout.js", nil))
+	w := do(h, httptest.NewRequest("GET", "/trakk.js", nil))
 	if w.Header().Get("Cross-Origin-Resource-Policy") != "cross-origin" {
 		t.Errorf("tracker CORP: %v", w.Header())
 	}
@@ -142,7 +142,7 @@ func TestDashboardGuard(t *testing.T) {
 	if w := do(h, r); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"detail"`) {
 		t.Errorf("outside the group: %d %q", w.Code, w.Body)
 	}
-	member := cookie(auth.Claims{Subject: "x", PreferredUsername: "jan", Groups: []string{"stakeout-admins"}})
+	member := cookie(auth.Claims{Subject: "x", PreferredUsername: "jan", Groups: []string{"trakk-admins"}})
 	r = httptest.NewRequest("GET", "/api/dash/overview", nil)
 	r.AddCookie(member)
 	if w := do(h, r); w.Code != http.StatusOK || w.Body.String() != "dash /api/dash/overview" {
@@ -205,10 +205,10 @@ func TestOIDCFlow(t *testing.T) {
 		name   string
 		groups []string
 		want   string
-	}{{"member", []string{"stakeout-admins"}, "/dashboard/"}, {"outsider", []string{"x"}, "/dashboard/?no_access=1"}} {
+	}{{"member", []string{"trakk-admins"}, "/dashboard/"}, {"outsider", []string{"x"}, "/dashboard/?no_access=1"}} {
 		a := newAuth(t, false)
 		idp := &fakeIDP{claims: auth.Claims{Subject: "s", Groups: tt.groups}}
-		a.SetOIDC(auth.NewOIDCWithBackend(idp, auth.OIDCConfig{Group: "stakeout-admins", CookiePrefix: CookiePrefix}))
+		a.SetOIDC(auth.NewOIDCWithBackend(idp, auth.OIDCConfig{Group: "trakk-admins", CookiePrefix: CookiePrefix}))
 		h := routes(t, a)
 		w := do(h, httptest.NewRequest("GET", "/api/auth/login", nil))
 		loc, _ := url.Parse(w.Header().Get("Location"))
@@ -277,7 +277,7 @@ func TestClientIPAndQuiet(t *testing.T) {
 		status int
 		want   bool
 	}{{"/api/in", 204, true}, {"/api/in", 429, true}, {"/api/in", 500, false}, {"/api/feed", 401, false},
-		{"/api/dash/overview", 200, false}} {
+		{"/trakk.js", 200, true}, {"/api/dash/overview", 200, false}} {
 		if got := quietIngest(httptest.NewRequest("POST", tt.path, nil), tt.status); got != tt.want {
 			t.Errorf("quietIngest(%s, %d) = %v", tt.path, tt.status, got)
 		}

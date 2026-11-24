@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/ingest"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/ingest"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 var anchor = time.Date(2026, 11, 22, 13, 30, 0, 0, time.UTC)

@@ -6,7 +6,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/agg"
+	"github.com/trick77/trakk/backend/internal/agg"
 )
 
 // The figures of an API (a site of kind api with a feed): its server requests as calls of endpoints.

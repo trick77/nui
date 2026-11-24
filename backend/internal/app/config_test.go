@@ -31,13 +31,13 @@ func TestLoadConfig_Defaults(t *testing.T) {
 func TestLoadConfig_FromEnv(t *testing.T) {
 	cfg, err := LoadConfig(lookup(map[string]string{
 		"BACKEND_ADDR":               "127.0.0.1:9090",
-		"BACKEND_DATA_DIR":           "/var/lib/stakeout",
+		"BACKEND_DATA_DIR":           "/var/lib/trakk",
 		"BACKEND_LOG_LEVEL":          "debug",
-		"PUBLIC_FQDN":                "stakeout.example.com",
+		"PUBLIC_FQDN":                "trakk.example.com",
 		"BACKEND_OIDC_ISSUER":        "https://auth.example.com",
-		"BACKEND_OIDC_CLIENT_ID":     "stakeout",
+		"BACKEND_OIDC_CLIENT_ID":     "trakk",
 		"BACKEND_OIDC_CLIENT_SECRET": "s",
-		"BACKEND_OIDC_ADMIN_GROUP":   "stakeout-admins",
+		"BACKEND_OIDC_ADMIN_GROUP":   "trakk-admins",
 		"BACKEND_SESSION_SECRET":     strings.Repeat("x", 32),
 		"BACKEND_RETENTION_MONTHS":   "13",
 		"BACKEND_RAW_RETENTION_DAYS": "15",
@@ -46,8 +46,8 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.OIDCRedirectURL != "https://stakeout.example.com/api/auth/callback" || !cfg.Secure() || !cfg.OIDCConfigured() ||
-		cfg.SitesFile != "/var/lib/stakeout/sites.json" || cfg.RetentionMonths != 13 || cfg.RawRetentionDays != 15 ||
+	if cfg.OIDCRedirectURL != "https://trakk.example.com/api/auth/callback" || !cfg.Secure() || !cfg.OIDCConfigured() ||
+		cfg.SitesFile != "/var/lib/trakk/sites.json" || cfg.RetentionMonths != 13 || cfg.RawRetentionDays != 15 ||
 		cfg.TrustedHops != 0 {
 		t.Errorf("cfg = %+v", cfg)
 	}
@@ -63,10 +63,10 @@ func TestLoadConfig_Faults(t *testing.T) {
 		"negative":    {"BACKEND_MAX_DB_MB": "-1"},
 		"secret":      {"BACKEND_SESSION_SECRET": "short"},
 		"half oidc":   {"BACKEND_OIDC_ISSUER": "https://auth.example.com"},
-		"auth off":    {"BACKEND_AUTH_DISABLED": "true", "PUBLIC_FQDN": "stakeout.example.com"},
+		"auth off":    {"BACKEND_AUTH_DISABLED": "true", "PUBLIC_FQDN": "trakk.example.com"},
 		"not a bool":  {"BACKEND_AUTH_DISABLED": "maybe"},
 		"not numeric": {"BACKEND_LLM_DAILY_CALLS": "many"},
-		"no sign-in":  {"PUBLIC_FQDN": "stakeout.example.com"},
+		"no sign-in":  {"PUBLIC_FQDN": "trakk.example.com"},
 		"short token": {"BACKEND_ADMIN_TOKEN": strings.Repeat("t", MinAdminTokenBytes-1)},
 		"long token":  {"BACKEND_ADMIN_TOKEN": strings.Repeat("t", MaxAdminTokenBytes+1)},
 		"hops":        {"BACKEND_TRUSTED_HOPS": "-1"},
@@ -76,12 +76,12 @@ func TestLoadConfig_Faults(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	_, err := LoadConfig(lookup(map[string]string{"PUBLIC_FQDN": "stakeout.example.com"}))
+	_, err := LoadConfig(lookup(map[string]string{"PUBLIC_FQDN": "trakk.example.com"}))
 	if err == nil || !strings.Contains(err.Error(), "no sign-in is configured") {
 		t.Errorf("production without sign-in: %v", err)
 	}
 	// The admin token alone is a sign-in.
-	if cfg, err := LoadConfig(lookup(map[string]string{"PUBLIC_FQDN": "stakeout.example.com",
+	if cfg, err := LoadConfig(lookup(map[string]string{"PUBLIC_FQDN": "trakk.example.com",
 		"BACKEND_ADMIN_TOKEN": strings.Repeat("t", MinAdminTokenBytes)})); err != nil || !cfg.TokenConfigured() {
 		t.Errorf("production with a token: %v", err)
 	}

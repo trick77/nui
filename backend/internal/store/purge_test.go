@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/app"
+	"github.com/trick77/trakk/backend/internal/app"
 )
 
 // purgeDays fills a site with n events on each of the days from first to last and builds each day clean by builder

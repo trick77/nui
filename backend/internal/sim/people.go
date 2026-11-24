@@ -343,11 +343,11 @@ func (w *World) loads(p *dayPlan, s *Site, per *person, pages []page, ref string
 	}
 }
 
-// batchWait is how long the script holds its first queued event before it sends the batch (stakeout.ts).
+// batchWait is how long the script holds its first queued event before it sends the batch (trakk.ts).
 const batchWait = 5 * time.Second
 
 // tracker plans the script's batches for a visit: events queued as they happen, a batch sent batchWait after the
-// first queued event, at twenty events, or at once when the page is hidden (stakeout.ts).
+// first queued event, at twenty events, or at once when the page is hidden (trakk.ts).
 func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref string, r rng, actor string, webdriver bool) {
 	type queued struct {
 		e     event

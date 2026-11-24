@@ -209,7 +209,7 @@ export default function Dashboard({ me }: { me: Me }) {
   return (
     <>
       <header className="topbar">
-        <span className="wordmark">Stakeout</span>
+        <span className="wordmark">Trakk</span>
         <nav aria-label="Sections">
           {nav.map(([label, id]) => (
             <a
@@ -288,8 +288,8 @@ export default function Dashboard({ me }: { me: Me }) {
         {!sites.error && !list && <Skeleton h={56} label="Loading domains" />}
         {list && list.length === 0 && (
           <div className="panel card text-[13.5px] text-muted">
-            No domain is set up yet. Add one to Stakeout's site list and load
-            the script on it; its numbers appear here.
+            No domain is set up yet. Add one to Trakk's site list and load the
+            script on it; its numbers appear here.
           </div>
         )}
         {dash && (

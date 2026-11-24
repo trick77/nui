@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 func zone(t *testing.T, name string) *time.Location {

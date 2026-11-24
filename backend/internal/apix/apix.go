@@ -1,4 +1,4 @@
-// Package apix writes Stakeout's JSON answers. Errors are {"detail": "…"} (the API contract), where kit's httpx
+// Package apix writes Trakk's JSON answers. Errors are {"detail": "…"} (the API contract), where kit's httpx
 // writes {"error": "…"}; everything else is kit's.
 package apix
 

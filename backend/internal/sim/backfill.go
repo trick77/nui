@@ -17,10 +17,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/classify"
-	"github.com/trick77/stakeout/backend/internal/ingest"
-	"github.com/trick77/stakeout/backend/internal/sites"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/classify"
+	"github.com/trick77/trakk/backend/internal/ingest"
+	"github.com/trick77/trakk/backend/internal/sites"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // Stats is what a delivery did.

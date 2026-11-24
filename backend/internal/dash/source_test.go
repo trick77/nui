@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/agg"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/agg"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // skipRace skips a test -race makes too slow for CI's ten minutes a package: the gate runs it whole without (ship.yaml).

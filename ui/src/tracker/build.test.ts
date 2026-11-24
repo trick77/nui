@@ -1,6 +1,6 @@
 // The shipped script, built as `npm run build` builds it: minified to its
 // property names, it must still send what the source sends and keep the
-// page's window.stakeout.
+// page's window.trakk.
 import {
   afterEach,
   beforeAll,
@@ -16,15 +16,15 @@ import {
   type InlineConfig,
   type Plugin,
 } from "vite";
-import source from "./stakeout.ts?raw";
-import { start, type Tracker } from "./stakeout";
+import source from "./trakk.ts?raw";
+import { start, type Tracker } from "./trakk";
 
 type TrackerApi = {
   build: (out: string, write?: boolean) => InlineConfig;
   props: RegExp;
 };
 
-const SRC = "https://collector.example.com/stakeout.js";
+const SRC = "https://collector.example.com/trakk.js";
 const NOW = new Date("2026-11-22T12:00:00Z");
 
 let code = "";
@@ -42,7 +42,7 @@ beforeAll(async () => {
     Array.isArray(p) ? p.forEach(walk) : all.push(p);
   walk(loaded!.config.plugins);
   const plugin = all.find(
-    (p) => (p as Plugin | null)?.name === "stakeout-tracker",
+    (p) => (p as Plugin | null)?.name === "trakk-tracker",
   ) as Plugin;
   const api = plugin.api as TrackerApi;
   props = api.props.source.replace(/^\^\(|\)\$$/g, "").split("|");
@@ -84,12 +84,12 @@ async function visit(load: () => void): Promise<unknown[]> {
   document.body.innerHTML =
     '<a id="out" href="https://github.com/ipverse">out</a>' +
     '<form id="s"><input type="search" name="q" value="AS15169"></form>';
-  (window as { stakeout?: unknown }).stakeout = { q: [["early", { a: 1 }]] };
+  (window as { trakk?: unknown }).trakk = { q: [["early", { a: 1 }]] };
   load();
-  const stakeout = (
-    window as unknown as { stakeout: { event: (...a: unknown[]) => void } }
-  ).stakeout;
-  stakeout.event("signup", { plan: "free", n: 2 });
+  const trakk = (
+    window as unknown as { trakk: { event: (...a: unknown[]) => void } }
+  ).trakk;
+  trakk.event("signup", { plan: "free", n: 2 });
   document.dispatchEvent(new Event("pointerdown"));
   document.dispatchEvent(new KeyboardEvent("keydown"));
   window.dispatchEvent(new Event("scroll"));
@@ -133,7 +133,7 @@ const keys = (v: unknown, out: Set<string>) => {
 };
 
 describe("the built script", () => {
-  it("sends what the source sends and keeps window.stakeout", async () => {
+  it("sends what the source sends and keeps window.trakk", async () => {
     let t: Tracker | null = null;
     const want = await visit(() => (t = start(window, SRC)));
     t!.stop();
@@ -166,7 +166,7 @@ describe("the built script", () => {
     for (const p of props) expect(wire.has(p), p).toBe(false);
   });
 
-  it("mangles no browser API and none of the page's window.stakeout", () => {
+  it("mangles no browser API and none of the page's window.trakk", () => {
     const owners: object[] = [
       window,
       document,
@@ -198,7 +198,7 @@ describe("the built script", () => {
     expect(props.length).toBeGreaterThan(20);
     for (const p of props) {
       for (const o of owners) expect(p in o, p).toBe(false);
-      expect(["stakeout", "event", "q", "push", "length"]).not.toContain(p);
+      expect(["trakk", "event", "q", "push", "length"]).not.toContain(p);
     }
   });
 
@@ -231,7 +231,7 @@ describe("the built script", () => {
     expect(source).toMatch(/\bstate: \(\) =>/);
     expect(code).not.toMatch(/\bstate:/);
     // Nor the bundle's global name.
-    expect(code).not.toContain("stakeoutTracker");
+    expect(code).not.toContain("trakkTracker");
     // What a page enforcing Trusted Types and a CSP refuses.
     expect(code).not.toMatch(
       /\beval\(|new Function|innerHTML|outerHTML|insertAdjacentHTML|document\.write|createElement\(|setTimeout\(\s*["'`]|setInterval|debugger/,
@@ -242,7 +242,7 @@ describe("the built script", () => {
       "analytics.sid",
       "analytics.seen",
       "/api/in",
-      "__stakeout",
+      "__trakk",
     ])
       expect(code).toContain(s);
   });

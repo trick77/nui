@@ -35,9 +35,9 @@ import (
 	"github.com/trick77/ship/kit/logging"
 	"github.com/trick77/ship/kit/run"
 
-	"github.com/trick77/stakeout/backend/internal/refdata"
-	"github.com/trick77/stakeout/backend/internal/sites"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/refdata"
+	"github.com/trick77/trakk/backend/internal/sites"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // Every is how often the pass runs.
@@ -415,7 +415,7 @@ func (c *Classifier) setRecheck(k actorKey, pending bool) {
 const beaconWindow = int64(time.Minute / time.Millisecond)
 
 // beaconsElsewhere marks the clients without a browser's evidence on their own address whose page drew a beacon
-// from another: the page reaches the product and the beacon Stakeout over different paths (dual stack, a relay that
+// from another: the page reaches the product and the beacon Trakk over different paths (dual stack, a relay that
 // leaves per host), so their address keys differ. The beacon must name the same page with the same user agent within
 // a minute: a crawler wearing a browser's user agent rarely meets a person's beacon for the same page that closely.
 func (c *Classifier) beaconsElsewhere(ctx context.Context, site int64, m actorKey, uas []uaDay, f siteFacts) error {

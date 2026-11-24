@@ -67,7 +67,7 @@ export default function App() {
             width={30}
             height={30}
           />
-          Stakeout
+          Trakk
         </h1>
         {auth.state === "checking" && (
           <p className="m-0 text-[13.5px] text-muted" aria-busy="true">
@@ -77,7 +77,7 @@ export default function App() {
         {auth.state === "out" && (
           <>
             <p className="m-0 mb-4 text-[13.5px] text-ink-dim">
-              Usage analytics for your own web products.
+              Web traffic observability for your own products.
             </p>
             <SignIn
               lost={lost}

@@ -16,7 +16,7 @@ import (
 	"github.com/trick77/ship/kit/run"
 	"github.com/trick77/ship/kit/secret"
 
-	"github.com/trick77/stakeout/backend/internal/apix"
+	"github.com/trick77/trakk/backend/internal/apix"
 )
 
 // SessionCookie is the session cookie's name. Cookie names never carry the product's name (user): a rename would

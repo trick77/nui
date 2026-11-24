@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/sim"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/sim"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // The parameter sets the UI asks for (ui/src/api.ts and its callers): every range; the audiences and comparisons

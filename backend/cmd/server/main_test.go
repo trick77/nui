@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/app"
+	"github.com/trick77/trakk/backend/internal/app"
 )
 
 // The shutdown fits compose.yaml's stop_grace_period: past it Docker kills the process and the writer's tail and
@@ -33,7 +33,7 @@ func TestShutdownBudget(t *testing.T) {
 
 // The simulator's modes are development only: never together, never with a public host.
 func TestStartMode(t *testing.T) {
-	pub := app.Config{PublicFQDN: "stakeout.example.com"}
+	pub := app.Config{PublicFQDN: "trakk.example.com"}
 	for _, c := range []struct {
 		cfg      app.Config
 		simulate bool

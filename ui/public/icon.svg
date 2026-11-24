@@ -1,5 +1,5 @@
 <!--
-  Stakeout's icon: a column chart on its axes, on a shaded chip. The chip is the ink
+  Trakk's icon: a column chart on its axes, on a shaded chip. The chip is the ink
   and the mark sits on it in the app's own ground colour. Format and
   construction are ../transmission-ui's ui/icons/icon.svg; read that file for
   the full argument. What follows is only what differs here.
