@@ -15,7 +15,7 @@ import (
 	"github.com/ncruces/go-sqlite3"
 	sqlite3driver "github.com/ncruces/go-sqlite3/driver"
 
-	"github.com/trick77/stakeout/backend/internal/plancheck"
+	"github.com/trick77/trakk/backend/internal/plancheck"
 )
 
 func aggAddrs(site, day int64, n int) []AggAddr {

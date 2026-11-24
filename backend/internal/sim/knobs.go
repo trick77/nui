@@ -8,25 +8,25 @@ import (
 	"time"
 )
 
-// Knobs are the simulator's settings, read from STAKEOUT_SIM_* environment variables. A value that does not parse or is
+// Knobs are the simulator's settings, read from BACKEND_SIM_* environment variables. A value that does not parse or is
 // out of range falls back to its default with a warning: a typo must not poison the world.
 type Knobs struct {
-	Seed  uint64  // STAKEOUT_SIM_SEED: the world's seed
-	Scale float64 // STAKEOUT_SIM_SCALE: volume, 1 a small product
-	Speed float64 // STAKEOUT_SIM_SPEED: world time per wall time, live
-	Port  int     // STAKEOUT_SIM_PORT: the simulated server's port
-	Days  int     // STAKEOUT_SIM_DAYS: history backfilled before live time starts
-	// Scenarios (STAKEOUT_SIM_SCENARIOS) is a comma-separated list, "all" for every one.
+	Seed  uint64  // BACKEND_SIM_SEED: the world's seed
+	Scale float64 // BACKEND_SIM_SCALE: volume, 1 a small product
+	Speed float64 // BACKEND_SIM_SPEED: world time per wall time, live
+	Port  int     // BACKEND_SIM_PORT: the simulated server's port
+	Days  int     // BACKEND_SIM_DAYS: history backfilled before live time starts
+	// Scenarios (BACKEND_SIM_SCENARIOS) is a comma-separated list, "all" for every one.
 	Scenarios string
-	// Start (STAKEOUT_SIM_START, RFC 3339) is the anchor: the end of the history. Zero: now.
+	// Start (BACKEND_SIM_START, RFC 3339) is the anchor: the end of the history. Zero: now.
 	Start time.Time
-	// Classify (STAKEOUT_SIM_CLASSIFY) runs the classifier's pass over the backfill.
+	// Classify (BACKEND_SIM_CLASSIFY) runs the classifier's pass over the backfill.
 	Classify bool
-	// The awkward behaviours, live from a minute after the start. FeedOutage (STAKEOUT_SIM_FEED_OUTAGE, minutes): the
-	// first feed site's emitter is down that long. Flood (STAKEOUT_SIM_FLOOD: addr, 64 or 48): a flood for ten minutes.
-	// LateFeed (STAKEOUT_SIM_LATE_FEED, minutes or "never"): the last feed site's feed has not delivered yet and starts
+	// The awkward behaviours, live from a minute after the start. FeedOutage (BACKEND_SIM_FEED_OUTAGE, minutes): the
+	// first feed site's emitter is down that long. Flood (BACKEND_SIM_FLOOD: addr, 64 or 48): a flood for ten minutes.
+	// LateFeed (BACKEND_SIM_LATE_FEED, minutes or "never"): the last feed site's feed has not delivered yet and starts
 	// that long after the start (0: at the start); LateFeedOff and LateFeedNever are no delay. SlowMS
-	// (STAKEOUT_SIM_SLOW_MS): every dashboard answer waits that long. EmptySite (STAKEOUT_SIM_EMPTY_SITE): one more site,
+	// (BACKEND_SIM_SLOW_MS): every dashboard answer waits that long. EmptySite (BACKEND_SIM_EMPTY_SITE): one more site,
 	// configured, that never delivers.
 	FeedOutage time.Duration
 	Flood      string
@@ -47,7 +47,7 @@ func DefaultKnobs() Knobs {
 		LateFeed: LateFeedOff}
 }
 
-// Limit is a numeric knob's range, the same for its STAKEOUT_SIM_* variable and its flag.
+// Limit is a numeric knob's range, the same for its BACKEND_SIM_* variable and its flag.
 type Limit struct {
 	lo, hi float64
 	whole  bool
@@ -154,54 +154,54 @@ func ReadKnobs(getenv func(string) string, warn func(string)) Knobs {
 	whole := func(name string, fallback int, l Limit) int {
 		return int(num(name, float64(fallback), l))
 	}
-	if raw := strings.TrimSpace(getenv("STAKEOUT_SIM_SEED")); raw != "" {
+	if raw := strings.TrimSpace(getenv("BACKEND_SIM_SEED")); raw != "" {
 		if s, err := strconv.ParseUint(raw, 10, 64); err == nil {
 			k.Seed = s
 		} else {
-			bad("STAKEOUT_SIM_SEED", raw, "a whole number from 0", k.Seed)
+			bad("BACKEND_SIM_SEED", raw, "a whole number from 0", k.Seed)
 		}
 	}
-	k.Scale = num("STAKEOUT_SIM_SCALE", k.Scale, ScaleLimit)
-	k.Speed = num("STAKEOUT_SIM_SPEED", k.Speed, SpeedLimit)
-	k.Port = whole("STAKEOUT_SIM_PORT", k.Port, portLimit)
-	k.Days = whole("STAKEOUT_SIM_DAYS", k.Days, daysLimit)
-	if raw := strings.TrimSpace(getenv("STAKEOUT_SIM_SCENARIOS")); raw != "" {
+	k.Scale = num("BACKEND_SIM_SCALE", k.Scale, ScaleLimit)
+	k.Speed = num("BACKEND_SIM_SPEED", k.Speed, SpeedLimit)
+	k.Port = whole("BACKEND_SIM_PORT", k.Port, portLimit)
+	k.Days = whole("BACKEND_SIM_DAYS", k.Days, daysLimit)
+	if raw := strings.TrimSpace(getenv("BACKEND_SIM_SCENARIOS")); raw != "" {
 		var keep []string
 		for _, n := range strings.Split(raw, ",") {
 			if _, err := Scenarios(n); err != nil {
-				warn(fmt.Sprintf("STAKEOUT_SIM_SCENARIOS: %v; left out", err))
+				warn(fmt.Sprintf("BACKEND_SIM_SCENARIOS: %v; left out", err))
 				continue
 			}
 			keep = append(keep, strings.TrimSpace(n))
 		}
 		k.Scenarios = strings.Join(keep, ",")
 	}
-	if raw := strings.TrimSpace(getenv("STAKEOUT_SIM_START")); raw != "" {
+	if raw := strings.TrimSpace(getenv("BACKEND_SIM_START")); raw != "" {
 		if t, err := time.Parse(time.RFC3339, raw); err == nil {
 			k.Start = t
 		} else {
-			bad("STAKEOUT_SIM_START", raw, "an RFC 3339 time", "now")
+			bad("BACKEND_SIM_START", raw, "an RFC 3339 time", "now")
 		}
 	}
-	k.Classify = flag("STAKEOUT_SIM_CLASSIFY", k.Classify)
-	k.FeedOutage = time.Duration(num("STAKEOUT_SIM_FEED_OUTAGE", 0, minutesLimit) * float64(time.Minute))
-	switch raw := strings.TrimSpace(getenv("STAKEOUT_SIM_FLOOD")); raw {
+	k.Classify = flag("BACKEND_SIM_CLASSIFY", k.Classify)
+	k.FeedOutage = time.Duration(num("BACKEND_SIM_FEED_OUTAGE", 0, minutesLimit) * float64(time.Minute))
+	switch raw := strings.TrimSpace(getenv("BACKEND_SIM_FLOOD")); raw {
 	case "", "addr", "64", "48":
 		k.Flood = raw
 	default:
-		bad("STAKEOUT_SIM_FLOOD", raw, "addr, 64 or 48", "no flood")
+		bad("BACKEND_SIM_FLOOD", raw, "addr, 64 or 48", "no flood")
 	}
-	switch raw := strings.TrimSpace(getenv("STAKEOUT_SIM_LATE_FEED")); raw {
+	switch raw := strings.TrimSpace(getenv("BACKEND_SIM_LATE_FEED")); raw {
 	case "":
 	case "never":
 		k.LateFeed = LateFeedNever
 	default:
-		if m := num("STAKEOUT_SIM_LATE_FEED", -1, minutesLimit); m >= 0 {
+		if m := num("BACKEND_SIM_LATE_FEED", -1, minutesLimit); m >= 0 {
 			k.LateFeed = time.Duration(m * float64(time.Minute))
 		}
 	}
-	k.SlowMS = whole("STAKEOUT_SIM_SLOW_MS", 0, slowLimit)
-	k.EmptySite = flag("STAKEOUT_SIM_EMPTY_SITE", false)
+	k.SlowMS = whole("BACKEND_SIM_SLOW_MS", 0, slowLimit)
+	k.EmptySite = flag("BACKEND_SIM_EMPTY_SITE", false)
 	return k
 }
 

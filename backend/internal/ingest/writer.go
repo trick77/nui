@@ -13,7 +13,7 @@ import (
 
 	"github.com/trick77/ship/kit/logging"
 
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // Writer limits.

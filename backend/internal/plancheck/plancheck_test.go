@@ -4,13 +4,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // The checker on the real schema: what reads a table or a site in full is named, through aliases, comma joins and
 // an alias used twice; one-key, one-day and single-probe reads pass.
 func TestProblem(t *testing.T) {
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stakeout.db"))
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "trakk.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

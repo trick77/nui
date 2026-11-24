@@ -1,11 +1,11 @@
-// Entry of /stakeout.js. document.currentScript is only set while the script
+// Entry of /trakk.js. document.currentScript is only set while the script
 // runs for the first time, so it is read here, synchronously.
-import { start } from "./stakeout";
+import { start } from "./trakk";
 
 try {
-  const w = window as Window & typeof globalThis & { __stakeout?: boolean };
-  if (!w.__stakeout) {
-    w.__stakeout = true;
+  const w = window as Window & typeof globalThis & { __trakk?: boolean };
+  if (!w.__trakk) {
+    w.__trakk = true;
     const s = document.currentScript as HTMLScriptElement | null;
     start(w, s ? s.src : null);
   }

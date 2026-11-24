@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/insight"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/insight"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // Briefing answers from the cache, and only with a briefing written for the input's set of fact ids: the ids carry
@@ -64,7 +64,7 @@ func briefSchema(ids []string) map[string]any {
 	}
 }
 
-const briefPrompt = `You brief the owner of a website about its analytics. The data holds the period's headline ` +
+const briefPrompt = `You brief the owner of a website about its traffic. The data holds the period's headline ` +
 	`figures (for context only, they cannot be cited) and a list of findings, each with an id. Choose the findings ` +
 	`that matter most for someone who wants to act (at most five), most important first. A line cites findings by ` +
 	`their id, only ids from the findings list; findings of one kind that are clearly one thing (one operator, ` +

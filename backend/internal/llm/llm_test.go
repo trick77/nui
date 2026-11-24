@@ -14,8 +14,8 @@ import (
 	"github.com/trick77/toolkit/llmwire"
 	"github.com/trick77/toolkit/llmwire/llmwiretest"
 
-	"github.com/trick77/stakeout/backend/internal/insight"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/insight"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 type rig struct {

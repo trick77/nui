@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/apix"
-	"github.com/trick77/stakeout/backend/internal/insight"
+	"github.com/trick77/trakk/backend/internal/apix"
+	"github.com/trick77/trakk/backend/internal/insight"
 )
 
 // maxItems is how many findings Noteworthy shows; the rest is "n more".

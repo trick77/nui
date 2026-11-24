@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/agg"
-	"github.com/trick77/stakeout/backend/internal/sites"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/agg"
+	"github.com/trick77/trakk/backend/internal/sites"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 const apiSite = "gateway.example.com"

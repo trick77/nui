@@ -494,7 +494,7 @@ function VisitorDetail({
             ) : (
               <p className="mt-1.5 mb-0 text-[13px] text-muted">
                 No reading for this address yet; the signals above are what
-                Stakeout measured.
+                Trakk measured.
               </p>
             )}
             <div className="eyebrow mt-4">

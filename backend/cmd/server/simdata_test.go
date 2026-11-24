@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/trick77/stakeout/backend/internal/app"
-	"github.com/trick77/stakeout/backend/internal/sim"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/app"
+	"github.com/trick77/trakk/backend/internal/sim"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // What the simulator leaves in a data directory changes nothing in a normal run: its reference data is discarded,
@@ -31,7 +31,7 @@ func TestCheckDataDir(t *testing.T) {
 		t.Fatalf("-demo: %v, reference kept %v", err, sim.SimulatedReference(ref))
 	}
 	pub := cfg
-	pub.PublicFQDN = "stakeout.example.com"
+	pub.PublicFQDN = "trakk.example.com"
 	if err := checkDataDir(pub, normalRun); err == nil || !strings.Contains(err.Error(), sim.OwnerFile) {
 		t.Errorf("a deployment on simulated data: %v", err)
 	}

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/agg"
-	"github.com/trick77/stakeout/backend/internal/app"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/agg"
+	"github.com/trick77/trakk/backend/internal/app"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // purge runs the raw purge on the rig's store at its now, the grace passed, keeping raw days.

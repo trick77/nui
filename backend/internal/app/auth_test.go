@@ -121,8 +121,8 @@ func tokenPost(body string) *http.Request {
 }
 
 func TestAuthMethods(t *testing.T) {
-	oidc := map[string]string{"BACKEND_OIDC_ISSUER": "https://auth.example.com", "BACKEND_OIDC_CLIENT_ID": "stakeout",
-		"BACKEND_OIDC_CLIENT_SECRET": "s", "BACKEND_OIDC_REDIRECT_URL": "https://stakeout.example.com/api/auth/callback"}
+	oidc := map[string]string{"BACKEND_OIDC_ISSUER": "https://auth.example.com", "BACKEND_OIDC_CLIENT_ID": "trakk",
+		"BACKEND_OIDC_CLIENT_SECRET": "s", "BACKEND_OIDC_REDIRECT_URL": "https://trakk.example.com/api/auth/callback"}
 	both := map[string]string{"BACKEND_ADMIN_TOKEN": testToken}
 	for k, v := range oidc {
 		both[k] = v
@@ -148,7 +148,7 @@ func TestAuthMethods(t *testing.T) {
 }
 
 func TestTokenSignIn(t *testing.T) {
-	a := tokenAuth(t, map[string]string{"BACKEND_ADMIN_TOKEN": testToken, "BACKEND_OIDC_ADMIN_GROUP": "stakeout-admins"})
+	a := tokenAuth(t, map[string]string{"BACKEND_ADMIN_TOKEN": testToken, "BACKEND_OIDC_ADMIN_GROUP": "trakk-admins"})
 	h := routes(t, a)
 	var logs bytes.Buffer
 	prev := slog.Default()

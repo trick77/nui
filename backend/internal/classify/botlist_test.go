@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/refdata"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/refdata"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // anyCrawlers and anyMonitors are made-up services, one of each kind the list has: the classifier knows no service by

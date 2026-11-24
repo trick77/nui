@@ -19,8 +19,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/trick77/stakeout/backend/internal/sites"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/sites"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 const (
@@ -423,7 +423,7 @@ func TestSignatureAgentKept(t *testing.T) {
 	}
 }
 
-// op and err are names: cleaned and clipped, never refused, and a field Stakeout does not know (an emitter newer than
+// op and err are names: cleaned and clipped, never refused, and a field Trakk does not know (an emitter newer than
 // it) is ignored.
 func TestFeed_OperationAndFailure(t *testing.T) {
 	r := newRig(t, 0, true)

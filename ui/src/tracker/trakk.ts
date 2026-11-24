@@ -280,7 +280,7 @@ export type Tracker = {
   };
 };
 
-type StakeoutGlobal = {
+type TrakkGlobal = {
   q?: unknown;
   event?: unknown;
 };
@@ -296,9 +296,7 @@ export function start(
   const loc = win.location;
   let src = scriptSrc;
   if (!src) {
-    const el = doc.querySelector<HTMLScriptElement>(
-      'script[src*="/stakeout.js"]',
-    );
+    const el = doc.querySelector<HTMLScriptElement>('script[src*="/trakk.js"]');
     src = el ? el.src : "";
   }
   if (!src) return null;
@@ -1398,16 +1396,16 @@ export function start(
       const n = clip(name, 128);
       if (n) record("custom", cleanProps(props), n);
     });
-  const g = win as unknown as { stakeout?: StakeoutGlobal };
-  const stub = g.stakeout;
+  const g = win as unknown as { trakk?: TrakkGlobal };
+  const stub = g.trakk;
   const pending = stub && Array.isArray(stub.q) ? (stub.q as unknown[]) : [];
   try {
-    g.stakeout = {
+    g.trakk = {
       event,
       q: { push: (a: unknown) => replay(a) },
     };
   } catch {
-    // a non-writable window.stakeout: custom events stay unavailable
+    // a non-writable window.trakk: custom events stay unavailable
   }
   function replay(a: unknown) {
     if (a && typeof a === "object" && "length" in a) {

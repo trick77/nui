@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import source from "./stakeout.ts?raw";
+import source from "./trakk.ts?raw";
 import {
   LIMITS,
   cleanProps,
@@ -7,7 +7,7 @@ import {
   start,
   utf8Len,
   type Tracker,
-} from "./stakeout";
+} from "./trakk";
 
 type Body = {
   v: number;
@@ -23,7 +23,7 @@ type Body = {
   }[];
 };
 
-const SRC = "https://collector.example.com/stakeout.js";
+const SRC = "https://collector.example.com/trakk.js";
 const win = window as Window & typeof globalThis;
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -46,7 +46,7 @@ function boot(): Tracker {
 beforeEach(() => {
   vi.useFakeTimers({ now: new Date("2026-11-22T12:00:00Z") });
   localStorage.clear();
-  delete (win as { stakeout?: unknown }).stakeout;
+  delete (win as { trakk?: unknown }).trakk;
   fetchMock = vi.fn(() => reply(204));
   vi.stubGlobal("fetch", fetchMock);
   history.replaceState(null, "", "/");
@@ -459,7 +459,7 @@ describe("sending", () => {
     });
 
     it("sends the document's referrer with its first session only", async () => {
-      const from = "https://search.example.org/?q=stakeout";
+      const from = "https://search.example.org/?q=trakk";
       Object.defineProperty(document, "referrer", {
         configurable: true,
         value: from,
@@ -959,7 +959,7 @@ describe("sending", () => {
 
   it("finds its own script tag when currentScript is gone", () => {
     const s = document.createElement("script");
-    s.setAttribute("src", "https://other.example.org/stakeout.js");
+    s.setAttribute("src", "https://other.example.org/trakk.js");
     document.head.appendChild(s);
     tracker = start(win, null);
     expect(tracker).not.toBeNull();
@@ -1499,7 +1499,7 @@ describe("capture", () => {
       value: true,
       configurable: true,
     });
-    (win as { stakeout?: unknown }).stakeout = { q: [["early", {}]] };
+    (win as { trakk?: unknown }).trakk = { q: [["early", {}]] };
     try {
       const t = boot();
       emit("paint", [{ name: "first-contentful-paint", startTime: 300 }]);
@@ -1535,18 +1535,18 @@ describe("capture", () => {
   });
 
   it("takes custom events, including those queued before it loaded", async () => {
-    (win as { stakeout?: unknown }).stakeout = {
+    (win as { trakk?: unknown }).trakk = {
       q: [["copy_prefix_list", { asn: 15169 }]],
     };
     const t = boot();
     const g = (
       win as unknown as {
-        stakeout: {
+        trakk: {
           event: (n: string, p?: unknown) => void;
           q: { push: (a: unknown) => void };
         };
       }
-    ).stakeout;
+    ).trakk;
     g.event("signup", { plan: "free" });
     g.q.push(["late", {}]);
     g.event("", {});

@@ -22,11 +22,11 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/trick77/stakeout/backend/internal/agg"
-	"github.com/trick77/stakeout/backend/internal/apix"
-	"github.com/trick77/stakeout/backend/internal/classify"
-	"github.com/trick77/stakeout/backend/internal/insight"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/agg"
+	"github.com/trick77/trakk/backend/internal/apix"
+	"github.com/trick77/trakk/backend/internal/classify"
+	"github.com/trick77/trakk/backend/internal/insight"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // actors sums every address key over the range, a piece (a UTC day at most) at a time from its source. Visits are

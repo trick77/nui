@@ -8,12 +8,15 @@ import (
 
 	"github.com/trick77/ship/kit/httpx"
 
-	"github.com/trick77/stakeout/backend/internal/apix"
+	"github.com/trick77/trakk/backend/internal/apix"
 )
 
 // DashboardPath is where the SPA lives. The server mounts it itself, no StripPrefix at the proxy: the collector
 // shares the host under /api.
 const DashboardPath = "/dashboard"
+
+// trackerPath is the browser script's path, the one products' pages load.
+const trackerPath = "/trakk.js"
 
 // Routes are the handlers Build mounts; nil ones are left out (tests).
 type Routes struct {
@@ -21,7 +24,7 @@ type Routes struct {
 	TrustedHops int
 	// Dashboard serves the UI with DashboardPath stripped (web.Handler).
 	Dashboard http.Handler
-	// Tracker serves /stakeout.js (web.Tracker).
+	// Tracker serves /trakk.js (web.Tracker).
 	Tracker http.Handler
 	// Browser and Feed are the collector's POST /api/in and POST /api/feed.
 	Browser, Feed http.Handler
@@ -48,7 +51,7 @@ func Build(rt Routes) http.Handler {
 	// The collector and the tracker are called from other sites' pages: outside the CSRF guard. The browser
 	// endpoint is a CORS-simple POST (text/plain), open to any origin and never with credentials.
 	if rt.Tracker != nil {
-		mux.Handle("GET /stakeout.js", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.Handle("GET "+trackerPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
 			rt.Tracker.ServeHTTP(w, r)
 		}))
@@ -110,7 +113,7 @@ func chain(h http.Handler, hops int) http.Handler {
 // quietIngest keeps the collector out of the access log unless it failed: every page view of every site would be a
 // line, and a flood's refusals are what the counters are for.
 func quietIngest(r *http.Request, status int) bool {
-	if r.URL.Path != "/api/in" && r.URL.Path != "/api/feed" && r.URL.Path != "/stakeout.js" {
+	if r.URL.Path != "/api/in" && r.URL.Path != "/api/feed" && r.URL.Path != trackerPath {
 		return false
 	}
 	return status < 500 && status != http.StatusUnauthorized

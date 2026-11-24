@@ -79,7 +79,7 @@ export function parseView(pathname: string, search: string): View {
   };
 }
 
-export const PRODUCT = "Stakeout";
+export const PRODUCT = "Trakk";
 
 // The tab names the domain shown and, on the log, the address or network it
 // follows or the log itself: several tabs open side by side stay apart.

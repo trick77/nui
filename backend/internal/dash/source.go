@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // Source is where the dashboard reads the figures the aggregate tables can serve.

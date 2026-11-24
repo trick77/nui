@@ -1,9 +1,9 @@
 # AGENTS.md
 
-Self-hosted, passive usage analytics for the user's own web products. One host: collector under `/api`, dashboard
-under `/dashboard`. `backend/`: Go on ship's kit, embeds `ui/` (React, Vite, Tailwind).
+Self-hosted, passive web traffic observability, never "web analytics" in copy (user: no funnels). One host: collector
+under `/api`, dashboard under `/dashboard`. `backend/`: Go on ship's kit, embeds `ui/`.
 
-`INTEGRATION.md` is what other repos' agents read to add Stakeout: a change to `/stakeout.js`, `/api/in`,
+`INTEGRATION.md` is what other repos' agents read to add Trakk: a change to `/trakk.js`, `/api/in`,
 `/api/feed` or `sites.json` updates it in the same commit.
 
 ## Decisions
@@ -13,8 +13,8 @@ under `/dashboard`. `backend/`: Go on ship's kit, embeds `ui/` (React, Vite, Tai
 - Hostname only in `.env` (`PUBLIC_FQDN`); code, tests and examples use `example.com`. TLS: Traefik's wildcard
   certificate, no certresolver.
 - Stored names never carry the product's name (user): database file, cookies, session key label, `localStorage`
-  keys, simulator markers. A rename once started the server on an empty database beside its data and would have
-  signed everyone out and counted every browser as new.
+  keys, simulator markers, env vars. A rename once started the server on an empty
+  database beside its data and would have signed everyone out and counted every browser as new.
 - Migrations: never edit an applied one; the next number, DDL only, data steps are background jobs (0004 copies two
   tables: a CHECK changes no other way, owner's OK). `docs/schema.md` is generated: `SCHEMADOC_UPDATE=1 go test ./... -run TestSchemaDoc` in `backend/`.
 - Aggregates (owner): every raw change (writes, restamps, retention's cuts) bumps a built day's version in the same

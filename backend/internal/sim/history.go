@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // HistoryOptions shape History.
@@ -33,7 +33,7 @@ type HistoryOptions struct {
 //		Scenarios: "api-walker", Classify: true})
 func History(ctx context.Context, st *store.Store, o HistoryOptions) (*World, Stats, error) {
 	if o.RefDir == "" {
-		dir, err := os.MkdirTemp("", "stakeout-sim-ref-")
+		dir, err := os.MkdirTemp("", "trakk-sim-ref-")
 		if err != nil {
 			return nil, Stats{}, err
 		}

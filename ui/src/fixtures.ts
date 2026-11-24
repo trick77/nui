@@ -1424,7 +1424,7 @@ function domain(site: string, feed: boolean, script: boolean): Domain {
         ? { state: "receiving", last: "2026-11-22T13:20:00Z" }
         : null,
       feed: FEEDS.includes(site),
-      script: "/stakeout.js",
+      script: "/trakk.js",
       build: "3f2a91c",
       first: FIGURES_SINCE,
     },

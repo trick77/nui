@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trick77/stakeout/backend/internal/agg"
-	"github.com/trick77/stakeout/backend/internal/dash"
-	"github.com/trick77/stakeout/backend/internal/sim"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/agg"
+	"github.com/trick77/trakk/backend/internal/dash"
+	"github.com/trick77/trakk/backend/internal/sim"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // distinctDims are the lists whose rows hold a distinct count (pages, entry, referrers, countries: visitors;
@@ -154,7 +154,7 @@ func TestSourcesAgreeFeedGaps(t *testing.T) {
 				days, scale = max(sc.MinDays, 3), 0.3
 			}
 			src, w := history(t, scale, days, sc.Name)
-			path := filepath.Join(t.TempDir(), "stakeout.db")
+			path := filepath.Join(t.TempDir(), "trakk.db")
 			if _, err := src.DB.ExecContext(t.Context(), `VACUUM INTO ?`, path); err != nil {
 				t.Fatal(err)
 			}

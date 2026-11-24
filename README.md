@@ -1,16 +1,14 @@
-# Stakeout
+# Trakk
 
-Self-hosted usage analytics that sees all of your incoming traffic, not only the part that runs JavaScript.
+Self-hosted web traffic observability: all of your incoming traffic, not only the part that runs JavaScript.
 
-The name: a stakeout is a quiet watch on a door, noting everyone who comes and goes, invited or not.
+Trakk shows who and what reaches your product and what it does there: the people, and everything else that knocks on
+your door, from crawlers and uptime probes to scanners and scripts walking your API. It puts a browser script and a
+feed from your backend together, where a script alone only ever sees visitors whose browser runs it. No funnels, no
+goals, no conversion reports: it watches the traffic. Where other tools bolt a chat box onto their charts, the model in
+Trakk is part of the analysis: it works from what Trakk has already worked out and never makes up a figure.
 
-Most analytics tools are a browser script, so they only ever see visitors whose browser runs it. Stakeout also takes a
-feed from your backend and puts the two together: the people, and everything else that knocks on your door, from
-crawlers and uptime probes to scanners and scripts walking your API. Where other tools bolt a chat box onto their
-charts, the model in Stakeout is part of the analysis: it works from what Stakeout has already worked out and never
-makes up a figure.
-
-![The overview: figures with trends, visitors per day against the previous period, and what the model found noteworthy](docs/img/overview.png)
+![The overview: figures with trends, visitors over 30 days against the previous period, what is noteworthy and who is asking](docs/img/overview.png)
 
 - **The whole picture.** A small browser script reports page views, clicks, errors and web vitals; your backend
   reports every request it serves. Together they give a 360° view of what reaches your product.
@@ -20,16 +18,16 @@ makes up a figure.
   probe or unknown automation, and the dashboard shows the reasons. Known bots come from the
   [ipverse](https://github.com/ipverse) lists.
 - **AI built in, not bolted on.** The model is part of the analysis, not a chat box on top of the charts: it works from
-  the facts and verdicts Stakeout has already computed, writes a short briefing of what changed and says in a sentence
+  the facts and verdicts Trakk has already computed, writes a short briefing of what changed and says in a sentence
   what an address is up to. Every figure is computed without it; the model never produces a number.
 - **Harmless to your site.** The script is under 6 kB gzipped, sends in the background, and caps and backs off on its
-  own. If Stakeout is down, your pages and your backend do not notice.
+  own. If Trakk is down, your pages and your backend do not notice.
 - **One container.** A single image behind your reverse proxy, with its database inside and sign-in by OIDC or an
   admin token: `docker compose up -d`.
 
 ![Visitors by address, each with what it does, and one opened: a scanner probing for exposed files](docs/img/visitor.png)
 
-Both screenshots show simulated traffic.
+Both screenshots show simulated traffic, without a model.
 
 ## Development
 
@@ -63,19 +61,19 @@ knobs, each falling back to its default with a warning when it does not parse:
 
 | Knob | Default | |
 |---|---|---|
-| `STAKEOUT_SIM_SEED` | 1 | the world: the same seed and start give the same world |
-| `STAKEOUT_SIM_SCALE` | 1 | volume; 1 is about 25 visitors a day per site, at most 50 |
-| `STAKEOUT_SIM_SPEED` | 1 | simulated time per wall time, live, at most 3600; a tick hands out at most an hour of it |
-| `STAKEOUT_SIM_DAYS` | 30 | history before the start |
-| `STAKEOUT_SIM_START` | now | the start, RFC 3339: the history ends there, and live time runs on from it once the server serves |
-| `STAKEOUT_SIM_PORT` | 8080 | the server's loopback port (the UI proxies there) |
-| `STAKEOUT_SIM_SCENARIOS` | the default set | comma-separated, `all` for every one (`sim scenarios` below) |
-| `STAKEOUT_SIM_CLASSIFY` | true | run the classifier over the history |
-| `STAKEOUT_SIM_FEED_OUTAGE` | off | minutes the lookup site's feed is down, from a minute after the start |
-| `STAKEOUT_SIM_FLOOD` | off | `addr`, `64` or `48`: a ten-minute flood from one address, a /64 or a /48 |
-| `STAKEOUT_SIM_LATE_FEED` | off | minutes after the start until the blog's feed first delivers (0: at the start), or `never` |
-| `STAKEOUT_SIM_SLOW_MS` | 0 | every dashboard answer waits this long |
-| `STAKEOUT_SIM_EMPTY_SITE` | false | one more site, configured, that never delivers |
+| `BACKEND_SIM_SEED` | 1 | the world: the same seed and start give the same world |
+| `BACKEND_SIM_SCALE` | 1 | volume; 1 is about 25 visitors a day per site, at most 50 |
+| `BACKEND_SIM_SPEED` | 1 | simulated time per wall time, live, at most 3600; a tick hands out at most an hour of it |
+| `BACKEND_SIM_DAYS` | 30 | history before the start |
+| `BACKEND_SIM_START` | now | the start, RFC 3339: the history ends there, and live time runs on from it once the server serves |
+| `BACKEND_SIM_PORT` | 8080 | the server's loopback port (the UI proxies there) |
+| `BACKEND_SIM_SCENARIOS` | the default set | comma-separated, `all` for every one (`sim scenarios` below) |
+| `BACKEND_SIM_CLASSIFY` | true | run the classifier over the history |
+| `BACKEND_SIM_FEED_OUTAGE` | off | minutes the lookup site's feed is down, from a minute after the start |
+| `BACKEND_SIM_FLOOD` | off | `addr`, `64` or `48`: a ten-minute flood from one address, a /64 or a /48 |
+| `BACKEND_SIM_LATE_FEED` | off | minutes after the start until the blog's feed first delivers (0: at the start), or `never` |
+| `BACKEND_SIM_SLOW_MS` | 0 | every dashboard answer waits this long |
+| `BACKEND_SIM_EMPTY_SITE` | false | one more site, configured, that never delivers |
 
 The simulator (`backend/internal/sim`) has a command line of its own, `go run ./cmd/server sim <command>` in
 `backend/`, the knobs as above and flags over them (`-h`):
@@ -95,7 +93,7 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
   a 5xx after a growing wait. It stops with an error when the server fails everything for 30 s or refuses a site's
   batches for good (401: a wrong `-key`, 403: a site its sites file lacks). `-rate` sets the scale for that many
   events a second, averaged over a simulated week (the day's rhythm and the weekend vary it; at speed 1 at most about
-  1, raise `-speed` for more). Each browser's address goes in `X-Forwarded-For`, which Stakeout reads with one trusted
+  1, raise `-speed` for more). Each browser's address goes in `X-Forwarded-For`, which Trakk reads with one trusted
   hop: target the server itself, `server -sim` (it sets `BACKEND_TRUSTED_HOPS=1` whatever the environment says) or
   one left at the default; at 0 every visitor is the loopback. Without `-key` the feeds use the simulator's own keys,
   which a `make sim-server` of the same seed has configured.
@@ -118,13 +116,13 @@ against the dashboard.
 answers 404 like any unknown path and does not lead there.
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/trick77/stakeout/master/compose.yaml
-printf 'PUBLIC_FQDN=stakeout.example.com\nBACKEND_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
+curl -fsSLO https://raw.githubusercontent.com/trick77/trakk/master/compose.yaml
+printf 'PUBLIC_FQDN=trakk.example.com\nBACKEND_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
 mkdir -p data
-curl -fsSL -o data/sites.json https://raw.githubusercontent.com/trick77/stakeout/master/docs/sites.example.json
+curl -fsSL -o data/sites.json https://raw.githubusercontent.com/trick77/trakk/master/docs/sites.example.json
 # edit .env: your host name; edit data/sites.json: your domains (next section)
 sudo chown -R 65532:65532 data
-docker compose pull && docker compose up -d
+docker compose pull && docker compose up -d --remove-orphans
 ```
 
 `.env` holds only what differs from the defaults: the host name (`PUBLIC_FQDN`) and a sign-in method, the admin
@@ -136,32 +134,32 @@ default and what it does; copy a line from there into `.env` only to change it.
 ### Sign-in
 
 The dashboard signs in with OIDC (`BACKEND_OIDC_*`), with an admin token (`BACKEND_ADMIN_TOKEN`, 32 to 2048 bytes,
-`openssl rand -hex 32`), or with either: the sign-in card offers what is configured. With `PUBLIC_FQDN` set Stakeout
+`openssl rand -hex 32`), or with either: the sign-in card offers what is configured. With `PUBLIC_FQDN` set Trakk
 refuses to start with neither. The token is the way in when the identity provider is down; its session is named
 `admin`. The session cookie is signed with a key derived from a session secret together with the token: changing
-either signs everyone out. The secret is `BACKEND_SESSION_SECRET`, or, left empty, one Stakeout makes at first start and
-keeps in `data/session.secret` (owner-only; a data directory Stakeout cannot write stops the start). Token attempts are
+either signs everyone out. The secret is `BACKEND_SESSION_SECRET`, or, left empty, one Trakk makes at first start and
+keeps in `data/session.secret` (owner-only; a data directory Trakk cannot write stops the start). Token attempts are
 spaced a second apart per address or IPv6 /64, half a second per IPv4 /24 or IPv6 /48 and a quarter of a second
 across all callers: at most 4 guesses a second in all. Past a short queue they get a 429 with `Retry-After`.
 
-Stakeout reads the caller's address from `X-Forwarded-For` as many entries from the right as there are proxies in front
+Trakk reads the caller's address from `X-Forwarded-For` as many entries from the right as there are proxies in front
 of it (`BACKEND_TRUSTED_HOPS`, 1 for the compose file's Traefik). Reached without a proxy (a published port, a local
 run), set it to 0: the caller could otherwise write its own address into the header.
 
 ### Sites
 
-Stakeout only stores events for the sites listed in `data/sites.json` (the container's `/data/sites.json`; shape in
+Trakk only stores events for the sites listed in `data/sites.json` (the container's `/data/sites.json`; shape in
 [docs/sites.example.json](docs/sites.example.json)): domain, product, path rules that group raw paths into
 templates, for a server feed the SHA-256 of its key, and its kind: `site`, or `api` for a domain with a feed and no
 pages, shown by its calls (endpoints, accounts, failures, durations) instead of its visits. The file is read at start:
-restart Stakeout after changing it.
-Without it Stakeout still starts, logs `Sites file missing`, refuses every event (403) and the dashboard lists no
+restart Trakk after changing it.
+Without it Trakk still starts, logs `Sites file missing`, refuses every event (403) and the dashboard lists no
 domain; with it, the start log names the loaded domains (`Sites loaded`).
 
 A site without a server feed leaves `feed_key_sha256` empty. For one with a feed, create a key and its hash with
 
 ```sh
-docker compose run --rm stakeout -new-feed-key
+docker compose run --rm trakk -new-feed-key
 ```
 
 The key goes to the product's feed emitter (`Authorization: Bearer <key>` on `POST /api/feed`), the hash into
@@ -172,7 +170,7 @@ The key goes to the product's feed emitter (`Authorization: Bearer <key>` on `PO
 Adding a product, script and feed: [INTEGRATION.md](INTEGRATION.md). On a page, include the script:
 
 ```html
-<script src="https://stakeout.example.com/stakeout.js" defer></script>
+<script src="https://trakk.example.com/trakk.js" defer></script>
 ```
 
 It posts batches to `POST /api/in` and keeps every batch within the collector's limits on its own; a batch over
@@ -207,7 +205,7 @@ passes while the key has a token left, running it into debt; a key without one i
 (429). One event's content never refuses the batch: strings over their limit are clipped (on a character boundary),
 and an event that is no JSON object, has a field of the wrong type, lacks a parseable `ip` or has an impossible
 `status` (outside 0-999), `dur_ms` or `bytes` (negative) is dropped and counted as rejected in the dashboard's
-footer, the rest is stored. A request with a wrong key names no site Stakeout can trust: it is counted collector-wide,
+footer, the rest is stored. A request with a wrong key names no site Trakk can trust: it is counted collector-wide,
 with the unknown domains every footer shows.
 
 | Field | Limit (bytes) |
@@ -238,7 +236,7 @@ model's usage are kept `BACKEND_RETENTION_MONTHS` (25). `BACKEND_MAX_DB_MB` caps
 A release that first deletes raw by days deletes nothing for 7 days after its first start, a restart included; the
 footer says from when. Then raw from the day holding the months' cutoff back goes at once, the rest down to the raw
 days a day at a time in short steps, and the database file shrinks a MiB at a time (incremental vacuum, the mode
-Stakeout creates its database in), at most 30 s per retention round, without locking the collector out.
+Trakk creates its database in), at most 30 s per retention round, without locking the collector out.
 
 ### Dashboard API
 

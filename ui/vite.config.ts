@@ -8,7 +8,7 @@ const outDir = "../backend/web/dist";
 // The browser script's own property names, mangled in the build like its
 // variables. Opt-in by exact name: a property is renamed wherever it is
 // read, so none of these may be a browser API's, a key sent to the
-// collector or the page's window.stakeout (event, q, push): the test of the
+// collector or the page's window.trakk (event, q, push): the test of the
 // built script (src/tracker/build.test.ts) holds them to that.
 const TRACKER_PROPS = new RegExp(
   "^(" +
@@ -53,7 +53,7 @@ const TRACKER_PROPS = new RegExp(
 // The browser script, built once the app's bundle is written: one classic
 // script (a plain <script src defer> cannot load an ES module chunk), no
 // dependencies, at the root of the embed directory so the server answers
-// /stakeout.js with it. Part of the one `vite build` the gate runs, not a second
+// /trakk.js with it. Part of the one `vite build` the gate runs, not a second
 // config: ship owns the build script and tsconfig.node.json.
 // It runs on other people's pages: minified to the property names, no
 // comments, no source map. Only the minifier's own renaming, nothing that
@@ -78,8 +78,8 @@ function trackerBuild(out: string, write = true): InlineConfig {
       lib: {
         entry: "src/tracker/index.ts",
         formats: ["iife"],
-        name: "stakeoutTracker",
-        fileName: () => "stakeout.js",
+        name: "trakkTracker",
+        fileName: () => "trakk.js",
       },
       rolldownOptions: {
         output: {
@@ -98,7 +98,7 @@ function trackerBuild(out: string, write = true): InlineConfig {
 
 function tracker(): Plugin {
   return {
-    name: "stakeout-tracker",
+    name: "trakk-tracker",
     apply: "build",
     // For the test of the built script.
     api: { build: trackerBuild, props: TRACKER_PROPS },
@@ -124,7 +124,7 @@ export default defineConfig({
   },
   server: {
     host: "127.0.0.1",
-    // STAKEOUT_API_TARGET: another server (make sim's on STAKEOUT_SIM_PORT). Read off
+    // BACKEND_API_TARGET: another server (make sim's on BACKEND_SIM_PORT). Read off
     // globalThis: the config is type-checked without Node's types.
     proxy: {
       "/api":
@@ -132,7 +132,7 @@ export default defineConfig({
           globalThis as {
             process?: { env: Record<string, string | undefined> };
           }
-        ).process?.env.STAKEOUT_API_TARGET ?? "http://127.0.0.1:8080",
+        ).process?.env.BACKEND_API_TARGET ?? "http://127.0.0.1:8080",
     },
   },
   test: {

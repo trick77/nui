@@ -1,8 +1,8 @@
 {
-  "name": "stakeout",
+  "name": "trakk",
   "version": "0.1.0",
   "private": true,
-  "description": "Dashboard of Stakeout, self-hosted usage analytics",
+  "description": "Dashboard of Trakk, self-hosted web traffic observability",
   "license": "MIT",
   "type": "module",
   "scripts": {

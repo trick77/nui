@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/trick77/ship/kit/ratelimit"
-	"github.com/trick77/stakeout/backend/internal/agg"
-	"github.com/trick77/stakeout/backend/internal/insight"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/agg"
+	"github.com/trick77/trakk/backend/internal/insight"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // exactRig is an empty rig plus a way to write hand-made events for the feed site.

@@ -26,9 +26,9 @@ import (
 	"github.com/trick77/ship/kit/logging"
 	"github.com/trick77/toolkit/llmwire"
 
-	"github.com/trick77/stakeout/backend/internal/apix"
-	"github.com/trick77/stakeout/backend/internal/insight"
-	"github.com/trick77/stakeout/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/apix"
+	"github.com/trick77/trakk/backend/internal/insight"
+	"github.com/trick77/trakk/backend/internal/store"
 )
 
 // Output limits, in characters.

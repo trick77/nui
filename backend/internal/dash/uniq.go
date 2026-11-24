@@ -1,6 +1,6 @@
 package dash
 
-import "github.com/trick77/stakeout/backend/internal/agg"
+import "github.com/trick77/trakk/backend/internal/agg"
 
 // uniq counts distinct ids across pieces read from either source: an exact set of their hashes (agg.Hash, as the
 // stored sketches use) until a stored sketch joins, then a sketch. The zero value is empty.
