@@ -19,6 +19,7 @@ import {
   pct,
   rawSince,
   seconds,
+  signal,
   when,
 } from "./format";
 import { useApi, useDebounced, useMore } from "./hooks";
@@ -213,7 +214,7 @@ export function Visitors({ aud }: { aud: Audience }) {
                         <div
                           className={`text-[12px] text-muted ${hangDoes ? "pl-4" : ""}`}
                         >
-                          {joinSep(v.signals)}
+                          {joinSep(v.signals.map(signal))}
                         </div>
                       )}
                     </td>
@@ -441,7 +442,7 @@ function VisitorDetail({
                 />
               </dd>
               <dt className="text-muted">Signals</dt>
-              <dd className="m-0">{joinSep(v.signals) || "–"}</dd>
+              <dd className="m-0">{joinSep(v.signals.map(signal)) || "–"}</dd>
               {feed && v.requests != null && (
                 <>
                   <dt className="text-muted">Requests</dt>

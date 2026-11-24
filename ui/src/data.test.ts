@@ -17,6 +17,7 @@ import {
   rawSince,
   SEP,
   seconds,
+  signal,
   value,
   when,
 } from "./format";
@@ -80,6 +81,26 @@ describe("format", () => {
         networkKind,
       ),
     ).toEqual(["ISP", "Hosting", "Business", "Education", "Government", ""]);
+  });
+
+  it("starts a signal with a capital, a name from code as it is", () => {
+    expect(
+      [
+        "no user agent",
+        "hosting network",
+        "API only, no page loaded",
+        "client curl/8.4.0",
+        "navigator.webdriver set",
+        "",
+      ].map(signal),
+    ).toEqual([
+      "No user agent",
+      "Hosting network",
+      "API only, no page loaded",
+      "Client curl/8.4.0",
+      "navigator.webdriver set",
+      "",
+    ]);
   });
 
   it("writes changes with an arrow from the sign", () => {
