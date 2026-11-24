@@ -31,6 +31,7 @@ under `/dashboard`. `backend/`: Go on ship's kit, embeds `ui/` (React, Vite, Tai
   method would blind the feed). Clip, drop and count; `/api/in` stays strict.
 - `account` outranks the bot list (owner): the list held our own host as Amazonbot (a scraper read its own address
   off the page), so an MCP client with a good key read as a known bot.
+- Bot list: no code per service (owner).
 - Sites never self-register: a browser can name any host.
 - Own prefix table, JSON sites file: `gaissmai/bart` (173 stars) and `yaml/go-yaml` (571) failed the 1k-star rule.
   AS prefixes nest across owners: one sorted level per prefix length, never flat ranges.

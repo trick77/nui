@@ -56,24 +56,43 @@ func (r *Rejected) add(s string) {
 }
 
 // botFile mirrors ipverse/bot-ip-blocks crawlers.json and monitoring.json. ip_list_authoritative is a pointer so a
-// feed that leaves it out reads as non-authoritative, the safe side (verify by rDNS).
+// feed that leaves it out reads as non-authoritative, the safe side (verify by rDNS). The services stay raw so one
+// entry that does not parse costs that service, not every service added since.
 type botFile struct {
-	Services map[string]struct {
-		IPv4                []string `json:"ipv4"`
-		IPv6                []string `json:"ipv6"`
-		IPListAuthoritative *bool    `json:"ip_list_authoritative"`
-		RdnsPatterns        []string `json:"rdns_patterns"`
-		UserAgentPatterns   []string `json:"user_agent_patterns"`
-	} `json:"services"`
+	Services map[string]json.RawMessage `json:"services"`
+}
+
+type botEntry struct {
+	IPv4                []string `json:"ipv4"`
+	IPv6                []string `json:"ipv6"`
+	IPListAuthoritative *bool    `json:"ip_list_authoritative"`
+	RdnsPatterns        []string `json:"rdns_patterns"`
+	UserAgentPatterns   []string `json:"user_agent_patterns"`
+}
+
+// botPrefix reads a range of the bot list, a bare address as itself.
+func botPrefix(s string) (netip.Prefix, error) {
+	s = strings.TrimSpace(s)
+	if a, err := netip.ParseAddr(s); err == nil {
+		return netip.PrefixFrom(a, a.BitLen()), nil
+	}
+	p, err := netip.ParsePrefix(s)
+	return p.Masked(), err
 }
 
 // ParseBots reads both bot lists, for a caller holding the files (tests, a demo).
 func ParseBots(crawlers, monitoring []byte) (*Bots, error) { return parseBots(crawlers, monitoring) }
 
-// parseBots reads both bot lists (crawlers as bot, monitoring as monitor) into one Bots. A list that does not parse
-// is an error: the caller keeps the last good load.
+// maxBroken is the largest part of a list's services that may be unusable, as one in maxBroken: above it the list is
+// broken, not a service. So is one that mostly has no addresses (a renamed field): it would trust every user agent.
+// A choice, not measured.
+const maxBroken = 4
+
+// parseBots reads both bot lists (crawlers as bot, monitoring as monitor) into one Bots. A list that does not parse,
+// or only in part, is an error: the caller keeps the last good load.
 func parseBots(crawlers, monitoring []byte) (*Bots, error) {
 	b := &Bots{}
+	listing := map[netip.Prefix][]*Provider{}
 	for _, src := range []struct {
 		class string
 		data  []byte
@@ -85,40 +104,82 @@ func parseBots(crawlers, monitoring []byte) (*Bots, error) {
 		if len(f.Services) == 0 {
 			return nil, fmt.Errorf("%s list: no services", src.class)
 		}
+		broken, rangeless := 0, 0
 		names := make([]string, 0, len(f.Services))
 		for n := range f.Services {
 			names = append(names, n)
 		}
 		slices.Sort(names)
 		for _, name := range names {
-			s := f.Services[name]
-			p := &Provider{Name: name, Class: src.class, RdnsPatterns: s.RdnsPatterns,
+			var s botEntry
+			if json.Unmarshal(f.Services[name], &s) != nil {
+				b.Rejected.add(name + " (unreadable entry)")
+				broken++
+				continue
+			}
+			p := &Provider{Name: name, Class: src.class, HasRanges: len(s.IPv4)+len(s.IPv6) > 0,
 				Authoritative: s.IPListAuthoritative != nil && *s.IPListAuthoritative}
+			for _, g := range s.RdnsPatterns {
+				g = strings.TrimSuffix(strings.TrimSpace(g), ".")
+				p.RdnsPatterns = append(p.RdnsPatterns, g)
+				if !plausibleRdns(g) {
+					b.Rejected.add(fmt.Sprintf("%s %.50q (rDNS)", name, g))
+				}
+			}
 			for _, g := range s.UserAgentPatterns {
 				if strings.Trim(g, "*") == "" {
 					continue // a bare * would make every user agent this provider
 				}
 				if re, err := globRE(g); err == nil {
-					p.ua = append(p.ua, re)
+					p.ua = append(p.ua, uaPattern{re: re, length: len(strings.ReplaceAll(g, "*", ""))})
 				}
 			}
-			idx := int32(len(b.Providers)) //nolint:gosec // a few dozen services
 			for _, c := range slices.Concat(s.IPv4, s.IPv6) {
-				pfx, err := netip.ParsePrefix(strings.TrimSpace(c))
+				pfx, err := botPrefix(c)
 				switch {
 				case err != nil:
+					b.Rejected.add(fmt.Sprintf("%s %.50q (unreadable range)", name, c))
 				case !plausible(pfx, botMinV4, botMinV6):
 					b.Rejected.add(name + " " + pfx.String())
 				default:
-					b.table.Insert(pfx, idx)
-					p.HasRanges = true
+					listing[pfx] = append(listing[pfx], p)
+					p.Ranges = append(p.Ranges, pfx)
 				}
+			}
+			switch {
+			case len(p.Ranges) > 0:
+			case p.HasRanges || len(p.ua) == 0:
+				broken++
+			default:
+				rangeless++
 			}
 			b.Providers = append(b.Providers, p)
 		}
+		if broken*maxBroken > len(names) || (broken+rangeless)*2 > len(names) {
+			return nil, fmt.Errorf("%s list: of %d services %d unusable, %d without addresses", src.class, len(names),
+				broken, rangeless)
+		}
+	}
+	b.index(listing)
+	return b, nil
+}
+
+// index fills the table: each listed prefix stands for its own providers, then those of the prefixes around it.
+func (b *Bots) index(listing map[netip.Prefix][]*Provider) {
+	for pfx := range listing {
+		var owners []*Provider
+		for bits := pfx.Bits(); bits > 0; bits-- {
+			wide, _ := pfx.Addr().Prefix(bits)
+			for _, p := range slices.Backward(listing[wide]) {
+				if !slices.Contains(owners, p) {
+					owners = append(owners, p)
+				}
+			}
+		}
+		b.table.Insert(pfx, int32(len(b.owners))) //nolint:gosec // a few thousand prefixes
+		b.owners = append(b.owners, owners)
 	}
 	b.table.Build()
-	return b, nil
 }
 
 var (

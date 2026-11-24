@@ -25,15 +25,17 @@ const crawlers = `{"services":{
 const monitoring = `{"services":{"UptimeRobot":{"ipv4":["69.162.124.224/28"],"ip_list_authoritative":true,
  "user_agent_patterns":["*UptimeRobot*"]}}}`
 
-// resolver names every Bingbot address but 157.55.39.2 msnbot-a-b-c-d.search.msn.com, forward-confirmed; a
-// lookup of 157.55.39.3 times out.
+// resolver names every Bingbot address msnbot-a-b-c-d.search.msn.com, forward-confirmed, but 157.55.39.2 (another's
+// name) and 157.55.39.4 (none); a lookup of 157.55.39.3 times out.
 type resolver struct{}
 
 func (resolver) LookupAddr(_ context.Context, a string) ([]string, error) {
 	switch {
+	case a == "157.55.39.2":
+		return []string{"host.example.net."}, nil
 	case a == "157.55.39.3":
 		return nil, &net.DNSError{Err: "i/o timeout", IsTimeout: true}
-	case strings.HasPrefix(a, "157.55.39.") && a != "157.55.39.2":
+	case strings.HasPrefix(a, "157.55.39.") && a != "157.55.39.4":
 		return []string{"msnbot-" + strings.ReplaceAll(a, ".", "-") + ".search.msn.com."}, nil
 	}
 	return nil, &net.DNSError{Err: "no such host", IsNotFound: true}
@@ -131,9 +133,11 @@ func TestPass(t *testing.T) {
 		req("66.249.66.1", "Mozilla/5.0 (compatible; Googlebot/2.1)", "document", "/", 200, ""),
 		// Someone claiming Googlebot from elsewhere.
 		req("203.0.113.5", "Mozilla/5.0 (compatible; Googlebot/2.1)", "document", "/", 200, ""),
-		// Bingbot, rDNS confirmed; and one in the range that is not.
+		// Bingbot, rDNS confirmed; one in the range that is not; one there without a name; one elsewhere without.
 		req("157.55.39.1", "Mozilla/5.0 (compatible; bingbot/2.0)", "document", "/", 200, ""),
 		req("157.55.39.2", "Mozilla/5.0 (compatible; bingbot/2.0)", "document", "/", 200, ""),
+		req("157.55.39.4", "Mozilla/5.0 (compatible; bingbot/2.0)", "document", "/", 200, ""),
+		req("203.0.113.6", "Mozilla/5.0 (compatible; bingbot/2.0)", "document", "/", 200, ""),
 		// UptimeRobot.
 		req("69.162.124.230", "Mozilla/5.0+(compatible; UptimeRobot/2.0)", "", "/", 200, ""),
 		// A crawler known by its client string only.
@@ -173,6 +177,8 @@ func TestPass(t *testing.T) {
 		"203.0.113.5":    "unknown|claims Googlebot, address is not Googlebot's,no script beacon,no assets",
 		"157.55.39.1":    "bot|Bingbot, rDNS confirmed",
 		"157.55.39.2":    "unknown|claims Bingbot, address is not Bingbot's,no script beacon,no assets",
+		"157.55.39.4":    "bot|Bingbot address range, no rDNS name",
+		"203.0.113.6":    "unknown|claims Bingbot, no rDNS name,no script beacon,no assets",
 		"69.162.124.230": "monitor|UptimeRobot address range",
 		"198.51.100.20":  "bot|client is UAOnly",
 		"198.51.100.7":   "unknown|client curl/8.4.0",

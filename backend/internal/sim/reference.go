@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -101,7 +102,7 @@ var roleChoices = map[string][]struct{ name, ua string }{
 		{"Examplebot", "Mozilla/5.0 (compatible; Examplebot/2.1; +https://crawl.example.com/bot)"},
 	},
 	"renderer": {
-		{"bingbot", "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm) Chrome/116.0.1938.76 Safari/537.36"},
+		{"Bingbot", "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm) Chrome/116.0.1938.76 Safari/537.36"},
 		{"Samplebot", "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Samplebot/1.4; +https://render.example.net/) Chrome/142.0.0.0 Safari/537.36"},
 	},
 	"monitor": {
@@ -139,42 +140,33 @@ func OpenReference(dir string) (*Reference, error) {
 	d := refdata.New(refdata.Options{Dir: dir, Log: quietLog()})
 	d.LoadCached()
 	ref := &Reference{Dir: dir, Data: d, roles: map[string]botRole{}}
-	lists := map[string]botService{}
-	for _, f := range []string{crawlersFile, monitorFile} {
-		var file struct {
-			Services map[string]botService `json:"services"`
-		}
-		b, err := os.ReadFile(filepath.Join(dir, f)) //nolint:gosec // the reference directory the caller names
-		if err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(b, &file); err != nil {
-			return nil, fmt.Errorf("%s: %w", f, err)
-		}
-		for n, s := range file.Services {
-			lists[n] = s
-		}
+	// Read again: the loader keeps quiet about a list it cannot use.
+	crawlers, err := os.ReadFile(filepath.Join(dir, crawlersFile)) //nolint:gosec // the directory the caller names
+	if err != nil {
+		return nil, err
 	}
-	_, ref.World = lists["Examplebot"]
+	monitors, err := os.ReadFile(filepath.Join(dir, monitorFile)) //nolint:gosec // the directory the caller names
+	if err != nil {
+		return nil, err
+	}
+	bots, err := refdata.ParseBots(crawlers, monitors)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", dir, err)
+	}
+	ref.World = slices.ContainsFunc(bots.Providers, func(p *refdata.Provider) bool { return p.Name == "Examplebot" })
 	for role, choices := range roleChoices {
 		for _, c := range choices {
-			s, ok := lists[c.name]
-			if !ok || len(s.IPv4) == 0 {
-				continue
-			}
-			// The list must also take the user agent for this service, or the actor would be an impostor.
-			if p, ok := d.Bots().ByUA(c.ua); !ok || p.Name != c.name {
+			// The list must take the user agent for this service, or the actor would be an impostor.
+			p, ok := bots.ByUA(c.ua)
+			if !ok || p.Name != c.name {
 				continue
 			}
 			r := botRole{Name: c.name, UA: c.ua}
-			for _, x := range s.IPv4 {
-				if p, err := netip.ParsePrefix(strings.TrimSpace(x)); err == nil {
-					r.V4 = append(r.V4, p)
-				}
-			}
-			for _, x := range s.IPv6 {
-				if p, err := netip.ParsePrefix(strings.TrimSpace(x)); err == nil {
-					r.V6 = append(r.V6, p)
+			for _, x := range p.Ranges {
+				if x.Addr().Is4() {
+					r.V4 = append(r.V4, x)
+				} else {
+					r.V6 = append(r.V6, x)
 				}
 			}
 			if len(r.V4) > 0 {

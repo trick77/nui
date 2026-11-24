@@ -71,20 +71,26 @@ const crawlers = `{"services":{
 const monitoring = `{"services":{"UptimeRobot":{"ipv4":["69.162.124.224/28"],"ip_list_authoritative":true,
  "user_agent_patterns":["*UptimeRobot*"]}}}`
 
+// ranged is a service with a usable range and nothing else.
+const ranged = `{"ipv4":["203.0.113.0/24"],"ip_list_authoritative":true}`
+
 func TestParseBots(t *testing.T) {
 	b, err := parseBots([]byte(crawlers), []byte(monitoring))
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, ok := b.ByIP(addr("66.249.66.1"))
-	if !ok || p.Name != "Googlebot" || p.Class != "bot" || !p.Authoritative {
-		t.Fatalf("ByIP = %+v %v", p, ok)
+	if ps := b.ByIP(addr("66.249.66.1")); len(ps) != 1 || ps[0].Name != "Googlebot" || ps[0].Class != "bot" ||
+		!ps[0].Authoritative {
+		t.Fatalf("ByIP = %+v", ps)
 	}
-	if p, ok := b.ByIP(addr("69.162.124.230")); !ok || p.Class != "monitor" {
-		t.Fatalf("monitor = %+v", p)
+	if ps := b.ByIP(addr("69.162.124.230")); len(ps) != 1 || ps[0].Class != "monitor" {
+		t.Fatalf("monitor = %+v", ps)
 	}
-	if p, ok := b.ByIP(addr("157.55.39.1")); !ok || p.Authoritative || p.Name != "Bingbot" {
-		t.Fatalf("bing = %+v", p)
+	if ps := b.ByIP(addr("157.55.39.1")); len(ps) != 1 || ps[0].Authoritative || ps[0].Name != "Bingbot" {
+		t.Fatalf("bing = %+v", ps)
+	}
+	if b.Rejected.Count != 1 || b.Rejected.First[0] != `Bingbot "junk" (unreadable range)` {
+		t.Errorf("rejected = %+v", b.Rejected)
 	}
 	if p, ok := b.ByUA("Mozilla/5.0 (compatible; Googlebot/2.1)"); !ok || p.Name != "Googlebot" {
 		t.Fatalf("ByUA = %+v", p)
@@ -97,30 +103,136 @@ func TestParseBots(t *testing.T) {
 		t.Error("a plain browser matched a bot")
 	}
 	var nilBots *Bots
-	if _, ok := nilBots.ByIP(addr("66.249.66.1")); ok {
+	if ps := nilBots.ByIP(addr("66.249.66.1")); ps != nil {
 		t.Error("nil bots")
 	}
 	if _, ok := nilBots.ByUA("x"); ok {
 		t.Error("nil bots ua")
 	}
-	for _, bad := range [][2]string{{"{", monitoring}, {crawlers, `{"services":{}}`}} {
+	if _, ok := nilBots.Claimed(addr("66.249.66.1"), "x"); ok {
+		t.Error("nil bots claim")
+	}
+	for _, bad := range [][2]string{{"{", monitoring}, {crawlers, `{"services":{}}`},
+		{crawlers, `{"services":{"A":[],"B":7}}`},
+		// More than a service in four unusable, by its shape or its ranges: the list is broken.
+		{crawlers, `{"services":{"A":[],"B":{"ipv4":["192.0.2.0-192.0.2.9"]},"C":` + ranged + `,"D":` + ranged +
+			`,"E":` + ranged + `,"F":` + ranged + `,"G":` + ranged + `}}`},
+		// Renamed fields: entries without anything, and mostly without addresses.
+		{crawlers, `{"services":{"A":{"prefixes":["192.0.2.0/24"]},"B":` + ranged + `}}`},
+		{crawlers, `{"services":{"A":{"user_agent_patterns":["*A*"]},"B":{"user_agent_patterns":["*B*"]},"C":` + ranged + `}}`},
+	} {
 		if _, err := parseBots([]byte(bad[0]), []byte(bad[1])); err == nil {
 			t.Error("bad list parsed")
 		}
 	}
 }
 
-func TestMatchRdnsGlob(t *testing.T) {
-	pats := []string{"", "*.googlebot.com", "crawl-*.googlebot.com"}
-	for host, want := range map[string]bool{
-		"crawl-66-249-66-1.googlebot.com.": true,
-		"x.googlebot.com":                  true,
-		"a.b.googlebot.com":                false,
-		"googlebot.com.evil.net":           false,
-		"":                                 false,
+// One entry of an unexpected shape costs that service, not the list: the services added since still load. A range
+// without its length is the one address.
+func TestParseBots_UnreadableEntry(t *testing.T) {
+	b, err := parseBots([]byte(`{"services":{"Odd":{"ipv4":"192.0.2.0/24"},"A":`+ranged+`,"B":`+ranged+`,"C":`+ranged+`,
+		"D":`+ranged+`,"E":`+ranged+`,"F":`+ranged+`,
+		"Ranges":{"ipv4":["192.0.2.0-192.0.2.9"],"ip_list_authoritative":true,"user_agent_patterns":["*Ranges*"],
+		"rdns_patterns":["*","*.com","crawl-*.example.*","*example.com","*..com"," *.example.com. ","host.example.com",
+		"*-bot.example.com"]},
+		"Newbot":{"ipv4":["192.0.2.7"," 198.51.100.9/24 "],"ipv6":["2001:db8::7"],"ip_list_authoritative":true,
+		"a_field_of_tomorrow":{"x":1}}}}`), []byte(monitoring))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ip, want := range map[string]int{"192.0.2.7": 1, "192.0.2.8": 0, "2001:db8::7": 1, "2001:db8::8": 0,
+		"198.51.100.200": 1} {
+		if ps := b.ByIP(addr(ip)); len(ps) != want {
+			t.Errorf("%s = %+v", ip, ps)
+		}
+	}
+	// Odd, the five globs that name no domain of their own, the one range.
+	if b.Rejected.Count != 7 || b.Rejected.First[0] != "Odd (unreadable entry)" {
+		t.Errorf("rejected = %+v", b.Rejected)
+	}
+	// A service whose ranges are all refused is not one the list knows by its user agent alone.
+	p, _ := b.ByUA("Ranges/1")
+	if p == nil || !p.HasRanges || len(p.Ranges) != 0 {
+		t.Fatalf("refused ranges: %+v", p)
+	}
+	for host, want := range map[string]bool{"a.example.com": true, "1-bot.example.com": true, "host.example.com": true,
+		"a.com": false, "evilexample.com": false, "crawl-1.example.attacker.net": false} {
+		if got := matchRdns(host, p.RdnsPatterns, anyRun); got != want {
+			t.Errorf("%s = %v", host, got)
+		}
+	}
+}
+
+// Services share addresses: an address has every service whose range holds it, and the user agent tells which.
+func TestBots_Overlap(t *testing.T) {
+	b, err := parseBots([]byte(`{"services":{
+		"Index":{"ipv4":["192.0.2.0/25"],"ip_list_authoritative":true,"user_agent_patterns":["*Index*"]},
+		"Search":{"ipv4":["192.0.2.0/25"],"ip_list_authoritative":true,"user_agent_patterns":["*SearchIndex*"]},
+		"Wide":{"ipv4":["192.0.0.0/16"],"ip_list_authoritative":true,"user_agent_patterns":["*Wide*"]},
+		"Network":{"ipv4":["192.0.2.0/28"],"user_agent_patterns":["*WideNetwork*"],"rdns_patterns":["*.example.net"]}}}`),
+		[]byte(`{"services":{"Probe":{"ipv4":["192.0.2.64/26"],"ip_list_authoritative":true,
+		"user_agent_patterns":["*Probe*"]},"Check":{"ipv4":["192.0.0.0/16"],"ip_list_authoritative":true}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := func(ps []*Provider) string {
+		var s []string
+		for _, p := range ps {
+			s = append(s, p.Name)
+		}
+		return strings.Join(s, " ")
+	}
+	for _, tt := range []struct {
+		ip   string
+		uas  []string
+		want string
+	}{
+		// The narrowest range first, an authoritative list before one that needs rDNS, a monitor before a crawler.
+		{"192.0.2.1", nil, "Search Index Check Wide Network"},
+		{"192.0.2.70", nil, "Probe Search Index Check Wide"},
+		{"192.0.9.1", nil, "Check Wide"},
+		{"203.0.113.1", nil, ""},
+		// The user agent names its service among them, the longest pattern's.
+		{"192.0.2.70", []string{"SearchIndex/1"}, "Search Probe Index Check Wide"},
+		{"192.0.2.70", []string{"Wide/1"}, "Wide Probe Search Index Check"},
+		// A longer pattern of a list that needs rDNS does not unname the authoritative one.
+		{"192.0.2.1", []string{"WideNetwork/1"}, "Wide Search Index Check Network"},
+		// The earliest (most frequent) user agent counts most, one that names nobody not at all.
+		{"192.0.2.70", []string{"x", "Index/1", "Wide/1", "Index/2"}, "Index Wide Probe Search Check"},
 	} {
-		if got := MatchRdnsGlob(host, pats); got != want {
-			t.Errorf("MatchRdnsGlob(%q) = %v", host, got)
+		if got := names(Rank(b.ByIP(addr(tt.ip)), tt.uas...)); got != tt.want {
+			t.Errorf("%s %v = %q, want %q", tt.ip, tt.uas, got, tt.want)
+		}
+	}
+	// Rank leaves the table's own order alone.
+	if got := names(b.ByIP(addr("192.0.2.70"))); got != "Probe Search Index Check Wide" {
+		t.Errorf("after ranking: %q", got)
+	}
+	if p, _ := b.ByUA("SearchIndex/1"); p == nil || p.Name != "Search" {
+		t.Errorf("longest pattern: %+v", p)
+	}
+	// A claim is the service's at the address before a longer pattern's elsewhere.
+	for ip, want := range map[string]string{"192.0.2.200": "Wide", "203.0.113.1": "Search"} {
+		if p, ok := b.Claimed(addr(ip), "Wide SearchIndex/1"); !ok || p.Name != want {
+			t.Errorf("%s claimed %+v, want %s", ip, p, want)
+		}
+	}
+}
+
+func TestMatchRdns(t *testing.T) {
+	pats := []string{"*.googlebot.com", "crawl-*.Googlebot.com"}
+	for host, want := range map[string][2]bool{ // a claim's, another client's
+		"crawl-66-249-66-1.googlebot.com.": {true, true},
+		"x.googlebot.com":                  {true, true},
+		"a.b.GOOGLEBOT.com":                {true, false}, // Yandex: N-N-N-N.spider.yandex.com for *.yandex.com
+		"googlebot.com":                    {false, false},
+		"evilgooglebot.com":                {false, false},
+		"googlebot.com.evil.net":           {false, false},
+		"x.googlebot.com.evil.net":         {false, false},
+		"":                                 {false, false},
+	} {
+		if got := [2]bool{matchRdns(host, pats, anyRun), matchRdns(host, pats, oneLabel)}; got != want {
+			t.Errorf("matchRdns(%q) = %v", host, got)
 		}
 	}
 }
@@ -374,12 +486,12 @@ func TestParse_OverbroadPrefixes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, a := range []string{"203.0.113.1", "2001:db9::1", "11.1.1.1"} {
-		if _, ok := b.ByIP(addr(a)); ok {
+		if len(b.ByIP(addr(a))) > 0 {
 			t.Errorf("%s matched an overbroad range", a)
 		}
 	}
 	for _, a := range []string{"66.249.66.1", "2001:4860::1"} {
-		if _, ok := b.ByIP(addr(a)); !ok {
+		if len(b.ByIP(addr(a))) == 0 {
 			t.Errorf("%s lost with the plausible ranges", a)
 		}
 	}
@@ -412,7 +524,9 @@ type fakeResolver struct {
 	ptr  map[string][]string
 	host map[string][]string
 	// fail are the names (addresses or hosts) whose lookup times out.
-	fail  map[string]bool
+	fail map[string]bool
+	// slow are the hosts whose lookup ends only with its context.
+	slow  map[string]bool
 	calls int
 }
 
@@ -429,8 +543,11 @@ func (f *fakeResolver) LookupAddr(_ context.Context, a string) ([]string, error)
 	return nil, &net.DNSError{Err: "no such host", Name: a, IsNotFound: true}
 }
 
-func (f *fakeResolver) LookupHost(_ context.Context, h string) ([]string, error) {
-	if f.fail[h] {
+func (f *fakeResolver) LookupHost(ctx context.Context, h string) ([]string, error) {
+	if f.slow[h] {
+		<-ctx.Done()
+	}
+	if f.fail[h] || ctx.Err() != nil {
 		return nil, errTimeout
 	}
 	if a, ok := f.host[h]; ok {
@@ -470,7 +587,7 @@ func TestVerifier(t *testing.T) {
 	}{
 		{"157.55.39.1", pats, Confirmed},
 		{"157.55.39.2", pats, Refuted},  // spoofed PTR
-		{"198.51.100.1", pats, Refuted}, // no PTR at all: an answer
+		{"198.51.100.1", pats, Unnamed}, // no PTR at all: an answer, but no name against the claim
 		{"157.55.39.1", []string{"*.googlebot.com"}, Refuted},
 		{"bad", pats, Unverified},
 		{"157.55.39.1", nil, Unverified}, // a provider without rDNS patterns cannot be checked
@@ -486,6 +603,48 @@ func TestVerifier(t *testing.T) {
 	}
 	if NewVerifier(nil, time.Second).r == nil {
 		t.Error("default resolver")
+	}
+}
+
+// An address may have several names: any confirmed one that matches will do, also beside one whose lookup takes all
+// the time there is. Names left unchecked refute nothing, and with one confirmed they are not asked again. A name
+// deeper under the pattern confirms a claim only.
+func TestVerifier_Names(t *testing.T) {
+	r := &fakeResolver{
+		ptr: map[string][]string{
+			"192.0.2.1": {"slow.example.net.", "host.example.net.", "a.spider.example.com."},
+			"192.0.2.2": {"slow.example.net.", "host.example.net."},
+			"192.0.2.4": {"slow.example.net.", "none.example.net."},
+			"192.0.2.5": {"host.example.net."},
+			"192.0.2.3": {"1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "a.example.com."},
+		},
+		host: map[string][]string{
+			"host.example.net.":     {"192.0.2.1", "192.0.2.2"},
+			"a.spider.example.com.": {"192.0.2.1"},
+			"a.example.com.":        {"192.0.2.3"},
+		},
+		slow: map[string]bool{"slow.example.net.": true},
+	}
+	v := NewVerifier(r, 50*time.Millisecond)
+	pats := []string{"*.example.com"}
+	for _, tt := range []struct {
+		ip            string
+		claim, others Verdict
+	}{
+		{"192.0.2.1", Confirmed, Unverified},
+		{"192.0.2.2", Unverified, Unverified},
+		{"192.0.2.3", Unverified, Unverified},
+		{"192.0.2.4", Failed, Failed},
+		{"192.0.2.5", Refuted, Refuted},
+	} {
+		v.Check(tt.ip, pats)
+		v.Work(t.Context())
+		if got := v.Check(tt.ip, pats); got != tt.claim {
+			t.Errorf("%s claimed = %v, want %v", tt.ip, got, tt.claim)
+		}
+		if got := v.CheckClose(tt.ip, pats); got != tt.others {
+			t.Errorf("%s close = %v, want %v", tt.ip, got, tt.others)
+		}
 	}
 }
 
