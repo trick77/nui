@@ -310,6 +310,7 @@ function overview(
         if (m == null || p == null || (!opt.rate && !p)) return null;
         return round1(opt.rate ? m - p : ((m - p) / p) * 100);
       }),
+      low: false,
       server: opt.server ?? false,
     };
   };
@@ -366,6 +367,7 @@ function overview(
             : `prior ${range.replace(/(\d+)/, "$1 ")}`,
       open,
       first: null,
+      low: null,
       since: null,
     },
     live: { humans: 7, automated: feed ? 3 : 1 },

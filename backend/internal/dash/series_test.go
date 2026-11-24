@@ -239,34 +239,46 @@ func TestHoursAreComparedByTheClock(t *testing.T) {
 
 // The same traffic in both weeks is no change, up to the newest mean: near now both windows are moved in.
 func TestDeltaNearNow(t *testing.T) {
-	r, insert := exactRig(t)
-	for d := range 20 {
-		for h := range 24 {
-			ts := rigEnd.Truncate(24*time.Hour).AddDate(0, 0, -d).Add(time.Duration(h) * time.Hour)
-			if ts.After(rigEnd) {
-				continue
-			}
-			for i := range h { // it climbs through the day
-				insert(store.Event{TS: ts.UnixMilli() + int64(i), Source: "server", Kind: "request", IP: "192.0.2.9",
-					IPKey: "192.0.2.9", Path: "/", Template: "GET /", Method: "GET", Status: 200, Cls: store.ClsHuman})
-			}
-		}
-	}
-	for _, rng := range []string{"24h", "7d"} {
-		_, ov := r.get(t, "overview", p(feedSite, "range", rng))
-		tl := tiles(t, ov)["requests"]
-		ds, m := tl["delta"].([]any), tl["mean"].([]any)
-		seen := 0
-		for i, d := range ds {
-			if d != nil && num64(d) != 0 {
-				t.Errorf("%s: slot %d of %d changed %v", rng, i, len(ds), d)
-			}
-			if d != nil {
-				seen++
+	for _, c := range []struct {
+		times  int // an hour's requests, so many times its number
+		slots  map[string]int
+		minCmp map[string]int
+	}{
+		{1, map[string]int{"24h": 48, "7d": 6*24 + 15}, map[string]int{"24h": 40, "7d": 100}},
+		{4, map[string]int{"24h": 144, "7d": 6*24 + 15}, map[string]int{"24h": 100, "7d": 100}},
+	} {
+		r, insert := exactRig(t)
+		var evs []store.Event
+		for d := range 20 {
+			for h := range 24 {
+				ts := rigEnd.Truncate(24*time.Hour).AddDate(0, 0, -d).Add(time.Duration(h) * time.Hour)
+				if ts.After(rigEnd) {
+					continue
+				}
+				for i := range h * c.times { // it climbs through the day
+					evs = append(evs, store.Event{TS: ts.UnixMilli() + int64(i), Source: "server", Kind: "request", IP: "192.0.2.9",
+						IPKey: "192.0.2.9", Path: "/", Template: "GET /", Method: "GET", Status: 200, Cls: store.ClsHuman})
+				}
 			}
 		}
-		if seen < 100 || rng == "7d" && (m[len(m)-1] != nil || tl["prev_mean"].([]any)[len(m)-1] != nil) {
-			t.Errorf("%s: %d slots compared", rng, seen)
+		insert(evs...)
+		for _, rng := range []string{"24h", "7d"} {
+			_, ov := r.get(t, "overview", p(feedSite, "range", rng))
+			tl := tiles(t, ov)["requests"]
+			ds, m := tl["delta"].([]any), tl["mean"].([]any)
+			seen := 0
+			for i, d := range ds {
+				if d != nil && num64(d) != 0 {
+					t.Errorf("%s: slot %d of %d changed %v", rng, i, len(ds), d)
+				}
+				if d != nil {
+					seen++
+				}
+			}
+			if len(m) != c.slots[rng] || seen < c.minCmp[rng] ||
+				rng == "7d" && (m[len(m)-1] != nil || tl["prev_mean"].([]any)[len(m)-1] != nil) {
+				t.Errorf("%d times, %s: %d of %d slots compared", c.times, rng, seen, len(m))
+			}
 		}
 	}
 }
@@ -358,17 +370,118 @@ func TestRateSeries(t *testing.T) {
 // no line.
 func TestHoursOfLastYear(t *testing.T) {
 	r, insert := exactRig(t)
+	insert(pageLoad(at("2025-11-20T12:05:00Z"), "first", "192.0.2.1", "CH", "Mozilla/5.0", 0)...)
 	for i := range 12 {
 		insert(pageLoad(at("2025-11-22T12:05:00Z")+int64(i), fmt.Sprint("v", i), "192.0.2.1", "CH", "Mozilla/5.0", 0)...)
 	}
+	// Quiet: half hours, against the mean of three hours, the last three and those around the one before.
 	_, ov := r.get(t, "overview", p(feedSite, "range", "24h", "cmp", "yoy"))
 	tl := tiles(t, ov)
 	views := tl["views"]["prev_mean"].([]any)
-	if len(views) != 144 || num64(views[143]) != 2 || num64(views[138]) != 2 || num64(views[137]) != 0 {
+	if len(views) != 48 || num64(views[47]) != 2 || num64(views[44]) != 2 || num64(views[43]) != 0 {
 		t.Errorf("views %v", views)
 	}
 	if v := tl["visitors"]; len(v["prev_mean"].([]any)) != 0 || num64(v["prev"]) != 12 {
 		t.Errorf("visitors %v", v)
+	}
+	// Enough for ten minutes: against the hour, spread over its six.
+	var evs []store.Event
+	for i := range 144 * 6 {
+		evs = append(evs, pageLoad(ms(rigEnd)-int64(i)*100_000, fmt.Sprint("now", i), "192.0.2.2", "CH", "Mozilla/5.0", 0)...)
+	}
+	insert(evs...)
+	_, ov = r.get(t, "overview", p(feedSite, "range", "24h", "cmp", "yoy"))
+	x := tiles(t, ov)["views"]
+	if views = x["prev_mean"].([]any); x["low"] != false || len(views) != 144 || num64(views[143]) != 2 ||
+		num64(views[138]) != 2 || num64(views[137]) != 0 {
+		t.Errorf("views by ten minutes %v", views)
+	}
+}
+
+// The same traffic last year is no change in any half hour, the first ones too: their mean reaches before the range,
+// in both years.
+func TestLastYearsWindows(t *testing.T) {
+	r, insert := exactRig(t)
+	var evs []store.Event
+	for _, y := range []int{0, -1} {
+		end := rigEnd.Truncate(time.Hour).AddDate(y, 0, 0)
+		for h := range 40 { // a step down every hour, whole hours alike
+			for i := range 40 - h {
+				evs = append(evs, pageLoad(ms(end.Add(-time.Duration(h)*time.Hour))+int64(i), fmt.Sprint(y, h, i), "192.0.2.1",
+					"CH", "Mozilla/5.0", 0)...)
+			}
+		}
+	}
+	insert(evs...)
+	r.s.Now = func() time.Time { return rigEnd.Truncate(time.Hour).Add(30 * time.Minute) }
+	_, ov := r.get(t, "overview", p(feedSite, "range", "24h", "cmp", "yoy"))
+	x := tiles(t, ov)["views"]
+	m, pm := x["mean"].([]any), x["prev_mean"].([]any)
+	if x["low"] != true || len(pm) != 48 {
+		t.Fatalf("low %v, %d", x["low"], len(pm))
+	}
+	// A hour's views come at its start, so a window of three hours holds three of them; half an hour of rounding moves
+	// one in or out, a step of 1 in 6.
+	for i := range m {
+		if pm[i] == nil || math.Abs(num64(m[i])-num64(pm[i])) > 0.51 {
+			t.Errorf("half hour %d: %v, last year %v", i, m[i], pm[i])
+		}
+	}
+}
+
+// 24h of a tile with little in a slot is drawn by the half hour, its distinct counts those of the half hours; one with
+// much keeps its ten minutes, beside it. A share goes by what it is of, and the other ranges have the one grid.
+func TestQuietTiles(t *testing.T) {
+	r, insert := exactRig(t)
+	end := rigEnd.Add(time.Minute) // the rig's clock
+	req := func(ts time.Time, ip string, cls int) store.Event {
+		return store.Event{TS: ms(ts), Source: "server", Kind: "request", IP: ip, IPKey: ip, Path: "/", Template: "GET /",
+			Method: "GET", Status: 200, Cls: cls}
+	}
+	view := func(ts time.Time, id string) store.Event {
+		return store.Event{TS: ms(ts), Source: "browser", Kind: "page_view", Visitor: id, SID: id, IP: "192.0.2.1",
+			IPKey: "192.0.2.1", Path: "/", Template: "/", Cls: store.ClsHuman}
+	}
+	var evs []store.Event
+	for m := 4; m < 3*24*60; m += 15 { // a view every 15 minutes, by one of two in turn
+		evs = append(evs, view(end.Add(-time.Duration(m)*time.Minute), fmt.Sprint("v", m/15%2)))
+	}
+	for m := range 3 * 24 * 60 {
+		evs = append(evs, req(end.Add(-time.Duration(m)*time.Minute-30*time.Second), "192.0.2.7", 4))
+	}
+	insert(evs...)
+	_, ov := r.get(t, "overview", p(feedSite, "range", "24h"))
+	tl, period := tiles(t, ov), ov["period"].(map[string]any)
+	low, _ := period["low"].(map[string]any)
+	if period["slot"] != "10 min" || len(period["labels"].([]any)) != 144 || low == nil || low["slot"] != "30 min" ||
+		low["mean"] != "3 h" || len(low["labels"].([]any)) != 48 || low["labels"].([]any)[47] != "14:01–14:31" {
+		t.Fatalf("period %v", period)
+	}
+	for key, want := range map[string]struct {
+		low  bool
+		n    int
+		each float64
+	}{"views": {true, 48, 2}, "visitors": {true, 48, 2}, "requests": {false, 144, 10}, "auto_share": {false, 144, 100}} {
+		x := tl[key]
+		s, m, pm, d := x["series"].([]any), x["mean"].([]any), x["prev_mean"].([]any), x["delta"].([]any)
+		if x["low"] != want.low || len(s) != want.n || len(m) != want.n || len(pm) != want.n || len(d) != want.n {
+			t.Errorf("%s: low %v, %d slots", key, x["low"], len(s))
+			continue
+		}
+		for i := range s {
+			if num64(s[i]) != want.each || num64(m[i]) != want.each || num64(pm[i]) != want.each || num64(d[i]) != 0 {
+				t.Errorf("%s: slot %d is %v, mean %v, prior %v, delta %v; want %v throughout", key, i, s[i], m[i], pm[i], d[i],
+					want.each)
+				break
+			}
+		}
+	}
+	if v := tl["views"]; num64(v["value"]) != 96 {
+		t.Errorf("views %v", v["value"])
+	}
+	_, ov = r.get(t, "overview", p(feedSite, "range", "7d"))
+	if period := ov["period"].(map[string]any); period["low"] != nil || tiles(t, ov)["views"]["low"] != false {
+		t.Errorf("7d has a low frame: %v", period["low"])
 	}
 }
 

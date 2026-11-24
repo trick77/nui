@@ -468,6 +468,12 @@ func TestOverview(t *testing.T) {
 				if len(ts) != 6 {
 					t.Errorf("%s: %d tiles", rng, len(ts))
 				}
+				if low, ok := period["low"].(map[string]any); ts["views"]["low"] == true {
+					if rng != "24h" || !ok || len(low["labels"].([]any)) != 48 {
+						t.Errorf("%s: low %v", rng, low)
+					}
+					n = 48
+				}
 				for _, list := range []string{"series", "mean"} {
 					if len(ts["views"][list].([]any)) != n {
 						t.Errorf("%s: %s length", rng, list)

@@ -171,7 +171,9 @@ type tile struct {
 	Mean     []float64 `json:"mean"`
 	PrevMean []float64 `json:"prev_mean"`
 	Delta    []float64 `json:"delta"`
-	Server   bool      `json:"server"`
+	// Low: they are on the period's low frame.
+	Low    bool `json:"low"`
+	Server bool `json:"server"`
 }
 
 // MarshalJSON writes a figure that does not exist (NaN: a percentile of no calls, a slot without figures) as null.
@@ -205,16 +207,9 @@ type overview struct {
 		From      any    `json:"from"`
 		To        any    `json:"to"`
 		PrevLabel string `json:"prev_label"`
-		// Slot is what a point of the chart covers, Mean the moving mean's window; Labels name the slots.
-		Slot   string   `json:"slot"`
-		Mean   string   `json:"mean"`
-		Labels []string `json:"labels"`
-		axis
-		// Open says whether the last slot is still filling.
-		Open bool `json:"open"`
-		// First is the place (axis) the site's figures begin at, null when that is before the range: the slots before it
-		// are null.
-		First *float64 `json:"first"`
+		frame
+		// Low is the frame of the tiles that are low, null without such a one.
+		Low *frame `json:"low"`
 		// Since is set when the figures begin only within the range (an API's, over days an older builder made and
 		// whose raw is gone): the slots before it are null.
 		Since any `json:"since"`
@@ -232,7 +227,7 @@ type tileDef struct {
 	of       func(b bucketStats) float64
 	distinct func(b *bucketStats) *uniq
 	pool     func(bs []bucketStats) float64
-	// base is what a rate is a share of; nil: all requests.
+	// base is what a rate is a share of, a percentile of; nil: all requests.
 	base func(b bucketStats) float64
 }
 
@@ -287,21 +282,7 @@ func (s *Server) overview(ctx context.Context, q *query) (overview, error) {
 	}
 	p := &ov.Period
 	p.From, p.To, p.PrevLabel = iso(q.p.From()), iso(q.p.Now), q.p.prevL
-	p.Slot, p.Mean, p.Labels = cur.grid.slot, cur.grid.mean, []string{}
-	bounds := []time.Time{q.p.From()}
-	for _, pt := range cur.shown(q.p.Now) {
-		p.Labels = append(p.Labels, slotName(q.rng, pt.from, pt.to, q.loc))
-		bounds = append(bounds, pt.to)
-	}
-	end := bounds[len(bounds)-1]
-	p.Open, p.axis = end.After(q.p.Now), newAxis(q.rng, bounds, q.loc)
-	if first.IsZero() {
-		first = end
-	}
-	if first.After(bounds[0]) {
-		at := place(bounds, first)
-		p.First = &at
-	}
+	p.frame = cur.frame(q, first)
 	if ov.Live, err = s.live(ctx, q.site.ID); err != nil {
 		return ov, err
 	}
@@ -321,6 +302,10 @@ func (s *Server) overview(ctx context.Context, q *query) (overview, error) {
 	for _, d := range q.tileDefsOf() {
 		if i := slices.IndexFunc(ov.Tiles, func(t tile) bool { return t.Key == d.key }); i >= 0 {
 			d.chart(&ov.Tiles[i], cur, prev, q.p.Now)
+			if ov.Tiles[i].Low && p.Low == nil {
+				low := cur.low.frame(q, first)
+				p.Low = &low
+			}
 		}
 	}
 	return ov, nil

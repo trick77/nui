@@ -405,7 +405,7 @@ func expectOutage(w *World, sc *Scenario) []Expectation {
 					run, seen = 0, true
 				}
 			}
-			if best < 5*6 { // five hours of ten minutes
+			if best < 5*len(ser)/24 { // five hours, of ten minutes or of thirty
 				return fmt.Errorf("no outage then recovery in %v", ser)
 			}
 			return nil

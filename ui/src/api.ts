@@ -38,10 +38,8 @@ export type Tick = {
 // A chart's time axis: its ticks, and the weekends from place to place.
 export type Axis = { ticks: Tick[]; weekends: [number, number][] };
 
-export type Period = Axis & {
-  from: string;
-  to: string;
-  prev_label: string;
+// What a chart's points are, the same for every tile drawn on it.
+export type Frame = Axis & {
   // What a point of the chart covers ("3 hours"), and the moving mean's
   // window ("24 h").
   slot: string;
@@ -52,6 +50,14 @@ export type Period = Axis & {
   open: boolean;
   // The place the domain's figures begin at, null when before the range.
   first: number | null;
+};
+
+export type Period = Frame & {
+  from: string;
+  to: string;
+  prev_label: string;
+  // The frame of the tiles with too little in a slot (low), null without one.
+  low: Frame | null;
   // Where the figures begin, when that is within the range; null otherwise.
   since: string | null;
 };
@@ -89,6 +95,8 @@ export type Tile = {
   // a rate); both empty when there is none to draw.
   prev_mean: (number | null)[];
   delta: (number | null)[];
+  // They are on the period's low frame.
+  low: boolean;
   server: boolean;
 };
 
@@ -97,6 +105,10 @@ export type Overview = {
   live: { humans: number; automated: number };
   tiles: Tile[];
 };
+
+// The frame a tile's series are on.
+export const frameOf = (p: Period, t: Tile | undefined): Frame =>
+  (t?.low && p.low) || p;
 
 // Model text with the computed text beside it: gen is null when no model
 // wrote any, and the UI falls back to text.

@@ -1,5 +1,11 @@
 import { useState } from "react";
-import type { Audience, Overview, Tile, TileKey } from "./api";
+import {
+  type Audience,
+  type Overview,
+  type Tile,
+  type TileKey,
+  frameOf,
+} from "./api";
 import { MainChart, Spark, isCount } from "./charts";
 import { SEP, num, rawSince } from "./format";
 import { Delta, ErrorBox, Panel, SectionHead, Skeleton } from "./ui";
@@ -52,6 +58,7 @@ export function OverviewSection({
   // website's on an API) falls back to the first.
   const sel = tiles.find((t) => t.key === metric) ?? tiles[0];
   const p = data?.period;
+  const f = p && frameOf(p, sel);
   return (
     <>
       <SectionHead
@@ -65,7 +72,7 @@ export function OverviewSection({
           <div className="p-4">
             <ErrorBox error={error} />
           </div>
-        ) : !data || !p ? (
+        ) : !data || !p || !f ? (
           <div className="p-4">
             <Skeleton h={360} label="Loading the overview" />
           </div>
@@ -103,7 +110,7 @@ export function OverviewSection({
               <div className="card">
                 <div className="mb-2.5 flex flex-wrap items-center gap-2.5">
                   <h3 className="m-0 text-[15px] font-medium">
-                    {sel.label} per {p.slot}
+                    {sel.label} per {f.slot}
                     {SEP}
                     {AUD_WORD[aud]}
                   </h3>
@@ -117,14 +124,14 @@ export function OverviewSection({
                         }
                         style={{ background: "var(--color-s1)" }}
                       />
-                      per {p.slot}
+                      per {f.slot}
                     </span>
                     <span>
                       <i
                         className="sw line"
                         style={{ background: "var(--color-s1)" }}
                       />
-                      {p.mean} average
+                      {f.mean} average
                     </span>
                     {/* [] with nothing to compare: no entry. */}
                     {sel.prev_mean.length > 0 && (
@@ -144,17 +151,17 @@ export function OverviewSection({
                   </div>
                 </div>
                 <MainChart
-                  labels={p.labels}
+                  labels={f.labels}
                   cur={sel.series}
                   mean={sel.mean}
                   prev={sel.prev_mean}
                   delta={sel.delta}
-                  meanLabel={p.mean}
-                  axis={p}
-                  first={p.first}
+                  meanLabel={f.mean}
+                  axis={f}
+                  first={f.first}
                   kind={sel.kind}
                   unit={sel.unit}
-                  open={p.open}
+                  open={f.open}
                   title={sel.label}
                   prevLabel={p.prev_label}
                 />
