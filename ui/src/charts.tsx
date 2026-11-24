@@ -194,11 +194,25 @@ export function Spark({
   );
 }
 
-// The overview's main chart, two layers of one figure: a pale line through
-// every slot (the detail) with an area under it, and over it the moving mean
-// (the trend), which the previous period's grey mean is compared with. The
-// weekends are tinted, the time before the domain's first figure is not a
-// quiet one, the open slot is dashed over a hatch.
+// A bar from the base up: rounded on top, no taller than it is wide there.
+function barPath(x0: number, w: number, base: number, top: number): string {
+  const h = base - top;
+  const r = Math.min(3, w / 2, h);
+  const f = (v: number) => v.toFixed(1);
+  return `M${f(x0)} ${f(base)}v${f(r - h)}q0 ${f(-r)} ${f(r)} ${f(-r)}h${f(w - 2 * r)}q${f(r)} 0 ${f(r)} ${f(r)}v${f(h - r)}z`;
+}
+
+// A figure that counts: not a share, and not a measure (it has a unit).
+export const isCount = (kind: "sum" | "rate", unit = "") =>
+  kind === "sum" && !unit;
+
+// The overview's main chart, two layers of one figure: every slot pale (the
+// detail), and over it the moving mean (the trend), which the previous
+// period's grey mean is compared with. A count's slots are bars: a line
+// through counts of 0 to 4 is a saw that crosses the mean all the time. A
+// share's or a percentile's are a line with an area under it. The weekends
+// are tinted, the time before the domain's first figure is not a quiet one,
+// the open slot is paler, over a hatch.
 export function MainChart({
   labels,
   cur,
@@ -269,6 +283,15 @@ export function MainChart({
   const path = (a: Figures, from = 0, to = a.length) =>
     brokenPath(a, from, to, x, y);
   const solidTo = open ? n - 1 : n;
+  const bars = isCount(kind, unit);
+  const slotW = (W - L - R) / n;
+  // Never past its slot: a slot of nothing would go under its neighbours.
+  const barW = Math.min(
+    slotW,
+    Math.max(1.5, Math.min(22, slotW - (slotW > 6 ? 2 : 1))),
+  );
+  const bar = (i: number) =>
+    cur[i] ? barPath(x(i) - barW / 2, barW, base, y(cur[i] ?? 0)) : "";
   // The largest, named: the first of equals, of a figure that is not a share
   // (a slot of one request reaches 100 %).
   const peak = kind === "sum" ? cur.indexOf(Math.max(...known(cur))) : -1;
@@ -412,32 +435,59 @@ export function MainChart({
             opacity=".55"
           />
         )}
-        <path
-          className="chart-fill"
-          d={areaPath(cur.slice(0, solidTo), x, y, base)}
-          fill={`url(#ag${id})`}
-        />
-        <path
-          className="chart-fill"
-          data-testid="slots"
-          d={path(cur, 0, solidTo)}
-          fill="none"
-          stroke="var(--color-s1)"
-          strokeOpacity=".6"
-          strokeWidth="1.25"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        {open && n >= 2 && (
-          <path
-            className="chart-fill"
-            d={path(cur, n - 2, n)}
-            fill="none"
-            stroke="var(--color-s1)"
-            strokeOpacity=".7"
-            strokeWidth="1.25"
-            strokeDasharray="2 3"
-          />
+        {/* Keyed: from one to the other, a layer fades in whole. */}
+        {bars ? (
+          <g key="bars">
+            <path
+              className="chart-fill"
+              data-testid="slots"
+              d={cur
+                .slice(0, solidTo)
+                .map((_, i) => bar(i))
+                .join("")}
+              fill="var(--color-s1)"
+              fillOpacity=".42"
+            />
+            {open && (
+              <path
+                className="chart-fill"
+                data-testid="open-slot"
+                d={bar(n - 1)}
+                fill="var(--color-s1)"
+                fillOpacity=".22"
+              />
+            )}
+          </g>
+        ) : (
+          <g key="line">
+            <path
+              className="chart-fill"
+              d={areaPath(cur.slice(0, solidTo), x, y, base)}
+              fill={`url(#ag${id})`}
+            />
+            <path
+              className="chart-fill"
+              data-testid="slots"
+              d={path(cur, 0, solidTo)}
+              fill="none"
+              stroke="var(--color-s1)"
+              strokeOpacity=".6"
+              strokeWidth="1.25"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            {open && n >= 2 && (
+              <path
+                className="chart-fill"
+                d={path(cur, n - 2, n)}
+                fill="none"
+                stroke="var(--color-s1)"
+                strokeOpacity=".7"
+                strokeWidth="1.25"
+                strokeDasharray="2 3"
+              />
+            )}
+          </g>
         )}
         {prev && (
           <path
@@ -466,7 +516,7 @@ export function MainChart({
         />
         {peakLabel && (
           <g className="chart-fill" data-testid="peak">
-            {dot(peak, cur[peak], 3.5)}
+            {!bars && dot(peak, cur[peak], 3.5)}
             <text
               x={Math.max(L + half, Math.min(W - half, x(peak)))}
               y={y(cur[peak] ?? 0) - 9}
@@ -478,7 +528,7 @@ export function MainChart({
           </g>
         )}
         {/* Now: the right edge's one point. */}
-        {last != null && (open || peak !== n - 1) && (
+        {!bars && last != null && (open || peak !== n - 1) && (
           <circle
             cx={x(n - 1)}
             cy={y(last)}
@@ -497,7 +547,16 @@ export function MainChart({
               y2={base}
               stroke="var(--color-axis)"
             />
-            {dot(hovered, cur[hovered], 3.5)}
+            {bars ? (
+              <path
+                data-testid="hovered"
+                d={bar(hovered)}
+                fill="var(--color-s1)"
+                fillOpacity=".5"
+              />
+            ) : (
+              dot(hovered, cur[hovered], 3.5)
+            )}
             {dot(hovered, mean[hovered])}
           </g>
         )}
