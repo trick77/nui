@@ -376,12 +376,15 @@ func scriptErrorText(e dash.ScriptError) string {
 	} else if e.Type != "" {
 		parts = append(parts, e.Type)
 	}
+	visitors := fmt.Sprintf("%d visitors", e.Visitors)
+	if e.Visitors == 1 {
+		visitors = "1 visitor"
+	}
 	switch {
 	case e.Share != nil:
-		parts = append(parts, fmt.Sprintf("%d visitors, %s %% of %d who saw a page", e.Visitors, figure(*e.Share),
-			e.Viewers))
+		parts = append(parts, fmt.Sprintf("%s, %s %% of %d who saw a page", visitors, figure(*e.Share), e.Viewers))
 	case e.Visitors > 0:
-		parts = append(parts, fmt.Sprintf("%d visitors", e.Visitors))
+		parts = append(parts, visitors)
 	}
 	return strings.Join(parts, "; ")
 }

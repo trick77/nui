@@ -555,3 +555,21 @@ func TestSpan(t *testing.T) {
 		t.Errorf("median %v", fmt.Sprint(m))
 	}
 }
+
+// One visitor is not "1 visitors": the line goes out in a message.
+func TestScriptErrorTextCounts(t *testing.T) {
+	share := 4.5
+	for _, c := range []struct {
+		e    dash.ScriptError
+		want string
+	}{
+		{dash.ScriptError{Visitors: 1, Viewers: 22, Share: &share}, "1 visitor, 4.5 % of 22 who saw a page"},
+		{dash.ScriptError{Visitors: 2, Viewers: 22, Share: &share}, "2 visitors, 4.5 % of 22 who saw a page"},
+		{dash.ScriptError{Visitors: 1}, "1 visitor"},
+		{dash.ScriptError{Visitors: 3}, "3 visitors"},
+	} {
+		if got := scriptErrorText(c.e); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.e, got, c.want)
+		}
+	}
+}
