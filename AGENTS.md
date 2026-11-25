@@ -56,4 +56,3 @@ under `/api`, dashboard under `/dashboard`. `backend/`: Go on ship's kit, embeds
 - Gate: `make check` (= ship check; `make hooks` once per clone).
 - Commit subjects + PR titles: Go style `area: what` (`backend: …`, `ui: …`, `deploy: …`, `repo: …`, `sim: …`), gated by ship; release notes list them by area.
 - Fresh clone: `ship hooks` before the first push (check, conform and init install it too); without the pre-push hook a push skips the gate.
-- Release: Actions "Release" by hand. Never dispatch Release yourself.
