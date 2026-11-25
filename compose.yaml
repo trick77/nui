@@ -16,8 +16,8 @@ services:
     # Docker's default 10 s is shorter than Trakk's shutdown (HTTP drain, the event writer's tail, the counter
     # flush: at most 30 s, cmd/server shutdownBudget); a kill before it ends loses queued events and counters.
     stop_grace_period: 35s
-    # distroless nonroot's own uid, never 1000 (the host's first user). Host ./data must belong to it:
-    # sudo chown -R 65532:65532 data
+    # distroless nonroot's own uid, never 1000 (the host's first user). Host ./data must belong to it, ./conf be
+    # readable by it: sudo chown -R 65532:65532 data conf
     user: "65532:65532"
     read_only: true
     cap_drop: [ALL]
@@ -32,10 +32,12 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    # ./data holds app.db, the reference data cache (ref/), sites.json, the sites Trakk collects for (README),
-    # and session.secret when BACKEND_SESSION_SECRET is empty.
+    # ./data is what Trakk writes: app.db, the reference data cache (ref/) and session.secret when
+    # BACKEND_SESSION_SECRET is empty. ./conf is what the operator writes, read-only inside: sites.json, the sites
+    # Trakk collects for (README).
     volumes:
       - ./data:/data
+      - ./conf:/conf:ro
     expose:
       - "8080"
     networks:

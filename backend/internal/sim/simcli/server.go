@@ -16,8 +16,8 @@ import (
 	"github.com/trick77/trakk/backend/internal/store"
 )
 
-// Server is server -sim's world: written into a temporary data directory (its sites file, the world's reference
-// data), backfilled before the server serves, then advanced by the dashboard's requests.
+// Server is server -sim's world: written into a temporary directory, its data and conf directory both (its sites
+// file, the world's reference data), backfilled before the server serves, then advanced by the dashboard's requests.
 type Server struct {
 	Knobs sim.Knobs
 	Dir   string
@@ -44,7 +44,7 @@ func NewServer(k sim.Knobs, now time.Time) (*Server, error) {
 	if s.World, err = k.World(ref, now); err != nil {
 		return fail(err)
 	}
-	if err := s.World.WriteSitesFile(filepath.Join(dir, "sites.json")); err != nil {
+	if err := s.World.WriteSitesFile(filepath.Join(dir, app.SitesFileName)); err != nil {
 		return fail(err)
 	}
 	return s, nil
@@ -71,7 +71,8 @@ func (s *Server) Configure(cfg *app.Config) error {
 	if err := RefusePublic(cfg.PublicFQDN, "server -sim"); err != nil {
 		return err
 	}
-	cfg.DataDir, cfg.SitesFile = s.Dir, filepath.Join(s.Dir, "sites.json")
+	// The temporary directory is the conf directory too: never the developer's own /conf.
+	cfg.DataDir, cfg.ConfDir, cfg.SitesFile = s.Dir, s.Dir, filepath.Join(s.Dir, app.SitesFileName)
 	cfg.AuthDisabled, cfg.RefDataDisabled = true, true
 	cfg.Addr = fmt.Sprintf("127.0.0.1:%d", s.Knobs.Port)
 	cfg.TrustedHops = 1

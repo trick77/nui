@@ -1,6 +1,9 @@
 package app
 
 import (
+	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -14,8 +17,10 @@ import (
 type Config struct {
 	// Addr is the listen address; the -healthcheck probe dials it too.
 	Addr string
-	// DataDir is the container's volume: the database, the reference data cache, the sites file.
+	// DataDir is the container's writable volume: the database, the reference data cache, the session secret.
 	DataDir string
+	// ConfDir is the operator's configuration, mounted read-only: the sites file.
+	ConfDir string
 	// PublicFQDN is the hostname the service is reached on; empty for local use.
 	PublicFQDN string
 	// TrustedHops is the number of proxies in front of the server, each appending to X-Forwarded-For: 1 behind the
@@ -27,6 +32,8 @@ type Config struct {
 
 	// SitesFile declares the sites, their feed key hashes and path rules (docs/sites.example.json).
 	SitesFile string
+	// sitesDefault: SitesFile is the default in ConfDir, not BACKEND_SITES_FILE (SitesPath may fall back).
+	sitesDefault bool
 	// RetentionMonths is how long the per-address aggregates, actor classes and model usage are kept, and raw events
 	// at most; the other figures stay, unless the size cap takes them.
 	RetentionMonths int
@@ -64,6 +71,7 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 	cfg := Config{
 		Addr:             r.String("BACKEND_ADDR", ":8080"),
 		DataDir:          r.String("BACKEND_DATA_DIR", "/data"),
+		ConfDir:          r.String("BACKEND_CONF_DIR", "/conf"),
 		PublicFQDN:       r.String("PUBLIC_FQDN", ""),
 		TrustedHops:      r.Int("BACKEND_TRUSTED_HOPS", 1),
 		LogLevel:         r.String("BACKEND_LOG_LEVEL", "info"),
@@ -85,7 +93,7 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 		LLMDailyTokens:   r.Int("BACKEND_LLM_DAILY_TOKENS", 400_000),
 	}
 	if cfg.SitesFile == "" {
-		cfg.SitesFile = filepath.Join(cfg.DataDir, "sites.json")
+		cfg.SitesFile, cfg.sitesDefault = filepath.Join(cfg.ConfDir, SitesFileName), true
 	}
 	if cfg.OIDCRedirectURL == "" && cfg.PublicFQDN != "" {
 		cfg.OIDCRedirectURL = "https://" + cfg.PublicFQDN + "/api/auth/callback"
@@ -134,6 +142,26 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 		r.Fail("no sign-in is configured: set the BACKEND_OIDC_* variables, BACKEND_ADMIN_TOKEN or both")
 	}
 	return cfg, r.Err()
+}
+
+// SitesFileName is the sites file's name in the conf directory (and, before it, in the data directory).
+const SitesFileName = "sites.json"
+
+// SitesPath is the sites file to read. The default in the conf directory falls back to the data directory's, where
+// Trakk kept it before, while the conf one is missing and the data one exists (legacy true): without the fallback an
+// updated host with the old layout would refuse every event. BACKEND_SITES_FILE set is read as it is.
+func (c Config) SitesPath() (path string, legacy bool) {
+	if !c.sitesDefault {
+		return c.SitesFile, false
+	}
+	if _, err := os.Stat(c.SitesFile); !errors.Is(err, fs.ErrNotExist) {
+		return c.SitesFile, false
+	}
+	old := filepath.Join(c.DataDir, SitesFileName)
+	if _, err := os.Stat(old); err == nil {
+		return old, true
+	}
+	return c.SitesFile, false
 }
 
 // MinRawRetentionDays is the shortest raw retention. 7d and its prior period read raw back to the local midnight 13

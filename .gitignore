@@ -3,8 +3,9 @@ coverage/
 .claude/
 *.log
 .DS_Store
-# compose.yaml's bind mount when run from a checkout.
+# compose.yaml's bind mounts when run from a checkout.
 /data/
+/conf/
 # Any .env variant (backups, per-host copies) stays out; only the example is committed.
 .env
 .env.*

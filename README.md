@@ -50,9 +50,9 @@ make check         # the full gate (ship), from the repo root
 The Go server embeds the built UI: `npm run build` in `ui/`, then in `backend/`:
 
 ```sh
-mkdir -p data && cp ../docs/sites.example.json data/sites.json
-BACKEND_DATA_DIR=./data BACKEND_AUTH_DISABLED=true BACKEND_REFDATA_DISABLED=true BACKEND_TRUSTED_HOPS=0 \
-  go run ./cmd/server -demo 30
+mkdir -p data conf && cp ../docs/sites.example.json conf/sites.json
+BACKEND_DATA_DIR=./data BACKEND_CONF_DIR=./conf BACKEND_AUTH_DISABLED=true BACKEND_REFDATA_DISABLED=true \
+  BACKEND_TRUSTED_HOPS=0 go run ./cmd/server -demo 30
 ```
 
 and open <http://localhost:8080/dashboard/>. `-demo 30` fills an empty database with 30 days of simulated traffic
@@ -93,7 +93,8 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
 - `backfill -data ./data [-wipe]` writes a history, `sites.json` and the world's reference data (`ref/`) into an
   empty or absent data directory, or one it wrote before (marked by `sim.json`; a second history is refused,
   `-wipe` empties the directory first). Anything else is refused untouched, and so is every run with `PUBLIC_FQDN`
-  set. Serve it with `server -demo 1` and `BACKEND_REFDATA_DISABLED=true`. About 25,000 events a second.
+  set. Serve it with `server -demo 1`, `BACKEND_REFDATA_DISABLED=true` and `BACKEND_CONF_DIR` set to the same
+  directory (its `sites.json`). About 25,000 events a second.
   The largest run is scale 50: about 110,000 events a simulated day, some 5 s of backfill each, and with the default
   scenarios up to about 210 MB of day plans in memory (a plan holds a whole day's requests; the day before is kept
   beside it only for the three hours past midnight a visit begun on it can last, the referrer wave's day and the one
@@ -122,18 +123,23 @@ against the dashboard.
 ## Running it
 
 `compose.yaml` runs the released image behind an existing Traefik. A deployment is three files in one directory:
-`compose.yaml`, `.env` and `data/sites.json`. The dashboard is at `https://<PUBLIC_FQDN>/dashboard/`; the bare host
-answers 404 like any unknown path and does not lead there.
+`compose.yaml`, `.env` and `conf/sites.json`. `data/` is what Trakk writes (the database, the reference data cache,
+the session secret), `conf/` what you write, mounted read-only. The dashboard is at
+`https://<PUBLIC_FQDN>/dashboard/`; the bare host answers 404 like any unknown path and does not lead there.
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/trick77/trakk/master/compose.yaml
 printf 'PUBLIC_FQDN=trakk.example.com\nBACKEND_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
-mkdir -p data
-curl -fsSL -o data/sites.json https://raw.githubusercontent.com/trick77/trakk/master/docs/sites.example.json
-# edit .env: your host name; edit data/sites.json: your domains (next section)
-sudo chown -R 65532:65532 data
+mkdir -p data conf
+curl -fsSL -o conf/sites.json https://raw.githubusercontent.com/trick77/trakk/master/docs/sites.example.json
+# edit .env: your host name; edit conf/sites.json: your domains (next section)
+sudo chown -R 65532:65532 data conf
 docker compose pull && docker compose up -d --remove-orphans
 ```
+
+A deployment from before `conf/` keeps its `data/sites.json`: Trakk reads it while `conf/sites.json` is missing and
+warns at every start. Move it: `mkdir -p conf && mv data/sites.json conf/`, update `compose.yaml` (it mounts
+`./conf`), then `sudo chown -R 65532:65532 conf`.
 
 `.env` holds only what differs from the defaults: the host name (`PUBLIC_FQDN`) and a sign-in method, the admin
 token above, the OIDC client (`BACKEND_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET`, optionally `_ADMIN_GROUP`), or
@@ -158,7 +164,7 @@ run), set it to 0: the caller could otherwise write its own address into the hea
 
 ### Sites
 
-Trakk only stores events for the sites listed in `data/sites.json` (the container's `/data/sites.json`; shape in
+Trakk only stores events for the sites listed in `conf/sites.json` (the container's `/conf/sites.json`; shape in
 [docs/sites.example.json](docs/sites.example.json)): domain, product, path rules that group raw paths into
 templates, for a server feed the SHA-256 of its key, and its kind: `site`, or `api` for a domain with a feed and no
 pages, shown by its calls (endpoints, accounts, failures, durations) instead of its visits. An optional `order` (1, 2,
