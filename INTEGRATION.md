@@ -98,7 +98,8 @@ load (the first 50):
 Trakk lists and groups by them. Both are optional; anything but ASCII letters, digits and `_ . / : -` is stored as
 `_`. A call failed when `err` is set or its status is 400 or above; a 404 is no call, whatever its route, nor is a 401,
 403 or 405 without a `route` (a scanner's path behind a key check, an MCP client's `GET` of a POST-only path). A site
-of kind `api` is shown by them: calls, accounts and failures per endpoint (`route` and `op`), with durations.
+of kind `api` is shown by them: calls, accounts and failures per endpoint (`route` and `op`), with durations. A site
+with pages shows its endpoints and failures too: report a refused sign-in answered 200 as an `err`.
 
 Send exactly these fields, never raw headers (they carry cookies and credentials). Every request counts, 404s and
 401s above all: the probing is what the feed is for. Leave out only the emitter's own traffic and local health

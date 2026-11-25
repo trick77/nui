@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { ListRow } from "./api";
 import { num, pct } from "./format";
 import { type Col, TopList } from "./lists";
@@ -5,7 +6,7 @@ import { AllClasses, Delta, SectionHead, useDash } from "./ui";
 
 // A site's calls: server requests but 404s and refusals without a route, per endpoint (route and
 // operation), account and reason to fail. Always over every class: an API's
-// callers are programs.
+// callers are programs, and a website's failure is one whoever called.
 
 const mono = (s: string) => (
   <span className="font-mono text-[12.5px] wrap-anywhere">{s}</span>
@@ -39,13 +40,14 @@ function useChange(): Col[] {
   return useDash().scope.cmp !== "off" ? [change] : [];
 }
 
-function EndpointsPanel() {
+function EndpointsPanel({ head }: { head?: ReactNode }) {
   const { openLog } = useDash();
   const delta = useChange();
   return (
     <TopList
       id="endpoints-panel"
       title="Endpoints"
+      head={head}
       sources={["server"]}
       tabs={[{ key: "endpoints", label: "Endpoints", dim: "endpoints" }]}
       cols={[
@@ -63,13 +65,14 @@ function EndpointsPanel() {
   );
 }
 
-function FailuresPanel() {
+function FailuresPanel({ head }: { head?: ReactNode }) {
   const { openLog } = useDash();
   const delta = useChange();
   return (
     <TopList
       id="failures-panel"
       title="Failures"
+      head={head}
       sources={["server"]}
       tabs={[{ key: "failures", label: "Failures", dim: "failures" }]}
       cols={[keyed("Reason"), { ...calls, head: "Count" }, addresses, ...delta]}
@@ -80,13 +83,15 @@ function FailuresPanel() {
 }
 
 // A website's server, beside its pages: its endpoints and why their calls
-// fail (a sign-in answered 200 is told by its reason alone).
+// fail (a sign-in answered 200 is told by its reason alone). They stand under
+// an audience switch they do not follow, and say so.
 export function Endpoints() {
+  const head = <span>every class of client</span>;
   return (
     <AllClasses>
-      <EndpointsPanel />
+      <EndpointsPanel head={head} />
       <div className="mt-3">
-        <FailuresPanel />
+        <FailuresPanel head={head} />
       </div>
     </AllClasses>
   );

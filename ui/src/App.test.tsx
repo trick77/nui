@@ -1893,8 +1893,9 @@ describe("an API", () => {
     expect(panel("Pages")).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Accounts" })).toBeNull();
     const reason = await within(panel("Failures")).findByText("invalid_params");
-    // Whoever fails: the page's audience is people.
+    // Whoever fails, though the page's audience is people, and it says so.
     expect(calls.find((c) => c.includes("dim=failures"))).toContain("aud=all");
+    expect(panel("Failures")).toHaveTextContent("every class of client");
     fireEvent.click(reason);
     await screen.findByRole("region", { name: "Log" });
     expect(lastCall("/api/dash/log").get("failure")).toBe("invalid_params");
