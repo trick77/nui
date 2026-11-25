@@ -18,32 +18,16 @@ import (
 
 // dispatch sends the due messages: one per channel, every due row that channel still owes in it, within the
 // channel's hourly cap. A row older than staleAfter is given up. A send the shutdown cut is no attempt: its rows
-// stay due for the next start.
+// stay due for the next start, and what the channels before it took is kept.
 func (e *Engine) dispatch(ctx context.Context, now time.Time) error {
-	rows, err := e.o.Store.DueAlerts(ctx, dueBatch)
+	rows, errs, err := e.sendable(ctx, now)
 	if err != nil {
-		return err
+		return errors.Join(append(errs, err)...)
 	}
 	nowMS := now.UnixMilli()
 	owed := map[string][]*store.Alert{}
 	touched := map[int64]*store.Alert{}
-	var errs []error
-	for i := range rows {
-		a := &rows[i]
-		if a.DueAt == nil || nowMS-*a.DueAt > staleAfter.Milliseconds() {
-			for _, n := range a.Channels {
-				if !slices.Contains(a.Delivered, n) && !slices.Contains(a.Failed, n) {
-					a.Failed = append(a.Failed, n)
-				}
-			}
-			a.Due, a.DueAt = "", nil
-			delete(e.retry, a.ID)
-			errs = append(errs, e.o.Store.UpdateAlert(ctx, a))
-			continue
-		}
-		if next, ok := e.retry[a.ID]; ok && now.Before(next) {
-			continue
-		}
+	for _, a := range rows {
 		for _, n := range a.Channels {
 			if !slices.Contains(a.Delivered, n) {
 				owed[n] = append(owed[n], a)
@@ -69,7 +53,11 @@ func (e *Engine) dispatch(ctx context.Context, now time.Time) error {
 		title, body, sev := e.render(items)
 		res := sender.Deliver(ctx, title, body, sev)
 		if ctx.Err() != nil {
-			return errors.Join(append(errs, ctx.Err())...)
+			// The channels before this one took their message: kept, or they would get it again after the restart.
+			pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistBudget)
+			errs = append(errs, e.settle(pctx, now, touched), ctx.Err())
+			cancel()
+			return errors.Join(errs...)
 		}
 		failure := Failure(res)
 		if failure == "" { // the cap spares the recipient; a refused send reached nobody (the backoff spaces those)
@@ -97,6 +85,16 @@ func (e *Engine) dispatch(ctx context.Context, now time.Time) error {
 			}
 		}
 	}
+	return errors.Join(append(errs, e.settle(ctx, now, touched))...)
+}
+
+// persistBudget bounds the write of what a send cut by the shutdown already delivered: well inside the shutdown's
+// margin (cmd/server's bgStop).
+const persistBudget = time.Second
+
+// settle writes the rows a step sent: an attempt each, done once every channel took it, else a growing backoff.
+func (e *Engine) settle(ctx context.Context, now time.Time, touched map[int64]*store.Alert) error {
+	var errs []error
 	for _, id := range slices.Sorted(maps.Keys(touched)) {
 		a := touched[id]
 		a.Attempts++
@@ -109,6 +107,65 @@ func (e *Engine) dispatch(ctx context.Context, now time.Time) error {
 		errs = append(errs, e.o.Store.UpdateAlert(ctx, a))
 	}
 	return errors.Join(errs...)
+}
+
+// maxDueScan bounds the due rows one step reads to find its batch.
+const maxDueScan = 10 * dueBatch
+
+// sendable are the due rows a step sends, at most dueBatch, the oldest first: those not backing off after a failure
+// that owe a channel not at its hourly cap. The outbox is read a page at a time past the rows waiting, so a channel
+// that is down holds no slot a healthy one needs. Rows older than staleAfter are given up on the way.
+func (e *Engine) sendable(ctx context.Context, now time.Time) ([]*store.Alert, []error, error) {
+	nowMS := now.UnixMilli()
+	capped := map[string]bool{}
+	isCapped := func(name string) bool {
+		c, ok := capped[name]
+		if !ok {
+			ch, inConf := e.o.Config.Channel(name)
+			c = inConf && e.capped(name, ch.MaxPerHour, now)
+			capped[name] = c
+		}
+		return c
+	}
+	var out []*store.Alert
+	var errs []error
+	var at, id int64
+	for scanned := 0; scanned < maxDueScan && len(out) < dueBatch; {
+		page, err := e.o.Store.DueAlerts(ctx, at, id, dueBatch)
+		if err != nil {
+			return nil, errs, err
+		}
+		for i := range page {
+			a := &page[i]
+			if a.DueAt != nil {
+				at, id = *a.DueAt, a.ID
+			}
+			if a.DueAt == nil || nowMS-*a.DueAt > staleAfter.Milliseconds() {
+				for _, n := range a.Channels {
+					if !slices.Contains(a.Delivered, n) && !slices.Contains(a.Failed, n) {
+						a.Failed = append(a.Failed, n)
+					}
+				}
+				a.Due, a.DueAt = "", nil
+				delete(e.retry, a.ID)
+				errs = append(errs, e.o.Store.UpdateAlert(ctx, a))
+				continue
+			}
+			if next, ok := e.retry[a.ID]; ok && now.Before(next) {
+				continue
+			}
+			if slices.ContainsFunc(a.Channels, func(n string) bool {
+				return !slices.Contains(a.Delivered, n) && !isCapped(n)
+			}) && len(out) < dueBatch {
+				out = append(out, a)
+			}
+		}
+		scanned += len(page)
+		if len(page) < dueBatch {
+			break
+		}
+	}
+	return out, errs, nil
 }
 
 // capped reports whether a channel had its hour's messages, forgetting those older than an hour.
@@ -201,7 +258,8 @@ func (e *Engine) link(sites map[int64]bool) string {
 	if e.o.PublicFQDN == "" {
 		return ""
 	}
-	u := url.URL{Scheme: "https", Host: e.o.PublicFQDN, Path: "/dashboard/alerts"}
+	// One site's alerts, or all of them: the page shows the domain the browser remembers unless told otherwise.
+	u := url.URL{Scheme: "https", Host: e.o.PublicFQDN, Path: "/dashboard/alerts", RawQuery: "all=1"}
 	if len(sites) == 1 {
 		for id := range sites {
 			if id != 0 && e.o.Sites != nil {
