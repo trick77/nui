@@ -30,8 +30,9 @@ type Params struct {
 	Direction, Source, Baseline string
 	After, Window               time.Duration
 	Jobs                        []string
-	// Visitors is the least distinct visitors (a server error: addresses) a new error needs; Origins where a script
-	// error may come from for it to count (one of its places is enough; a server error has none and always counts).
+	// Visitors is the least distinct visitors (a server error: addresses) a new error, or the errors' level, needs;
+	// Origins where a script error may come from for it to count (a new one: one of its places is enough; a server
+	// error has none and always counts).
 	Visitors float64
 	Origins  []string
 }
@@ -125,6 +126,11 @@ var Catalogue = []Spec{
 	level("level.p95"),
 	level("level.requests"),
 	level("level.visitors"),
+	// Not level(): min is required, which leaves floor nothing to do, and a share of a few visitors is noise (visitors).
+	{ID: "level.errors", Group: "level", Condition: true,
+		Params:   []string{pWindow, pMin, pFactor, pBaseline, pVisitors, pOrigins},
+		Required: []string{pWindow, pMin},
+		Defaults: Params{Visitors: 3, Origins: DefaultOrigins, Baseline: "days"}},
 }
 
 // Lookup is the catalogue's trigger id.

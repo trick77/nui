@@ -160,15 +160,18 @@ func (w *World) Expectations() []Expectation {
 }
 
 // Around a scenario whose expectations read alerts, the alert engine steps from alertLead before its start (that
-// step a baseline the scenario is not part of yet) to alertTail after its end (a condition clears with the window
-// after it): every hour near the start and the end, every AlertEvery hours between. A fact the scenario makes later
-// than its first hours (a few visitors at scale 0.3) still meets a facts pass while it is new.
+// step a baseline the scenario is not part of yet) to alertClear after its end (a condition clears with the window
+// after it): every hour near the start and the end, every AlertEvery hours between and after. A fact the scenario
+// makes later than its first hours (a few visitors at scale 0.3) still meets a facts pass while it is new.
 const (
 	alertLead = h
 	alertTail = 2 * h
 	// AlertEvery is the hours between two steps away from a scenario's edges: short of the engine's six idle hours,
 	// which make a rule's next pass a baseline again.
 	AlertEvery = 5
+	// alertClear is how long after the end the steps go on: one of them, whatever the hour, is past the longest window
+	// of a simulated rule (errors-up's 12 hours).
+	alertClear = (12 + AlertEvery) * h
 )
 
 // AlertHours reports the hours, by their end, a backfill steps the alert engine through for the expectations that
@@ -194,10 +197,11 @@ func (w *World) AlertHours() func(end time.Time) bool {
 	}
 	return func(t time.Time) bool {
 		return slices.ContainsFunc(spans, func(s span) bool {
-			if t.Before(s.start.Add(-alertLead)) || t.After(s.end.Add(alertTail)) {
+			if t.Before(s.start.Add(-alertLead)) || t.After(s.end.Add(alertClear)) {
 				return false
 			}
-			return !t.After(s.start.Add(alertTail)) || !t.Before(s.end.Add(-h)) || t.Unix()/3600%AlertEvery == 0
+			return !t.After(s.start.Add(alertTail)) || (!t.Before(s.end.Add(-h)) && !t.After(s.end.Add(alertTail))) ||
+				t.Unix()/3600%AlertEvery == 0
 		})
 	}
 }
@@ -319,6 +323,42 @@ func alertWith(kind, key, state string, check func(map[string]any) error) func(m
 			return nil
 		}
 		return fmt.Errorf("no %s %q %s among %v", kind, key, state, seen)
+	}
+}
+
+// errorsUp checks an alerts answer for the errors' level alert of a release from start to end: opened in it, cleared
+// after it, its clearing sent (and so its opening, engine.leave), then its words and its figure, at least the simulated
+// rule's min of 30 %. A quiet site's level may open and clear more than once within the release: one such alert is
+// enough.
+func errorsUp(start, end time.Time) func(map[string]any) error {
+	at := func(v any) time.Time {
+		t, _ := time.Parse(time.RFC3339, fmt.Sprint(v))
+		return t
+	}
+	return func(body map[string]any) error {
+		var seen []string
+		for _, a := range items(body, "alerts") {
+			if a["kind"] != "level.errors" {
+				continue
+			}
+			d, _ := a["delivery"].(map[string]any)
+			seen = append(seen, fmt.Sprintf("%v %q %v to %v, %v", a["state"], a["key"], a["first_at"], a["cleared_at"],
+				d["state"]))
+			opened := at(a["first_at"])
+			if a["key"] != "" || a["state"] != "cleared" || d["state"] != "sent" || opened.Before(start) ||
+				!opened.Before(end) || !at(a["cleared_at"]).After(end) {
+				continue
+			}
+			tg, _ := a["target"].(map[string]any)
+			detail := fmt.Sprint(a["detail"])
+			if f, _ := a["figure"].(float64); f < 30 || f > 100 || a["unit"] != "%" || tg["panel"] != "errors" ||
+				!strings.HasPrefix(fmt.Sprint(a["text"]), "Visitors with a script error over the last ") ||
+				(!strings.HasSuffix(detail, "): "+DeployError) && !strings.HasSuffix(detail, "): "+MaskedError)) {
+				return fmt.Errorf("alert %v", a)
+			}
+			return nil
+		}
+		return fmt.Errorf("no level.errors opened from %v on and cleared after %v among %v", start, end, seen)
 	}
 }
 
@@ -490,7 +530,7 @@ func expectWalker(w *World, _ *Scenario) []Expectation {
 	}
 }
 
-func expectDeploy(w *World, _ *Scenario) []Expectation {
+func expectDeploy(w *World, sc *Scenario) []Expectation {
 	s := w.Sites[0].Domain
 	return []Expectation{
 		{Says: "Noteworthy lists the release's script error as new", Endpoint: "noteworthy", Params: findings(s, "7d"),
@@ -517,6 +557,8 @@ func expectDeploy(w *World, _ *Scenario) []Expectation {
 					}
 					return nil
 				})},
+		{Says: "the errors' level rule opened for the release and cleared after its fix", Endpoint: "alerts",
+			Params: alerts(s), Check: errorsUp(sc.start(w.Anchor), sc.end(w.Anchor))},
 		{Says: "the status breakdown has 5xx answers", Endpoint: "status", Params: params(s, "7d"),
 			Check: func(b map[string]any) error {
 				for _, r := range items(b, "rows") {

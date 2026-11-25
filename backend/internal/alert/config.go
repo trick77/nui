@@ -499,7 +499,8 @@ func parseRule(raw json.RawMessage, def ruleDefaults, c *Config, k Known) (Rule,
 			}
 		}
 	}
-	if spec.Group == "level" && !r.P.HasMin && !r.P.HasMax && !r.P.HasFactor && !r.P.HasDrop {
+	if spec.Group == "level" && !slices.Contains(spec.Required, pMin) && !r.P.HasMin && !r.P.HasMax &&
+		!r.P.HasFactor && !r.P.HasDrop {
 		bad("%s needs min, max, factor or drop", spec.ID)
 	}
 	// Every bound a level rule sets holds at once: two that no value meets make a rule that never fires.
@@ -554,6 +555,10 @@ func numbers(j *ruleJSON, r *Rule) []error {
 	}
 	if r.Spec.ID == "level.failed" && ((r.P.HasMin && r.P.Min > 100) || (r.P.HasMax && r.P.Max > 100)) {
 		bad("level.failed's min and max are percent, at most 100")
+	}
+	// 0 would always hold against a usual of 0 %.
+	if r.Spec.ID == "level.errors" && r.P.HasMin && (r.P.Min == 0 || r.P.Min > 100) {
+		bad("level.errors's min is percent, above 0 and at most 100")
 	}
 	return errs
 }

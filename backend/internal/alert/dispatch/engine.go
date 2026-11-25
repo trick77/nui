@@ -326,6 +326,12 @@ func (e *Engine) apply(ctx context.Context, now time.Time, r alert.Rule, site in
 		waiting = waiting || (occ.Hold && occ.Wait)
 		if a, in := open[occ.Key]; in {
 			if occ.Hold {
+				// A pending one is not known to have held meanwhile: its for starts over.
+				if a.State == store.AlertPending {
+					if err := e.leave(ctx, now, a); err != nil {
+						return err
+					}
+				}
 				continue
 			}
 			if err := e.stay(ctx, now, r, a, occ); err != nil {

@@ -44,6 +44,7 @@ const KIND: Record<string, string> = {
   "job.failed": "Background job failed",
   "db.size_cap": "Database size cap",
   "llm.budget": "Model budget",
+  "level.errors": "Script errors level",
   "level.failed": "Failed calls level",
   "level.p95": "95th percentile level",
   "level.requests": "Requests level",

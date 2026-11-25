@@ -149,11 +149,12 @@ type Occurrence struct {
 	// Quiet is recorded and shown, never sent: a level rule's "no comparison".
 	Quiet bool
 	// Hold: the state is not known in this pass (a job not run since start, a level without its comparison): the
-	// key's row stays as it is, nothing opens or clears.
+	// key's row stays as it is, nothing opens or clears (one pending its for starts it over).
 	Hold bool
 	// Wait, with Hold: the state is not judged yet but will be (a source within its after of the start, a level
-	// still gathering its comparison or its calls, a script error not looked at yet). A rule's baseline waits for
-	// it: what is there once it is judged was there at the rule's start, and is no news. A job not run since start
-	// holds without waiting: when it runs and fails, that is news.
+	// still gathering its comparison or its calls, a script error not looked at yet). A rule's baseline waits for it:
+	// what is there once it is judged was there at the rule's start, and is no news. A job not run since start holds
+	// without waiting (when it runs and fails, that is news), so does the errors' level with too few visitors affected
+	// (when it spreads to enough of them, that is).
 	Wait bool
 }

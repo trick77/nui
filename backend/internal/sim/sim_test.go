@@ -127,6 +127,34 @@ func TestBackfillDeterministic(t *testing.T) {
 	}
 }
 
+// Around a scenario the alert engine's steps are never six hours apart (the next pass would be a baseline again) and
+// one is past errors-up's 12 hours after the end, whatever the hour the anchor falls on.
+func TestAlertHours(t *testing.T) {
+	w := testWorld(t, 1, "deploy-error")
+	sc := w.Scenarios[slices.IndexFunc(w.Scenarios, func(s *Scenario) bool { return s.Name == "deploy-error" })]
+	for hour := range 24 {
+		w.Anchor = time.Date(2026, 11, 22, hour, 17, 0, 0, time.UTC)
+		start, end := sc.start(w.Anchor), sc.end(w.Anchor)
+		take := w.AlertHours()
+		var last time.Time
+		steps, longest := 0, time.Duration(0)
+		for at := start.Truncate(time.Hour).Add(-10 * time.Hour); at.Before(w.Anchor); at = at.Add(time.Hour) {
+			if !take(at) {
+				continue
+			}
+			if steps++; steps > 1 {
+				longest = max(longest, at.Sub(last))
+			} else if at.After(start) {
+				t.Errorf("anchor %d h: first step %v, the start %v", hour, at, start)
+			}
+			last = at
+		}
+		if longest > 5*time.Hour || last.Before(end.Add(12*time.Hour)) || steps > 30 {
+			t.Errorf("anchor %d h: %d steps at most %v apart, the last %v after the end", hour, steps, longest, last.Sub(end))
+		}
+	}
+}
+
 // The requests of a span are the same whether the world is asked for it at once or a minute at a time.
 func TestRequestsIndependentOfTicks(t *testing.T) {
 	from, to := anchor.Add(-26*time.Hour), anchor.Add(-20*time.Hour)

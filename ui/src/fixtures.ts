@@ -1873,6 +1873,17 @@ function alert(
 // own under site ""; blog.example.org has none. lens.example.com has more
 // than a page.
 const ALERTS: Alert[] = [
+  alert(413, "lens.example.com", "level.errors", "normal", 34, {
+    last: 14,
+    cleared: 9,
+    text: "Visitors with a script error over the last 1 h: 12 %",
+    detail:
+      'Usually 0.6 % (median of 7 days); 12 of 100 visitors; most frequent (9 visitors): TypeError: cannot read "prefixes"',
+    figure: 12,
+    unit: "%",
+    delivery: sent(9, OPS, MAIL),
+    target: { panel: "errors", filter: {} },
+  }),
   alert(412, "lens.example.com", "error.new", "high", 38, {
     key: 'TypeError: cannot read "prefixes"',
     state: "open",
