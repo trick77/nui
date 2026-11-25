@@ -1534,6 +1534,57 @@ describe("script errors", () => {
     expect(lastCall("/api/dash/log").get("kind")).toBe("js_error");
   });
 
+  // One stored without a message: no name to ask the detail for.
+  it("opens the log for a script error without a message", async () => {
+    start("/dashboard/?site=lens.example.com");
+    const fx = fixtureFetch();
+    setFetcher(async (u, i) => {
+      calls.push(u);
+      const r = await fx(u, i);
+      if (!u.startsWith("/api/dash/list?") || !u.includes("dim=errors"))
+        return r;
+      const l = await r.json();
+      l.rows[0] = { ...l.rows[0], key: "", label: "" };
+      return new Response(JSON.stringify(l));
+    });
+    const errors = await screen.findByRole("region", { name: "Errors" });
+    fireEvent.click((await within(errors).findAllByText("js"))[0]);
+    const log = await screen.findByRole("region", { name: "Log" });
+    expect(window.location.pathname).toBe("/dashboard/log");
+    expect(within(log).getByRole("combobox", { name: "Kind" })).toHaveValue(
+      "js_error",
+    );
+    const q = lastCall("/api/dash/log");
+    expect(q.get("kind")).toBe("js_error");
+    expect(q.get("name")).toBeNull();
+    expect(calls.some((c) => c.startsWith("/api/dash/error"))).toBe(false);
+  });
+
+  // An origin says what it is, with the place beside it.
+  it("names code without a web address", async () => {
+    start("/dashboard/?site=lens.example.com");
+    const fx = fixtureFetch();
+    setFetcher(async (u, i) => {
+      const r = await fx(u, i);
+      if (!u.startsWith("/api/dash/error?")) return r;
+      const d = await r.json();
+      d.origins = ["named"];
+      d.places.rows[0].where = {
+        origin: "named",
+        host: "",
+        place: "app.js:3:7",
+      };
+      return new Response(JSON.stringify(d));
+    });
+    const errors = await screen.findByRole("region", { name: "Errors" });
+    fireEvent.click(await within(errors).findByText(/^TypeError/));
+    const d = await screen.findByRole("region", { name: "Error" });
+    expect(await within(d).findByText("app.js:3:7")).toBeInTheDocument();
+    expect(within(d).getByRole("term")).toHaveTextContent(
+      "Code without a web address",
+    );
+  });
+
   it("opens the detail from the full list, which closes", async () => {
     start("/dashboard/?site=lens.example.com");
     const fx = fixtureFetch();

@@ -117,10 +117,10 @@ function Errors() {
   );
   const name = picked?.site === scope.site ? picked.name : null;
   return (
-    // One grid cell for both, the list as tall as its neighbour.
-    <div className="flex min-w-0 flex-col">
+    // Two cells of the page's grid: the list, and the detail in a row of its
+    // own below it and its neighbour.
+    <>
       <TopList
-        className="grow"
         id="errors-panel"
         title="Errors"
         sources={["browser", "server"]}
@@ -149,19 +149,22 @@ function Errors() {
           { head: "Count", num: true, cell: (r) => num(r.value) },
           { head: "Visitors", num: true, cell: (r) => num(r.second) },
         ]}
-        // A server error's row is a request: its events say the rest.
+        // A server error's row is a request: its events say the rest. An
+        // error without a message has no detail to ask for.
         onRow={(r) =>
-          r.sub === "js"
-            ? setPicked({ site: scope.site, name: r.key })
-            : openLog({ path: r.label })
+          r.sub !== "js"
+            ? openLog({ path: r.label })
+            : r.key
+              ? setPicked({ site: scope.site, name: r.key })
+              : openLog({ kind: "js_error" })
         }
         empty="No errors in this range."
       />
-      {name != null && (
+      {name && (
         // Afresh per error: never one's figures under another's name.
         <ErrorDetail key={name} name={name} onClose={() => setPicked(null)} />
       )}
-    </div>
+    </>
   );
 }
 

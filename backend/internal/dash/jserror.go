@@ -28,7 +28,8 @@ const (
 	originExtension = "extension" // a browser extension, or another script that is not the page's
 	originOwn       = "own"       // the site's own host
 	originOther     = "other"     // another host, whose name is known
-	originUnknown   = "unknown"   // no location reported (a rejected promise)
+	originNamed     = "named"     // code with no web address: a sourceURL's or a bundler's name, a local file
+	originUnknown   = "unknown"   // no file reported (a rejection with something that is no error)
 )
 
 const (
@@ -85,9 +86,12 @@ func locate(domain, name, src string, line, col sql.NullFloat64) errorWhere {
 	if maskedError(name) {
 		none.Origin = originWithheld
 	}
-	// A blob's URL holds its page's after the scheme.
-	u, err := url.Parse(strings.TrimPrefix(src, "blob:"))
-	if src == "" || err != nil || u.Scheme == "" {
+	// As reported, without query and fragment: a sourceURL's name may be any text.
+	bare := strings.TrimSpace(src)
+	if i := strings.IndexAny(bare, "?#"); i >= 0 {
+		bare = bare[:i]
+	}
+	if bare == "" {
 		return none
 	}
 	pos := ""
@@ -97,17 +101,24 @@ func locate(domain, name, src string, line, col sql.NullFloat64) errorWhere {
 			pos += ":" + n
 		}
 	}
+	named := errorWhere{Origin: originNamed, Place: truncate(bare, maxPlace) + pos}
+	// A blob's URL holds its page's after the scheme.
+	u, err := url.Parse(strings.TrimPrefix(src, "blob:"))
+	if err != nil {
+		return named
+	}
 	path := u.EscapedPath()
 	switch {
 	case strings.HasSuffix(u.Scheme, "-extension"), u.Scheme == "webkit-masked-url", u.Scheme == "user-script":
 		return errorWhere{Origin: originExtension, Place: truncate(u.Scheme+"://"+u.Host+path, maxPlace) + pos}
+	// Another scheme's host is none: webpack://app/./src/a.js names a package.
+	case u.Scheme != "http" && u.Scheme != "https", u.Host == "":
+		return named
 	case strings.EqualFold(u.Hostname(), domain):
 		return errorWhere{Origin: originOwn, Place: truncate(cmp.Or(path, "/"), maxPlace) + pos}
-	case u.Host != "":
-		return errorWhere{Origin: originOther, Host: truncate(u.Hostname(), maxPlace),
-			Place: truncate(u.Host+path, maxPlace) + pos}
 	}
-	return none
+	return errorWhere{Origin: originOther, Host: truncate(u.Hostname(), maxPlace),
+		Place: truncate(u.Host+path, maxPlace) + pos}
 }
 
 // position is a line or column as text; ok false for one no browser reports.
@@ -190,7 +201,7 @@ type errorDetail struct {
 	Count    int64          `json:"count"`
 	Visitors int64          `json:"visitors"`
 	Sessions int64          `json:"sessions"`
-	Viewers  int64          `json:"viewers"` // visitors with a page view in the same span
+	Viewers  int64          `json:"viewers"` // visitors with a page view in the same span, 0 without an occurrence
 	Share    *float64       `json:"share"`   // visitors of viewers in percent, null without viewers
 	First    any            `json:"first"`
 	Last     any            `json:"last"`
@@ -288,7 +299,8 @@ func (s *Server) errorDetail(ctx context.Context, q *query, key string, from, to
 		}
 		return rows.Err()
 	}
-	// Who could have hit it: everyone who saw a page.
+	// Who could have hit it: everyone who saw a page. The share's cost: each day's range is read a second time, its
+	// visitors a set of their own.
 	views := func(lo, hi int64) error {
 		rows, err := s.query(ctx, `SELECT DISTINCT visitor FROM event WHERE site_id = ? AND ts >= ? AND ts < ?
 			AND kind = 'page_view' AND `+audWhere(q.aud), q.site.ID, lo, hi)
@@ -305,16 +317,19 @@ func (s *Server) errorDetail(ctx context.Context, q *query, key string, from, to
 		}
 		return rows.Err()
 	}
-	for _, win := range windows(from, to, scanWindow) {
+	wins := windows(from, to, scanWindow)
+	for _, win := range wins {
 		if err := day(win[0], win[1]); err != nil {
 			return nil, fmt.Errorf("error events: %w", err)
 		}
-		if err := views(win[0], win[1]); err != nil {
-			return nil, fmt.Errorf("error viewers: %w", err)
-		}
 	}
-	if d.Count > 0 {
+	if d.Count > 0 { // no error has no share
 		d.First, d.Last = iso(time.UnixMilli(first)), iso(time.UnixMilli(last))
+		for _, win := range wins {
+			if err := views(win[0], win[1]); err != nil {
+				return nil, fmt.Errorf("error viewers: %w", err)
+			}
+		}
 	}
 	d.Visitors, d.Sessions, d.Viewers = visitors.count(), sessions.count(), viewers.count()
 	if d.Viewers > 0 { // a visitor whose page view lies before the span is in the one count only

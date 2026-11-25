@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/trick77/trakk/backend/internal/store"
 )
@@ -34,8 +36,24 @@ func TestLocate(t *testing.T) {
 		{"TypeError: x", "webkit-masked-url://hidden/", n(4), n(1),
 			errorWhere{Origin: originExtension, Place: "webkit-masked-url://hidden/:4:1"}},
 		{"Unhandled rejection: x", "", none, none, errorWhere{Origin: originUnknown}},
-		// What no browser reports: no URL, a line that is none.
-		{"TypeError: x", "%zz", n(3), n(7), errorWhere{Origin: originUnknown}},
+		// No web address: a sourceURL's name, a bundler's (its "host" is a package), a local file, what no URL is.
+		{"TypeError: x", "app.js", n(3), n(7), errorWhere{Origin: originNamed, Place: "app.js:3:7"}},
+		{"TypeError: x", "my app.js?t=1#f", n(3), none, errorWhere{Origin: originNamed, Place: "my app.js:3"}},
+		{"TypeError: x", "webpack-internal:///./src/a.js?9f", n(3), n(7),
+			errorWhere{Origin: originNamed, Place: "webpack-internal:///./src/a.js:3:7"}},
+		{"TypeError: x", "webpack://app/./src/a.js", n(3), n(7),
+			errorWhere{Origin: originNamed, Place: "webpack://app/./src/a.js:3:7"}},
+		{"TypeError: x", "file:///x.js", n(3), n(7), errorWhere{Origin: originNamed, Place: "file:///x.js:3:7"}},
+		{"TypeError: x", "about:srcdoc", n(3), n(7), errorWhere{Origin: originNamed, Place: "about:srcdoc:3:7"}},
+		{"TypeError: x", "blob:null/0b1c", n(3), n(7), errorWhere{Origin: originNamed, Place: "blob:null/0b1c:3:7"}},
+		{"TypeError: x", "https:///a.js", n(3), n(7), errorWhere{Origin: originNamed, Place: "https:///a.js:3:7"}},
+		{"TypeError: x", "%zz", n(3), n(7), errorWhere{Origin: originNamed, Place: "%zz:3:7"}},
+		{"TypeError: x", strings.Repeat("a", maxPlace-1) + "é.js", n(3), n(7),
+			errorWhere{Origin: originNamed, Place: strings.Repeat("a", maxPlace-1) + "…:3:7"}},
+		// Nothing left of it is no location.
+		{"TypeError: x", " ?t=1", n(3), n(7), errorWhere{Origin: originUnknown}},
+		{"Script error.", "?t=1", n(3), n(7), errorWhere{Origin: originWithheld}},
+		// What no browser reports: a line that is none.
 		{"TypeError: x", "https://lens.example.com/a.js", n(1e20), n(7), errorWhere{Origin: originOwn, Place: "/a.js"}},
 		{"TypeError: x", "https://lens.example.com/a.js", n(-3), n(7), errorWhere{Origin: originOwn, Place: "/a.js"}},
 	} {
@@ -145,6 +163,44 @@ func TestErrorDetail(t *testing.T) {
 	}
 	if code, _ := r.get(t, "error", p(feedSite, "range", "24h")); code != 400 {
 		t.Errorf("no key: %d", code)
+	}
+}
+
+// An error nobody had asks for no viewers: that pass is the share's cost. Every statement spans at most a day.
+func TestErrorStatements(t *testing.T) {
+	r, insert := exactRig(t)
+	ts := at("2026-11-20T10:00:00Z")
+	insert(jsError(ts, "TypeError: x", "v0"), jsError(ts-3*dayMS, "another", "v0"))
+	view := jsError(ts, "", "v1")
+	view.Kind = "page_view"
+	insert(view)
+	var mu sync.Mutex
+	var errs, views int
+	traceSQL = func(q string, args []any) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.Contains(q, "kind = 'js_error' AND name = ?"):
+			errs++
+		case strings.Contains(q, "kind = 'page_view'"):
+			views++
+		default:
+			return
+		}
+		if lo, hi := args[1].(int64), args[2].(int64); hi-lo > dayMS {
+			t.Errorf("a statement over %d ms", hi-lo)
+		}
+	}
+	t.Cleanup(func() { traceSQL = nil })
+	for key, want := range map[string]bool{"nothing": false, "TypeError: x": true} {
+		errs, views = 0, 0
+		_, b := r.get(t, "error", p(feedSite, "key", key))
+		if errs == 0 || errs > 8 || (views > 0) != want || views > errs {
+			t.Errorf("%s: %d statements of errors, %d of views", key, errs, views)
+		}
+		if (b["share"] != nil) != want || (b["viewers"] == 1.0) != want {
+			t.Errorf("%s: share %v of %v", key, b["share"], b["viewers"])
+		}
 	}
 }
 
@@ -294,6 +350,23 @@ func TestErrorOrigins(t *testing.T) {
 	}
 	if _, b := r.get(t, "error", p(feedSite, "key", "nothing")); fmt.Sprint(b["origins"]) != "[]" {
 		t.Errorf("no occurrence: origins %v", b["origins"])
+	}
+}
+
+// A cut is at a rune's start: half a rune would reach the page as U+FFFD.
+func TestTruncate(t *testing.T) {
+	for _, tt := range []struct {
+		s    string
+		n    int
+		want string
+	}{{"abc", 3, "abc"}, {"äöü", 6, "äöü"}, {"äöü", 5, "äö…"}, {"äöü", 4, "äö…"}, {"a b", 2, "a…"}, {"a😀b", 4, "a…"},
+		{"😀", 2, "…"}, {"\x80\x80\x80", 2, "…"}} {
+		if got := truncate(tt.s, tt.n); got != tt.want {
+			t.Errorf("%q to %d: %q, want %q", tt.s, tt.n, got, tt.want)
+		}
+	}
+	if got := stackFrames(`["fn@` + strings.Repeat("é", maxPlace) + `"]`); len(got) != 1 || !utf8.ValidString(got[0]) {
+		t.Errorf("frames %q", got)
 	}
 }
 

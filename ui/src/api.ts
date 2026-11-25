@@ -329,7 +329,7 @@ export type LogRow = {
 };
 
 export type ErrorOrigin =
-  "withheld" | "extension" | "own" | "other" | "unknown";
+  "withheld" | "extension" | "own" | "other" | "named" | "unknown";
 
 export type ErrorWhere = {
   origin: ErrorOrigin;
