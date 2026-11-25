@@ -30,7 +30,27 @@ type Params struct {
 	Direction, Source, Baseline string
 	After, Window               time.Duration
 	Jobs                        []string
+	// Visitors is the least distinct visitors (a server error: addresses) a new error needs; Origins where a script
+	// error may come from for it to count (one of its places is enough; a server error has none and always counts).
+	Visitors float64
+	Origins  []string
 }
+
+// The origins of a script error, as the dashboard's error detail names them.
+const (
+	OriginOwn       = "own"       // the site's own host
+	OriginOther     = "other"     // another host
+	OriginNamed     = "named"     // code with no web address (a sourceURL's or a bundler's name)
+	OriginUnknown   = "unknown"   // no file reported: mostly the site's own rejected promises
+	OriginWithheld  = "withheld"  // the browser hides it ("Script error.")
+	OriginExtension = "extension" // a browser extension
+)
+
+// Origins are every origin; DefaultOrigins all but an extension's, no news of the site's.
+var (
+	Origins        = []string{OriginOwn, OriginOther, OriginNamed, OriginUnknown, OriginWithheld, OriginExtension}
+	DefaultOrigins = []string{OriginOwn, OriginOther, OriginNamed, OriginUnknown, OriginWithheld}
+)
 
 // Parameter names.
 const (
@@ -48,6 +68,8 @@ const (
 	pBaseline  = "baseline"
 	pFloor     = "floor"
 	pCalls     = "calls"
+	pVisitors  = "visitors"
+	pOrigins   = "origins"
 )
 
 var levelParams = []string{pWindow, pMin, pMax, pFactor, pDrop, pBaseline, pFloor}
@@ -76,7 +98,8 @@ func level(id string, extra ...string) Spec {
 
 // Catalogue is every trigger. The traffic facts' defaults are Noteworthy's thresholds (dash's constants).
 var Catalogue = []Spec{
-	fact("error.new", 1),
+	{ID: "error.new", Group: "traffic", Params: []string{pMin, pVisitors, pOrigins},
+		Defaults: Params{Min: 1, Visitors: 1, Origins: DefaultOrigins}},
 	fact("failure.new", 3),
 	fact("probe.new", 3),
 	fact("endpoint.new", 5),

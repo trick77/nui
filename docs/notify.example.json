@@ -9,7 +9,7 @@
   },
   "defaults": { "channels": ["ops"], "cooldown": "1h" },
   "rules": [
-    { "name": "new-errors", "on": "error.new", "min": 5 },
+    { "name": "new-errors", "on": "error.new", "min": 5, "visitors": 2, "origins": ["own", "unknown", "withheld"] },
     { "name": "new-probes", "on": "probe.new", "severity": "low" },
     { "name": "addr-flood", "on": "spike.addr", "min": 500, "share": 25, "factor": 3, "sites": ["lens.example.com"] },
     { "name": "feed-down", "on": "source.silent", "source": "server", "after": "30m", "severity": "high", "channels": ["ops", "mail"] },

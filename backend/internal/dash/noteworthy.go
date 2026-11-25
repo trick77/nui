@@ -373,10 +373,10 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile, th Thresh
 	// One browser's extension is no news of the site's, and nothing about it can be looked up (owner). At any
 	// thresholds: a rule's never admits a hidden error from fewer visitors.
 	shown := func(k string, g *keySums) bool { return !maskedError(k) || g.d.count() >= minMaskedVisitors }
-	if err := s.newKeysOf(ctx, q, "errors", th.NewErrors, shown, func(k string, v int64, _ *keySums) {
+	if err := s.newKeysOf(ctx, q, "errors", th.NewErrors, shown, func(k string, v int64, g *keySums) {
 		add(insight.Fact{ID: "err:" + k, Kind: "problem", Figure: num(float64(v)), Unit: "times",
 			Text: "New error: " + truncate(k, 120), Score: 1000 + float64(v), Target: insight.Target{Panel: "errors"},
-			Value: float64(v)})
+			Value: float64(v), Visitors: float64(g.d.count()), Server: strings.HasPrefix(g.sub, "server")})
 	}); err != nil {
 		return nil, un, err
 	}

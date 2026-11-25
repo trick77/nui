@@ -167,6 +167,9 @@ func (e *Engine) render(items []*store.Alert) (title, body string, sev alert.Sev
 		if a.Detail != "" {
 			b.WriteString(a.Detail + "\n")
 		}
+		if link := e.logLink(a); link != "" {
+			b.WriteString(link + "\n")
+		}
 	}
 	if link := e.link(sites); link != "" {
 		b.WriteString("\n" + link + "\n")
@@ -208,6 +211,24 @@ func (e *Engine) link(sites map[int64]bool) string {
 			}
 		}
 	}
+	return u.String()
+}
+
+// logLink is an alert's own rows in the dashboard's log over the last 24 hours, the log's filter its target's ("" for
+// an alert whose target is no log, or without a public host): a new error's every occurrence.
+func (e *Engine) logLink(a *store.Alert) string {
+	if e.o.PublicFQDN == "" || a.Panel != "log" || a.SiteID == 0 || e.o.Sites == nil {
+		return ""
+	}
+	s, ok := e.o.Sites.ByID(a.SiteID)
+	if !ok {
+		return ""
+	}
+	q := url.Values{"site": {s.Domain}, "range": {"24h"}}
+	for k, v := range a.Filter {
+		q.Set(k, v)
+	}
+	u := url.URL{Scheme: "https", Host: e.o.PublicFQDN, Path: "/dashboard/log", RawQuery: q.Encode()}
 	return u.String()
 }
 

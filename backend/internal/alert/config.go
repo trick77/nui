@@ -207,7 +207,7 @@ func DefaultRules() []Rule {
 			continue
 		}
 		r := Rule{Name: s.ID, Spec: s, Enabled: true, Cooldown: DefaultCooldown, Severity: Normal, P: s.Defaults}
-		r.P.Jobs = slices.Clone(r.P.Jobs)
+		r.P.Jobs, r.P.Origins = slices.Clone(r.P.Jobs), slices.Clone(r.P.Origins)
 		r.Sig = signature(r)
 		out = append(out, r)
 	}
@@ -345,6 +345,8 @@ type ruleJSON struct {
 	After     *string  `json:"after"`
 	Window    *string  `json:"window"`
 	Jobs      []string `json:"jobs"`
+	Visitors  *float64 `json:"visitors"`
+	Origins   []string `json:"origins"`
 }
 
 // set is the trigger parameters the rule wrote.
@@ -352,7 +354,7 @@ func (j *ruleJSON) set() map[string]bool {
 	m := map[string]bool{pMin: j.Min != nil, pMax: j.Max != nil, pShare: j.Share != nil, pFactor: j.Factor != nil,
 		pChange: j.Change != nil, pDrop: j.Drop != nil, pFloor: j.Floor != nil, pCalls: j.Calls != nil,
 		pDirection: j.Direction != nil, pSource: j.Source != nil, pBaseline: j.Baseline != nil, pAfter: j.After != nil,
-		pWindow: j.Window != nil, pJobs: j.Jobs != nil}
+		pWindow: j.Window != nil, pJobs: j.Jobs != nil, pVisitors: j.Visitors != nil, pOrigins: j.Origins != nil}
 	for k, v := range m {
 		if !v {
 			delete(m, k)
@@ -382,7 +384,7 @@ func parseRule(raw json.RawMessage, def ruleDefaults, c *Config, k Known) (Rule,
 		return r, errs
 	}
 	r.Spec, r.P = spec, spec.Defaults
-	r.P.Jobs = slices.Clone(r.P.Jobs)
+	r.P.Jobs, r.P.Origins = slices.Clone(r.P.Jobs), slices.Clone(r.P.Origins)
 	given := j.set()
 	for p := range given {
 		if !spec.takes(p) {
@@ -475,6 +477,17 @@ func parseRule(raw json.RawMessage, def ruleDefaults, c *Config, k Known) (Rule,
 			}
 		}
 	}
+	if j.Origins != nil {
+		r.P.Origins = j.Origins
+		if len(j.Origins) == 0 {
+			bad("origins lists at least one of %s", strings.Join(Origins, ", "))
+		}
+		for _, o := range j.Origins {
+			if !slices.Contains(Origins, o) {
+				bad("origin %q is none of %s", Defuse(o, 40), strings.Join(Origins, ", "))
+			}
+		}
+	}
 	if spec.Group == "level" && !r.P.HasMin && !r.P.HasMax && !r.P.HasFactor && !r.P.HasDrop {
 		bad("%s needs min, max, factor or drop", spec.ID)
 	}
@@ -504,6 +517,7 @@ func numbers(j *ruleJSON, r *Rule) []error {
 		{pDrop, j.Drop, &r.P.Drop, &r.P.HasDrop, 0, 100, true, false},
 		{pFloor, j.Floor, &r.P.Floor, nil, 0, math.Inf(1), false, false},
 		{pCalls, j.Calls, &r.P.Calls, nil, 0, math.Inf(1), false, true},
+		{pVisitors, j.Visitors, &r.P.Visitors, nil, 1, math.Inf(1), false, true},
 	} {
 		if n.v == nil {
 			continue
