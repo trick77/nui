@@ -359,7 +359,10 @@ export function start(
     src = el ? el.src : "";
   }
   if (!src) return null;
-  const endpoint = new URL(src, loc.href).origin + "/api/in";
+  const own = new URL(src, loc.href);
+  const endpoint = own.origin + "/api/in";
+  // This script as a stack's frames name it.
+  const ownFile = own.origin + own.pathname;
   const site = loc.hostname;
 
   const queue: Rec[] = [];
@@ -1306,6 +1309,26 @@ export function start(
   };
   const hist = win.history;
   const orig: [string, unknown][] = [];
+  // What a wrapped call threw last, boxed (anything can be thrown): with
+  // this script in the call stack the browser hides it from the window's
+  // error event that follows if nobody catches it. One, the latest, and only
+  // until its task is over: the value is the page's, and a caught one must
+  // not explain a later error. A microtask is too early: listeners and timers
+  // run theirs before the exception is reported. One timer is enough however
+  // often a task throws: none fires inside it. The limit: after a caught
+  // throw, another hidden error in that task, or in one already queued ahead
+  // of the timer, takes its text (measured with timers due together).
+  let thrown: [unknown] | undefined;
+  let thrownTimer: ReturnType<typeof setTimeout> | 0 = 0;
+  const keep = (v: unknown) => {
+    // First the timer: without one nothing is kept.
+    if (!thrownTimer)
+      thrownTimer = setTimeout(() => {
+        thrownTimer = 0;
+        thrown = undefined;
+      }, 0);
+    thrown = [v];
+  };
   for (const m of ["pushState", "replaceState"] as const) {
     try {
       const o = hist[m];
@@ -1315,7 +1338,13 @@ export function start(
         this: History,
         ...a: Parameters<History["pushState"]>
       ) {
-        const r = o.apply(this, a);
+        let r;
+        try {
+          r = o.apply(this, a);
+        } catch (e) {
+          guard(() => keep(e));
+          throw e;
+        }
         guard(() => pageView(false));
         return r;
       };
@@ -1440,6 +1469,23 @@ export function start(
     if (fit(p).dropped) delete p.stack;
     record("js_error", p);
   };
+  // A thrown value's text; like its getters, the page's to throw in.
+  const said = (v: unknown) =>
+    String(v && typeof v === "object" && "message" in v ? v.message : v);
+  // A thrown value's props, with no event to say where: the place is its
+  // first frame's that has one and is not this script's.
+  const placed = (v: unknown): Props => {
+    const p = errorProps(v);
+    for (const f of (p.stack as string[] | undefined) || []) {
+      const m = FRAME_AT.exec(f);
+      if (!m || m[1] === ownFile) continue;
+      p.src = m[1];
+      p.line = +m[2];
+      p.col = +m[3];
+      break;
+    }
+    return p;
+  };
   on(
     win,
     "error",
@@ -1451,33 +1497,32 @@ export function start(
         if (u) record("resource_error", { url: u });
         return;
       }
-      jsError(ev.message || "Error", {
+      const at = {
         src: ev.filename,
         line: ev.lineno || 0,
         col: ev.colno || 0,
-        ...errorProps(ev.error),
-      });
+      };
+      // Any error uses up what a wrapped call threw; only a hidden one may
+      // be it.
+      const hid = thrown;
+      thrown = undefined;
+      if (!hid || at.src || at.line || !/^script error\.?$/i.test(ev.message)) {
+        jsError(ev.message || "Error", { ...at, ...errorProps(ev.error) });
+        return;
+      }
+      const p = placed(hid[0]);
+      let msg = "";
+      guard(() => (msg = said(hid[0])));
+      // As the browsers word it.
+      msg = [p.type, msg].filter(Boolean).join(": ") || "Error";
+      jsError(msg, { ...at, ...p });
     },
     true,
   );
   on(win, "unhandledrejection", (e) => {
-    const r = (e as PromiseRejectionEvent).reason as
-      { message?: unknown } | undefined;
-    const p = errorProps(r);
-    // No file or line of its own: the first frame's that has one.
-    for (const f of (p.stack as string[] | undefined) || []) {
-      const m = FRAME_AT.exec(f);
-      if (!m) continue;
-      p.src = m[1];
-      p.line = +m[2];
-      p.col = +m[3];
-      break;
-    }
-    jsError(
-      "Unhandled rejection: " +
-        String(r && typeof r === "object" && "message" in r ? r.message : r),
-      p,
-    );
+    const r = (e as PromiseRejectionEvent).reason as unknown;
+    if (thrown && thrown[0] === r) thrown = undefined;
+    jsError("Unhandled rejection: " + said(r), placed(r));
   });
 
   // Web vitals, from the browser's own observers where it has them.
@@ -1614,6 +1659,7 @@ export function start(
           (hist as unknown as Record<string, unknown>)[m] = o;
         });
       if (timer) clearTimeout(timer);
+      if (thrownTimer) clearTimeout(thrownTimer);
       timer = 0;
       disabled = true;
     },

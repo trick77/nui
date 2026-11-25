@@ -24,7 +24,7 @@ import {
 const ORIGIN: Record<ErrorOrigin, [string, string]> = {
   withheld: [
     "Details withheld",
-    "The browser hides this error's text, file and line, as it does when an error comes out of a script it treats as another site's. That includes the page's own calls that pass through one: WebKit, Safari's engine, hides what history.pushState throws, since Trakk's script wraps it. “Script error.” is the browser's stand-in, not a message of the page's code.",
+    "The browser hides this error's text, file and line, as it does when an error comes out of a script it treats as another site's. “Script error.” is the browser's stand-in, not a message of the page's code.",
   ],
   extension: [
     "Not the site's code",

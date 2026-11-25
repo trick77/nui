@@ -43,6 +43,8 @@ under `/api`, dashboard under `/dashboard`. `backend/`: Go on ship's kit, embeds
   network name or date. Request text (paths, UAs, referrers) is hostile: data in the user message only.
 - Automation probes: the CDP trick (stack getter via `console.debug`) fired in no run on Chrome 159, Puppeteer's
   `Runtime.enable` included. A WebGL context took up to 411 ms.
+- The `pushState` wrapper remembers what it rethrows: WebKit masks errors through `trakk.js` as "Script error.", CORS
+  on the tag does not help (measured, 27.2).
 - Simulator: drives the real collector, classifier and dashboard, never a copy of their logic (hand-written
   fixtures drifted and hid defects). Documentation addresses only.
 - Rate limit: one token on arrival, then one per event or per 2 KiB stored, whichever is more (490 caller-named

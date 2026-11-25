@@ -1494,6 +1494,237 @@ describe("capture", () => {
     expect(e.p.stack).toBeUndefined();
   });
 
+  // WebKit and Chromium hide an error that comes out of the wrapped history
+  // call: the window's error event is their stand-in.
+  describe("what a wrapped history call throws", () => {
+    const HIDDEN = { msg: "Script error.", src: "", line: 0, col: 0 };
+    const hidden = (init: ErrorEventInit = {}) =>
+      window.dispatchEvent(
+        new ErrorEvent("error", { message: "Script error.", ...init }),
+      );
+    const webkit = (message: string) => ({
+      name: "SecurityError",
+      message,
+      stack:
+        "pushState@[native code]\n@https://collector.example.com/trakk.js:2:9998\n" +
+        "later@https://x.example.com/app.js?token=1:7:53\nnext@https://x.example.com/b.js:1:1",
+    });
+    const reported = (message: string) => ({
+      msg: "SecurityError: " + message,
+      type: "SecurityError",
+      stack: [
+        "pushState@[native code]",
+        "@https://collector.example.com/trakk.js:2:9998",
+        "later@https://x.example.com/app.js:7:53",
+        "next@https://x.example.com/b.js:1:1",
+      ],
+      src: "https://x.example.com/app.js",
+      line: 7,
+      col: 53,
+    });
+    // A page whose history calls throw v, and the script on it.
+    const page = (v: unknown, src = SRC) => {
+      for (const m of ["pushState", "replaceState"] as const)
+        vi.spyOn(history, m).mockImplementation(() => {
+          throw v;
+        });
+      tracker = start(win, src);
+      return tracker!;
+    };
+    const call = (m: "pushState" | "replaceState" = "pushState") => {
+      try {
+        history[m](null, "", "/x");
+      } catch (e) {
+        return [e];
+      }
+      return [];
+    };
+    const errors = async (t: Tracker) =>
+      (await flushed(t)).filter((e) => e.k === "js_error").map((e) => e.p);
+
+    it("reaches the page unchanged, and is reported for the browser's stand-in", async () => {
+      const v = webkit("Attempt to use history.pushState()");
+      // The script's own frame has no query.
+      const t = page(v, SRC + "?v=2");
+      for (const m of ["pushState", "replaceState"] as const) {
+        expect(call(m)[0]).toBe(v);
+        hidden();
+      }
+      expect(call()[0]).toBe(v);
+      hidden({ message: "Script error" });
+      expect(await errors(t)).toEqual(
+        Array(3).fill(reported("Attempt to use history.pushState()")),
+      );
+    });
+
+    it("is no error where the page catches it", async () => {
+      const t = page(webkit("caught"));
+      call();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await errors(t)).toEqual([]);
+    });
+
+    it("outlives its task's microtasks, never the task", async () => {
+      const t = page(webkit("gone"));
+      call();
+      await Promise.resolve();
+      hidden();
+      call();
+      call();
+      await vi.advanceTimersByTimeAsync(0);
+      hidden();
+      // Armed again by a later task's.
+      call();
+      hidden();
+      call();
+      await vi.advanceTimersByTimeAsync(0);
+      hidden();
+      expect(await errors(t)).toEqual([
+        reported("gone"),
+        HIDDEN,
+        reported("gone"),
+        HIDDEN,
+      ]);
+    });
+
+    it("is used once, the latest of several", async () => {
+      const v = webkit("first");
+      const t = page(v);
+      call();
+      v.message = "second";
+      call();
+      hidden();
+      hidden();
+      expect(await errors(t)).toEqual([reported("second"), HIDDEN]);
+    });
+
+    it("is not read unless it is reported", () => {
+      const read = vi.fn();
+      page(
+        new Proxy(
+          {},
+          { get: (_, k) => read(k), has: (_, k) => !read("has", k) },
+        ),
+      );
+      call();
+      vi.advanceTimersByTime(0);
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    it("leaves a readable error as the event has it, and is used up by it", async () => {
+      const t = page(webkit("used up"));
+      const readable: ErrorEventInit[] = [
+        {
+          message: "Uncaught SecurityError: x",
+          filename: "https://x.example.com/app.js",
+          lineno: 7,
+          colno: 3,
+        },
+        { message: "Script error.", filename: "webkit-masked-url://hidden/" },
+        { message: "Script error.", lineno: 4 },
+        { message: "another" },
+      ];
+      for (const init of readable) {
+        call();
+        hidden(init);
+      }
+      hidden();
+      expect(await errors(t)).toEqual([
+        ...readable.map((i) => ({
+          msg: i.message,
+          src: i.filename ?? "",
+          line: i.lineno ?? 0,
+          col: i.colno ?? 0,
+        })),
+        HIDDEN,
+      ]);
+    });
+
+    it("can be any value, its getters throwing too", async () => {
+      const trap = Object.defineProperties(
+        {},
+        Object.fromEntries(
+          ["name", "message", "stack"].map((k) => [
+            k,
+            {
+              get: () => {
+                throw new Error("no");
+              },
+            },
+          ]),
+        ),
+      );
+      const at = { src: "", line: 0, col: 0 };
+      for (const [v, want] of [
+        ["plain", { msg: "plain" }],
+        [undefined, { msg: "undefined" }],
+        [null, { msg: "null" }],
+        [0, { msg: "0" }],
+        ["", { msg: "Error" }],
+        [Symbol("s"), { msg: "Symbol(s)" }],
+        [Object.create(null), { msg: "Error" }],
+        [
+          { name: "E", message: "" },
+          { msg: "E", type: "E" },
+        ],
+        [{ name: 3, message: "m" }, { msg: "m" }],
+        [trap, { msg: "Error" }],
+      ] as [unknown, object][]) {
+        const t = page(v);
+        expect(call()).toEqual([v]);
+        hidden();
+        fetchMock.mockClear();
+        expect(await errors(t)).toEqual([{ ...at, ...want }]);
+        t.stop();
+        vi.restoreAllMocks();
+      }
+    });
+
+    it("has no place where no frame is the page's", async () => {
+      const t = page({
+        ...webkit("x"),
+        stack: "pushState@[native code]\n@" + SRC + ":2:9998",
+      });
+      call();
+      hidden();
+      expect(await errors(t)).toEqual([
+        {
+          msg: "SecurityError: x",
+          type: "SecurityError",
+          stack: ["pushState@[native code]", "@" + SRC + ":2:9998"],
+          src: "",
+          line: 0,
+          col: 0,
+        },
+      ]);
+    });
+
+    it("is reported once where it rejects a promise", async () => {
+      const t = page(webkit("async"));
+      const rej = new Event("unhandledrejection") as Event & {
+        reason: unknown;
+      };
+      [rej.reason] = call();
+      window.dispatchEvent(rej);
+      hidden();
+      expect(await errors(t)).toEqual([
+        { ...reported("async"), msg: "Unhandled rejection: async" },
+        HIDDEN,
+      ]);
+    });
+
+    it("is not kept where its end cannot be timed", async () => {
+      const v = webkit("untimed");
+      const t = page(v);
+      vi.spyOn(globalThis, "setTimeout").mockImplementationOnce(() => {
+        throw new Error("no");
+      });
+      expect(call()[0]).toBe(v);
+      hidden();
+      expect(await errors(t)).toEqual([HIDDEN]);
+    });
+  });
+
   it("remembers a bounded number of distinct errors", async () => {
     const t = boot();
     const fire = (n: number) => {
