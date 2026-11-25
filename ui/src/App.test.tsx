@@ -294,7 +294,7 @@ describe("the last domain and each domain's range", () => {
   it("start with the first domain and 7d, the range in the URL", async () => {
     start();
     expect(await ready()).toHaveValue("lens.example.com");
-    expect(at()).toEqual(["lens.example.com", "7d"]);
+    await waitFor(() => expect(at()).toEqual(["lens.example.com", "7d"]));
     expect(localStorage.getItem("app.site")).toBe("lens.example.com");
     expect(localStorage.getItem("app.range.lens.example.com")).toBe("7d");
   });
@@ -373,7 +373,7 @@ describe("the last domain and each domain's range", () => {
     remember("console.example.com", "24h");
     start("/dashboard/log?kind=page_view");
     await screen.findByRole("region", { name: "Log" });
-    expect(at()).toEqual(["console.example.com", "24h"]);
+    await waitFor(() => expect(at()).toEqual(["console.example.com", "24h"]));
     expect(query().get("kind")).toBe("page_view");
     await waitFor(() =>
       expect(lastCall("/api/dash/log").get("range")).toBe("24h"),
