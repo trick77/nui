@@ -60,12 +60,14 @@ func TestErrorDetail(t *testing.T) {
 	}
 	evs := []store.Event{
 		ev(time.Hour, "js_error", msg, "a", "/one", at("https://lens.example.com/a.js?secret=1", 3)),
-		ev(2*time.Hour, "js_error", msg, "a", "/one", at("https://lens.example.com/a.js?secret=2", 3)),
+		// The newest with a stack; what is no frame is left out.
+		ev(2*time.Hour, "js_error", msg, "a", "/one", `{"p":{"src":"https://lens.example.com/a.js?secret=2","line":3,"col":7,
+			"type":"TypeError","stack":["f@a.js:3:7",{"x":1},"","g@a.js:9:1"]}}`),
 		// The same visitor on another day counts once.
 		ev(2*day, "js_error", msg, "a", "/two", at("https://lens.example.com/a.js", 9)),
 		ev(3*day, "js_error", msg, "b", "/one", at("chrome-extension://abc/c.js", 1)),
 		// Another JSON type everywhere, and a number past int64: no location, no failure.
-		ev(4*day, "js_error", msg, "c", "/one", `{"p":{"src":{"a":1},"line":"3","col":[1]}}`),
+		ev(4*day, "js_error", msg, "c", "/one", `{"p":{"src":{"a":1},"line":"3","col":[1],"type":{},"stack":"x"}}`),
 		ev(4*day, "js_error", msg, "c", "/one", `{"p":{"src":"https://lens.example.com/a.js","line":100000000000000000000}}`),
 		// Not these: another message, the same one past the range, a page view.
 		ev(time.Hour, "js_error", msg+" too", "z", "/one", "{}"),
@@ -108,6 +110,10 @@ func TestErrorDetail(t *testing.T) {
 	}
 	if len(b["recent"].([]any)) != 6 || b["recent"].([]any)[0].(map[string]any)["page"] != "/one" {
 		t.Errorf("recent %v", b["recent"])
+	}
+
+	if b["type"] != "TypeError" || fmt.Sprint(b["stack"]) != "[f@a.js:3:7 g@a.js:9:1]" {
+		t.Errorf("type %v, stack %v", b["type"], b["stack"])
 	}
 
 	// The log's row says the same; any other event's has neither.

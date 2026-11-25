@@ -75,6 +75,9 @@ export const LIMITS = {
   // Distinct error messages per page, and per document over all its pages.
   errorKinds: 20,
   errorKindsPerDocument: 100,
+  // An error's stack: frames, bytes per frame.
+  stackFrames: 8,
+  frameBytes: 160,
 };
 
 // On the product's origin, so namespaced, but never by this product's name
@@ -131,6 +134,12 @@ const SEARCH_NAMES = /^(q|query|search|s|term)$/i;
 // Kinds the collector names by a host, a message or a URL (LIMITS.nameBytes);
 // every other kind but custom by at most 16 bytes, or not at all.
 const NAMED = /^(outbound_click|download|js_error|resource_error)$/;
+// A stack's frame: Chromium's "at f (URL:1:2)", Firefox's and WebKit's
+// "f@URL:1:2" or "f@[native code]". Its URL without query and fragment, and
+// its place.
+const FRAME = /^\s+at |^[^@\s]*@(?:\S+:\d+:\d+|\[native code\])$/;
+const FRAME_QUERY = /(:\/\/[^\s)?#]*)[?#][^\s)]*?(?=:\d+:\d+|[\s)]|$)/g;
+const FRAME_AT = /([a-z][a-z-]*:\/\/[^\s()]+?):(\d{1,9}):(\d{1,9})\)?$/;
 const ID = /^[\da-f]{32}$/;
 
 // UTF-8 length without TextEncoder, which old browsers lack.
@@ -227,6 +236,38 @@ export function bound(v: unknown, key: string, depth: number): unknown {
     if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
     const c = clip(k, LIMITS.keyBytes);
     out[c] = bound((v as Props)[k], c, depth + 1);
+  }
+  return out;
+}
+
+// A thrown value's type and the top of its stack, as far as it has them. It
+// is the page's: any getter may throw. Only lines that are frames: an
+// engine that puts the message first would send it twice, unclipped.
+export function errorProps(v: unknown): Props {
+  const out: Props = {};
+  if (!v || typeof v !== "object") return out;
+  const e = v as { name?: unknown; stack?: unknown };
+  try {
+    if (typeof e.name === "string" && e.name) out.type = clip(e.name, 64);
+  } catch {
+    // no type
+  }
+  try {
+    if (typeof e.stack !== "string") return out;
+    const frames = e.stack
+      .slice(0, 8192)
+      .split("\n")
+      .filter((l) => FRAME.test(l))
+      .slice(0, LIMITS.stackFrames)
+      .map((l) =>
+        clip(
+          l.trim().slice(0, 1024).replace(FRAME_QUERY, "$1"),
+          LIMITS.frameBytes,
+        ),
+      );
+    if (frames.length) out.stack = frames;
+  } catch {
+    // no stack
   }
   return out;
 }
@@ -1394,7 +1435,10 @@ export function start(
       return;
     if (!n) docErrors++;
     errorsSeen.set(key, n + 1);
-    record("js_error", { msg, ...extra });
+    const p: Props = { msg, ...extra };
+    // Over the props' limit (a long URL): the stack goes, not the message.
+    if (fit(p).dropped) delete p.stack;
+    record("js_error", p);
   };
   on(
     win,
@@ -1411,6 +1455,7 @@ export function start(
         src: ev.filename,
         line: ev.lineno || 0,
         col: ev.colno || 0,
+        ...errorProps(ev.error),
       });
     },
     true,
@@ -1418,10 +1463,20 @@ export function start(
   on(win, "unhandledrejection", (e) => {
     const r = (e as PromiseRejectionEvent).reason as
       { message?: unknown } | undefined;
+    const p = errorProps(r);
+    // No file or line of its own: the first frame's that has one.
+    for (const f of (p.stack as string[] | undefined) || []) {
+      const m = FRAME_AT.exec(f);
+      if (!m) continue;
+      p.src = m[1];
+      p.line = +m[2];
+      p.col = +m[3];
+      break;
+    }
     jsError(
       "Unhandled rejection: " +
         String(r && typeof r === "object" && "message" in r ? r.message : r),
-      {},
+      p,
     );
   });
 

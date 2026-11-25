@@ -1479,6 +1479,11 @@ describe("script errors", () => {
     expect(within(d).queryByText("Details withheld")).toBeNull();
     expect(within(d).getByText(/1.1 % of 1.310/)).toBeInTheDocument();
     expect(within(d).getByText("2 more")).toBeInTheDocument();
+    expect(
+      within(within(d).getByRole("list", { name: "Stack" })).getAllByRole(
+        "listitem",
+      ),
+    ).toHaveLength(2);
     // A visitor's trail says what came before.
     fireEvent.click(within(d).getByRole("button", { name: "203.0.113.42" }));
     await screen.findByRole("region", { name: "Visitor" });

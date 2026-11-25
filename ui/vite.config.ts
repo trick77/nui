@@ -44,6 +44,8 @@ const TRACKER_PROPS = new RegExp(
       "sameError",
       "errorKinds",
       "errorKindsPerDocument",
+      "stackFrames",
+      "frameBytes",
       // Not stop: window.stop() is the browser's.
       "flush",
     ].join("|") +

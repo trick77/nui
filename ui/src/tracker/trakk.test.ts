@@ -4,6 +4,7 @@ import {
   LIMITS,
   cleanProps,
   clip,
+  errorProps,
   start,
   utf8Len,
   type Tracker,
@@ -1396,6 +1397,101 @@ describe("capture", () => {
       "https://cdn.example.com/x.png",
     );
     img.remove();
+  });
+
+  it("takes an error's type and stack, frames only, without queries", () => {
+    const chrome = new TypeError("boom me@example.com\nsecret line");
+    chrome.stack =
+      "TypeError: boom me@example.com\nsecret line\n" +
+      "    at Foo.#bar (https://x.example.com/a.js?token=1#f:12:34)\n" +
+      "    at https://x.example.com/b.js?t=2:5:6\n    at <anonymous>";
+    expect(errorProps(chrome)).toEqual({
+      type: "TypeError",
+      stack: [
+        "at Foo.#bar (https://x.example.com/a.js:12:34)",
+        "at https://x.example.com/b.js:5:6",
+        "at <anonymous>",
+      ],
+    });
+    const webkit = {
+      name: "SecurityError",
+      stack:
+        "pushState@[native code]\n@https://x.example.com/app.js?v=3:6:53\nnot a@frame",
+    };
+    expect(errorProps(webkit)).toEqual({
+      type: "SecurityError",
+      stack: ["pushState@[native code]", "@https://x.example.com/app.js:6:53"],
+    });
+    // What is no error, and one whose getters throw.
+    for (const v of [null, undefined, "x", 3, {}, { stack: 7, name: 1 }])
+      expect(errorProps(v)).toEqual({});
+    const trap = {
+      get name() {
+        throw new Error("no");
+      },
+      get stack() {
+        throw new Error("no");
+      },
+    };
+    expect(errorProps(trap)).toEqual({});
+    // Bounded, whatever the page throws.
+    const deep = {
+      stack: ("    at f" + "x".repeat(5000) + " (u:1:1)\n").repeat(50),
+    };
+    const s = errorProps(deep).stack as string[];
+    expect(s.length).toBeLessThanOrEqual(LIMITS.stackFrames);
+    for (const f of s) expect(utf8Len(f)).toBeLessThanOrEqual(160);
+  });
+
+  it("places a rejection by its stack, and keeps the message when the props are full", async () => {
+    const t = boot();
+    const at = (file: string) =>
+      `f@[native code]\ng@https://x.example.com/${file}:7:9`;
+    const rej = new Event("unhandledrejection") as Event & { reason: unknown };
+    rej.reason = { name: "AbortError", message: "gone", stack: at("a.js?q=1") };
+    window.dispatchEvent(rej);
+    window.dispatchEvent(
+      new ErrorEvent("error", {
+        message: "M".repeat(900),
+        filename: "https://x.example.com/" + "p".repeat(2500),
+        lineno: 1,
+        error: { name: "E", stack: (at("z".repeat(400)) + "\n").repeat(20) },
+      }),
+    );
+    const errs = (await flushed(t)).filter((e) => e.k === "js_error");
+    expect(errs[0].p).toEqual({
+      msg: "Unhandled rejection: gone",
+      type: "AbortError",
+      stack: ["f@[native code]", "g@https://x.example.com/a.js:7:9"],
+      src: "https://x.example.com/a.js",
+      line: 7,
+      col: 9,
+    });
+    expect(errs[1].p.msg).toBe("M".repeat(LIMITS.strBytes));
+    expect(errs[1].p.dropped).toBeUndefined();
+    expect(bytes(JSON.stringify(errs[1].p))).toBeLessThanOrEqual(
+      LIMITS.propsBytes,
+    );
+  });
+
+  it("keeps the message where only the stack is too much", async () => {
+    const t = boot();
+    window.dispatchEvent(
+      new ErrorEvent("error", {
+        message: '"'.repeat(512),
+        filename: "https://x.example.com/" + "p".repeat(2000),
+        error: {
+          stack: (
+            "f@https://x.example.com/" +
+            '"'.repeat(130) +
+            ":1:1\n"
+          ).repeat(8),
+        },
+      }),
+    );
+    const e = (await flushed(t)).find((x) => x.k === "js_error")!;
+    expect(e.p.msg).toBe('"'.repeat(512));
+    expect(e.p.stack).toBeUndefined();
   });
 
   it("remembers a bounded number of distinct errors", async () => {

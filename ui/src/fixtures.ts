@@ -1479,6 +1479,13 @@ function errorDetail(name: string, range: string): ErrorDetail {
         where: at,
       },
     ],
+    type: withheld ? "" : "TypeError",
+    stack: withheld
+      ? []
+      : [
+          "at Lookup (https://lens.example.com/assets/index-C4v1rT2s.js:1:48113)",
+          "at render (https://lens.example.com/assets/index-C4v1rT2s.js:1:9021)",
+        ],
     detail_since: detailSince(range),
   };
 }
