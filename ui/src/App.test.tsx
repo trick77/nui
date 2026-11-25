@@ -1932,6 +1932,15 @@ describe("log page", () => {
 });
 
 describe("alerts page", () => {
+  // The fixtures' alerts are dated back from their own now: the clock runs
+  // from a minute after it, whatever today is.
+  beforeEach(() => {
+    const real = Date.now.bind(Date);
+    const began = real();
+    const at = Date.parse("2026-11-22T13:21:00Z");
+    vi.spyOn(Date, "now").mockImplementation(() => at + (real() - began));
+  });
+  afterEach(() => vi.restoreAllMocks());
   const alerts = () => screen.findByRole("region", { name: "Alerts" });
   const rows = (p: HTMLElement) => within(p).getAllByRole("row").slice(1);
   const rowOf = (p: HTMLElement, text: string) =>
@@ -2067,13 +2076,17 @@ describe("alerts page", () => {
     const p = await alerts();
     await within(p).findByText("50 alerts shown");
     fireEvent.click(within(p).getByRole("button", { name: "Load earlier →" }));
-    await within(p).findByText("58 alerts shown");
+    await within(p).findByText("59 alerts shown");
     expect(lastCall("/api/dash/alerts").get("before")).toBe("350");
     // The last page: nothing further, no page twice.
     expect(
       within(p).queryByRole("button", { name: /Load earlier/ }),
     ).toBeNull();
-    expect(rows(p)).toHaveLength(58);
+    expect(rows(p)).toHaveLength(59);
+    // Older than any range the log shows: no jump that would open it empty.
+    const gone = rowOf(p, "New error: TypeError: gone");
+    expect(gone).not.toHaveClass("click");
+    expect(within(gone).queryByRole("button")).toBeNull();
   });
 
   it("jumps from a row where it happened, on its own domain", async () => {
@@ -2084,8 +2097,9 @@ describe("alerts page", () => {
     const job = rowOf(p, "The daily aggregate build failed");
     expect(job).not.toHaveClass("click");
     expect(within(job).queryByRole("button")).toBeNull();
-    // Another domain's: the log there, with that domain's range.
-    localStorage.setItem("app.range.api.example.com", "90d");
+    // Another domain's: the log there, over the smallest range that holds
+    // the alert (a day and a half back: 7d), not the one it was left at.
+    localStorage.setItem("app.range.api.example.com", "24h");
     fireEvent.click(rowOf(p, "New failure reason: invalid_params"));
     await waitFor(() =>
       expect(window.location.pathname).toBe("/dashboard/log"),
@@ -2093,7 +2107,7 @@ describe("alerts page", () => {
     const q = new URLSearchParams(window.location.search);
     expect([q.get("site"), q.get("range"), q.get("failure")]).toEqual([
       "api.example.com",
-      "90d",
+      "7d",
       "invalid_params",
     ]);
     await waitFor(() =>
@@ -2109,9 +2123,12 @@ describe("alerts page", () => {
     await waitFor(() =>
       expect(window.location.pathname).toBe("/dashboard/log"),
     );
-    expect(new URLSearchParams(window.location.search).get("asn")).toBe(
-      "64510",
-    );
+    // Three hours back on the domain shown at 7d: the log over 24h.
+    expect(
+      ["asn", "range"].map((k) =>
+        new URLSearchParams(window.location.search).get(k),
+      ),
+    ).toEqual(["64510", "24h"]);
     fireEvent.click(screen.getByRole("link", { name: "Alerts" }));
     p = await alerts();
     await within(p).findByText("50 alerts shown");

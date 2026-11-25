@@ -5,6 +5,7 @@ import {
   type AlertState,
   type Alerts,
   type DeliveryState,
+  type Range,
   type Severity,
 } from "./api";
 import { SEP, num, when } from "./format";
@@ -50,6 +51,27 @@ const KIND: Record<string, string> = {
 };
 
 const kindLabel = (k: string) => (Object.hasOwn(KIND, k) ? KIND[k] : k);
+
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+
+// The log's ranges, the smallest first, with how far back each surely
+// reaches: a day range starts at a local midnight, so a day less than its
+// days.
+const LOG_REACH: [Range, number][] = [
+  ["24h", 24 * HOUR],
+  ["7d", 6 * DAY],
+  ["30d", 29 * DAY],
+  ["90d", 89 * DAY],
+];
+
+// The smallest log range that holds an alert's start, null when none does:
+// the log would open empty there.
+export function logRange(firstAt: string, now = Date.now()): Range | null {
+  const age = now - Date.parse(firstAt);
+  for (const [r, reach] of LOG_REACH) if (age <= reach) return r;
+  return null;
+}
 
 // A label and its dot; a value the UI does not know shows as it came.
 type Mark = [label: string, color: string | null];
@@ -140,8 +162,13 @@ export function AlertsPage({
   // are the previous one's: no paging from them.
   const fresh = !page.loading;
   const next = more.next ?? page.data?.next ?? "";
+  // A row leads where it happened: the log over a range that holds it, a
+  // panel as it is.
+  const toLog = (a: Alert) => a.target?.panel === "log";
   const leads = (a: Alert) =>
-    a.target != null && (a.site === "" || sites.includes(a.site));
+    a.target != null &&
+    (a.site === "" || sites.includes(a.site)) &&
+    (!toLog(a) || logRange(a.first_at) != null);
   return (
     <>
       <SectionHead
@@ -211,6 +238,9 @@ export function AlertsPage({
                                 a.target!.panel,
                                 a.target!.filter ?? {},
                                 a.site || undefined,
+                                toLog(a)
+                                  ? (logRange(a.first_at) ?? undefined)
+                                  : undefined,
                               )
                           : undefined
                       }

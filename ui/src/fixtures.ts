@@ -2076,6 +2076,17 @@ const ALERTS: Alert[] = [
       },
     ),
   ),
+  // Older than any range the log shows: no jump.
+  alert(341, "lens.example.com", "error.new", "normal", 92 * 24 * 60, {
+    key: "TypeError: gone",
+    text: "New error: TypeError: gone",
+    figure: 4,
+    unit: "times",
+    target: {
+      panel: "log",
+      filter: { kind: "js_error", name: "TypeError: gone" },
+    },
+  }),
 ];
 
 // The backend's page: newest first, the cursor the last id shown.
