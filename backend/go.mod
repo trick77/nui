@@ -6,16 +6,20 @@ require (
 	github.com/ncruces/go-sqlite3 v0.37.0
 	github.com/trick77/ship/kit v0.23.0
 	github.com/trick77/ship/kit/auth v0.4.4
-	github.com/trick77/toolkit v0.5.2
+	github.com/trick77/toolkit v0.9.1
 	golang.org/x/oauth2 v0.38.0
 )
 
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.9 // indirect
+	github.com/mattn/go-colorable v0.1.16 // indirect
+	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-sqlite3-wasm/v6 v6.5.35401 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
+	github.com/nicholas-fedor/shoutrrr v0.25.1 // indirect
 	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/term v0.48.0 // indirect
 )

@@ -276,11 +276,16 @@ jobs failing, a figure leaving its usual level. The dashboard lists them (`GET /
 `conf/notify.json` get them as messages. The file holds the channels' tokens: `chmod 600 conf/notify.json`, owned by
 65532 like the rest of `conf/`. Shape in [docs/notify.example.json](docs/notify.example.json):
 
-- `channels`: a name for each service URL (shoutrrr's format: `ntfy://`, `smtp://`, `gotify://`, …), or
-  `{"url": …, "min_severity": "high", "max_per_hour": 4}`. A channel gets only alerts at or above its
-  `min_severity` (default `low`), at most `max_per_hour` messages (default 10; the rest waits), one message per
-  step bundling what is due. The dashboard shows a channel's name and service, its last delivery and last error,
-  never its URL.
+- `channels`: a name for each service URL, or `{"url": …, "min_severity": "high", "max_per_hour": 4}`. Six services,
+  in [shoutrrr's URL format](https://shoutrrr.nickfedor.com/) (the nicholas-fedor fork):
+  `generic://hooks.example.com/path` (a webhook, `generic+https://` for its own scheme),
+  `gotify://gotify.example.com/<token>`, `ntfy://ntfy.example.com/<topic>`, `pushover://shoutrrr:<token>@<user>/`,
+  `smtp://<user>:<password>@mail.example.com:587/?from=…&to=…`, `telegram://<token>@telegram?chats=<chat>`. A URL
+  that does not parse, or another service, is a fault of the file. A channel gets only alerts at or above its
+  `min_severity` (default `low`; ntfy, Pushover and Gotify send `high` at their high priority, `low` at a low
+  one), at most `max_per_hour` messages (default 10; the rest waits), one message per step bundling what is due,
+  45 s to take it. The dashboard shows a channel's name and service, its last delivery and last error, never its
+  URL, and neither does the log.
 - `defaults`: `channels`, `cooldown` (default `2h`) and `severity` (`low`, `normal`, `high`; default `normal`) for
   every rule that does not set its own.
 - `rules`: each has a unique `name` (its identity: rename one and it starts anew), `on` (a trigger below), the
@@ -319,7 +324,7 @@ it first:
 
 ```sh
 docker compose run --rm trakk -notify-check   # every fault, exit 1 on any; sends nothing
-docker compose run --rm trakk -notify-test    # a test message to every channel, each one's outcome
+docker compose run --rm trakk -notify-test    # a test message to every channel: sent or failed and why, exit 1 on any failure
 ```
 
 ### Dashboard API

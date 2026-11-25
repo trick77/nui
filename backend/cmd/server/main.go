@@ -52,10 +52,6 @@ var (
 	notifyTest      = flag.Bool("notify-test", false, "send a test message to every channel of the notify file, print each one's outcome and exit 0 (all sent) or 1")
 )
 
-// newSenders makes each channel's sender, the seam the shoutrrr-backed one (toolkit/notify) plugs into. Until it
-// does, no channel has one: nothing is sent, the alerts are recorded and shown all the same.
-var newSenders = func(alert.Config) map[string]dispatch.Sender { return nil }
-
 func main() {
 	// server sim <command>: the simulator's own command line (backfill, live, export, check).
 	if len(os.Args) > 1 && os.Args[1] == "sim" {
@@ -252,9 +248,8 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	}
 	model := llm.New(st, llm.Options{Client: client, Model: cfg.LLMModel, DailyCalls: int64(cfg.LLMDailyCalls),
 		DailyTokens: int64(cfg.LLMDailyTokens)})
-	notify := loadNotify(cfg, reg)
-	senders := newSenders(notify)
-	if simulated != nil {
+	notify, senders := loadNotify(cfg, reg)
+	if simulated != nil { // nothing leaves the simulator: its recorder takes every message
 		senders = simulated.Recorder.Senders(notify)
 	}
 	// The rules read through a dashboard server of their own: its clock is the alert step's.

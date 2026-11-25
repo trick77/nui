@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/trick77/toolkit/notify"
+
 	"github.com/trick77/trakk/backend/internal/alert"
 	"github.com/trick77/trakk/backend/internal/store"
 )
@@ -222,7 +224,7 @@ func (e *Engine) render(items []*store.Alert) (title, body string, sev alert.Sev
 		}
 		b.WriteByte('\n')
 		if a.Detail != "" {
-			b.WriteString(a.Detail + "\n")
+			b.WriteString(notify.Plain(a.Detail, maxText) + "\n")
 		}
 		if link := e.logLink(a); link != "" {
 			b.WriteString(link + "\n")
@@ -234,10 +236,15 @@ func (e *Engine) render(items []*store.Alert) (title, body string, sev alert.Sev
 	return title, strings.TrimRight(b.String(), "\n"), sev
 }
 
-// headline is an alert's line: what happened, where.
+// maxText bounds an alert's text and detail in a message.
+const maxText = 300
+
+// headline is an alert's line: what happened, where. Its text holds the outside world's (a path, an error's
+// message): defused on its way out, no channel formats, links or mentions anything in it. The links a message
+// carries are the dashboard's own, added as they are.
 func (e *Engine) headline(a *store.Alert) string {
 	prefix := map[string]string{"clear": "Cleared: ", "remind": "Still open: "}[a.Due]
-	return prefix + e.where(a.SiteID) + ": " + a.Text
+	return prefix + e.where(a.SiteID) + ": " + notify.Plain(a.Text, maxText)
 }
 
 // where names a site by its domain, the instance as such.

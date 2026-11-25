@@ -239,20 +239,23 @@ func TestChannelLogValue(t *testing.T) {
 // A zero-width space and a right-to-left override, made of their code points: never literal in the source.
 var zwsp, rlo = string(rune(0x200b)), string(rune(0x202e))
 
-func TestDefuse(t *testing.T) {
+func TestLine(t *testing.T) {
 	for in, want := range map[string]string{
-		"see https://evil.example.com/x": "see https∶//evil.example.com/x",
-		"ping @channel or a@b.example":   "ping ＠channel or a＠b.example",
-		"`rm -rf` *bold* _it_ [l](u)":    "'rm -rf' ∗bold∗ ＿it＿ ［l］(u)",
-		"line\nbreak\t\x00 and  spaces ": "line break and spaces",
-		"<script>|#h~":                   "‹script›｜＃h～",
-		"zero" + zwsp + "width" + rlo:    "zerowidth",
+		"line\nbreak\t\x00 and  spaces ":     "line break and spaces",
+		"zero" + zwsp + "width" + rlo:        "zerowidth",
+		"see https://evil.example.com/@me *": "see https://evil.example.com/@me *", // defused on the way out only
 	} {
-		if got := Defuse(in, 200); got != want {
-			t.Errorf("Defuse(%q) = %q, want %q", in, got, want)
+		if got := Line(in, 200); got != want {
+			t.Errorf("Line(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if got := Defuse(strings.Repeat("é", 50), 10); got != strings.Repeat("é", 9)+"…" {
+}
+
+func TestClip(t *testing.T) {
+	if got := Clip(strings.Repeat("é", 50), 10); got != strings.Repeat("é", 9)+"…" {
+		t.Errorf("clip %q", got)
+	}
+	if got := Clip("short", 10); got != "short" {
 		t.Errorf("clip %q", got)
 	}
 	if got := ClipKey("aé", 2); got != "a" {

@@ -127,7 +127,7 @@ func (r *rig) rows(rule string) []store.Alert {
 func occ(keys ...string) []alert.Occurrence {
 	var out []alert.Occurrence
 	for _, k := range keys {
-		out = append(out, alert.Occurrence{Key: k, Text: "New error: " + alert.Defuse(k, 120), Unit: "times",
+		out = append(out, alert.Occurrence{Key: k, Text: "New error: " + alert.Line(k, 120), Unit: "times",
 			Figure: new(3.0), Target: &alert.Target{Panel: "errors", Filter: map[string]string{}}})
 	}
 	return out
@@ -152,7 +152,7 @@ func TestFacts(t *testing.T) {
 	r.step(time.Hour)
 	msgs := r.rec.Messages()
 	if len(msgs) != 1 || msgs[0].Channel != "ops" || !strings.Contains(msgs[0].Title, "2 alerts") ||
-		!strings.Contains(msgs[0].Body, "TypeError: x (3 times)") ||
+		!strings.Contains(msgs[0].Body, "TypeError∶ x (3 times)") ||
 		!strings.Contains(msgs[0].Body, "https://trakk.example.com/dashboard/alerts?site=example.com") {
 		t.Fatalf("messages %+v", msgs)
 	}

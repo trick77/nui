@@ -262,8 +262,8 @@ func factOccurrences(r alert.Rule, fs []insight.Fact) []alert.Occurrence {
 		if !match {
 			continue
 		}
-		o := alert.Occurrence{Key: key, Text: alert.Defuse(f.Text, 200),
-			Detail: alert.Defuse(strings.Join(f.Detail, "; "), 300),
+		o := alert.Occurrence{Key: key, Text: alert.Line(f.Text, 200),
+			Detail: alert.Line(strings.Join(f.Detail, "; "), 300),
 			Target: &alert.Target{Panel: f.Target.Panel, Filter: f.Target.Filter}}
 		switch {
 		case trend:
@@ -277,7 +277,7 @@ func factOccurrences(r alert.Rule, fs []insight.Fact) []alert.Occurrence {
 			o.Figure, o.Unit = &value, factUnits[f.Unit]
 		}
 		if strings.HasPrefix(r.Spec.ID, "spike.") {
-			o.Text = alert.Defuse("A spike of requests from "+f.Text, 200)
+			o.Text = alert.Line("A spike of requests from "+f.Text, 200)
 		}
 		if r.Spec.ID == "error.new" {
 			o.Target = errorTarget(key, f.Server)
@@ -328,7 +328,7 @@ func (v *Eval) scriptErrors(ctx context.Context, now time.Time, r alert.Rule, si
 		}) {
 			continue
 		}
-		o.Detail = alert.Defuse(scriptErrorText(e), 300)
+		o.Detail = alert.Line(scriptErrorText(e), 300)
 		out = append(out, o)
 	}
 	return out, nil
@@ -497,7 +497,7 @@ func (v *Eval) level(ctx context.Context, now time.Time, r alert.Rule, site *sit
 		}
 		if len(vals) < minComparison {
 			return append(hold, alert.Occurrence{Key: noComparison, Quiet: true,
-				Text: alert.Defuse(fmt.Sprintf("%s: no comparison, fewer than %d days with figures before", l.label,
+				Text: alert.Line(fmt.Sprintf("%s: no comparison, fewer than %d days with figures before", l.label,
 					minComparison), 200)}), true, nil
 		}
 		usual := median(vals)
