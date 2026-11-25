@@ -1,5 +1,6 @@
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -1930,6 +1931,341 @@ describe("log page", () => {
   });
 });
 
+describe("alerts page", () => {
+  const alerts = () => screen.findByRole("region", { name: "Alerts" });
+  const rows = (p: HTMLElement) => within(p).getAllByRole("row").slice(1);
+  const rowOf = (p: HTMLElement, text: string) =>
+    within(p).getByText(text).closest("tr")!;
+
+  it("opens from the menu, on the domain, and goes back", async () => {
+    start("/dashboard/?site=lens.example.com&range=30d");
+    await screen.findByRole("region", { name: "Overview" });
+    fireEvent.click(screen.getByRole("link", { name: "Alerts" }));
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/dashboard/alerts"),
+    );
+    expect(window.location.search).toBe("?site=lens.example.com&range=30d");
+    const p = await alerts();
+    await within(p).findByText("50 alerts shown");
+    expect(screen.getByRole("link", { name: "Alerts" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(document.title).toBe(`Trakk${SEP}lens.example.com${SEP}Alerts`);
+    // No range, audience or comparison: the history spans none.
+    for (const g of ["Range", "Audience", "Compare"])
+      expect(screen.queryByRole("group", { name: g })).toBeNull();
+    const q = lastCall("/api/dash/alerts");
+    expect(Object.fromEntries(q)).toEqual({ site: "lens.example.com" });
+    // The domain's own: no site column, no instance alert.
+    expect(within(p).queryByText("Site")).toBeNull();
+    expect(within(p).queryByText("Instance")).toBeNull();
+    fireEvent.click(screen.getByRole("link", { name: "Log" }));
+    await screen.findByRole("region", { name: "Log" });
+    act(() => {
+      window.history.back();
+    });
+    await alerts();
+    expect(window.location.pathname).toBe("/dashboard/alerts");
+    fireEvent.click(screen.getByRole("link", { name: "Visitors" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/dashboard/"));
+    expect(new URLSearchParams(window.location.search).get("range")).toBe(
+      "30d",
+    );
+    expect(screen.queryByRole("region", { name: "Alerts" })).toBeNull();
+  });
+
+  it("opens every site's and the instance's from a link, and the domain's again", async () => {
+    start("/dashboard/alerts?site=lens.example.com&all=1");
+    const p = await alerts();
+    await within(p).findByText("50 alerts shown");
+    expect(lastCall("/api/dash/alerts").get("site")).toBeNull();
+    expect(document.title).toBe(`Trakk${SEP}Alerts`);
+    expect(within(p).getByText("Site")).toBeInTheDocument();
+    expect(within(p).getAllByText("Instance").length).toBeGreaterThan(0);
+    expect(within(p).getByText("console.example.com")).toBeInTheDocument();
+    // Every kind by its label, an unknown one by its id.
+    for (const k of [
+      "New error",
+      "Address spike",
+      "Unknown site or wrong key",
+      "Failed calls level",
+      "Network spike",
+      "New probed path",
+      "Source silent",
+      "Background job failed",
+      "New referrer",
+      "Visitors trend",
+      "Model budget",
+      "Database size cap",
+      "New endpoint",
+      "New failure reason",
+      "Calls trend",
+      "Failed calls trend",
+      "Unknown automated trend",
+      "Events refused",
+      "Events dropped",
+      "95th percentile level",
+      "Requests level",
+      "Visitors level",
+      "country.new",
+    ])
+      expect(within(p).getAllByText(k).length).toBeGreaterThan(0);
+    expect(within(p).getByText("country.new")).toHaveAttribute(
+      "title",
+      "country.new",
+    );
+    // Severity, state and delivery.
+    for (const w of ["high", "normal", "low", "open", "cleared", "one-off"])
+      expect(within(p).getAllByText(w).length).toBeGreaterThan(0);
+    for (const d of ["sent", "partly sent", "failed", "pending", "not sent"])
+      expect(within(p).getAllByText(d).length).toBeGreaterThan(0);
+    // Each channel with how it went, a failed one marked.
+    const partial = rowOf(p, 'New error: TypeError: cannot read "prefixes"');
+    expect(partial.textContent).toContain(
+      `ops ok${SEP}mail ok${SEP}pager failed`,
+    );
+    expect(within(partial).getByText("pager")).toHaveClass("text-danger-ink");
+    expect(partial).toHaveTextContent("Safari on /AS:n pages");
+    // A figure to its tenth, its unit beside it.
+    const failed = rowOf(p, "Failed calls over 5 % in the last hour");
+    expect(failed).toHaveTextContent("11.1%");
+    // Plain text, never markup.
+    expect(partial.querySelector("b, a, img")).toBeNull();
+    fireEvent.click(
+      within(within(p).getByRole("group", { name: "Alerts of" })).getByRole(
+        "button",
+        { name: "lens.example.com" },
+      ),
+    );
+    await waitFor(() =>
+      expect(lastCall("/api/dash/alerts").get("site")).toBe("lens.example.com"),
+    );
+    expect(window.location.search).toBe("?site=lens.example.com&range=7d");
+    await waitFor(() => expect(within(p).queryByText("Instance")).toBeNull());
+    fireEvent.click(within(p).getByRole("button", { name: "All sites" }));
+    await waitFor(() => expect(window.location.search).toContain("all=1"));
+  });
+
+  it("follows the domain picked", async () => {
+    start("/dashboard/alerts?site=lens.example.com");
+    const p = await alerts();
+    await within(p).findByText("50 alerts shown");
+    fireEvent.change(screen.getByRole("combobox", { name: "Domain" }), {
+      target: { value: "api.example.com" },
+    });
+    await within(p).findByText("6 alerts shown");
+    expect(lastCall("/api/dash/alerts").get("site")).toBe("api.example.com");
+    expect(window.location.pathname).toBe("/dashboard/alerts");
+    expect(
+      within(p).queryByRole("button", { name: /Load earlier/ }),
+    ).toBeNull();
+  });
+
+  it("pages back to the first alert", async () => {
+    start("/dashboard/alerts?site=lens.example.com");
+    const p = await alerts();
+    await within(p).findByText("50 alerts shown");
+    fireEvent.click(within(p).getByRole("button", { name: "Load earlier →" }));
+    await within(p).findByText("58 alerts shown");
+    expect(lastCall("/api/dash/alerts").get("before")).toBe("350");
+    // The last page: nothing further, no page twice.
+    expect(
+      within(p).queryByRole("button", { name: /Load earlier/ }),
+    ).toBeNull();
+    expect(rows(p)).toHaveLength(58);
+  });
+
+  it("jumps from a row where it happened, on its own domain", async () => {
+    const first = start("/dashboard/alerts?site=lens.example.com&all=1");
+    let p = await alerts();
+    await within(p).findByText("50 alerts shown");
+    // No target, no jump.
+    const job = rowOf(p, "The daily aggregate build failed");
+    expect(job).not.toHaveClass("click");
+    expect(within(job).queryByRole("button")).toBeNull();
+    // Another domain's: the log there, with that domain's range.
+    localStorage.setItem("app.range.api.example.com", "90d");
+    fireEvent.click(rowOf(p, "New failure reason: invalid_params"));
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/dashboard/log"),
+    );
+    const q = new URLSearchParams(window.location.search);
+    expect([q.get("site"), q.get("range"), q.get("failure")]).toEqual([
+      "api.example.com",
+      "90d",
+      "invalid_params",
+    ]);
+    await waitFor(() =>
+      expect(lastCall("/api/dash/log").get("site")).toBe("api.example.com"),
+    );
+    first.unmount();
+
+    // The domain's own: a network into the log, an address into its detail.
+    start("/dashboard/alerts?site=lens.example.com");
+    p = await alerts();
+    await within(p).findByText("50 alerts shown");
+    fireEvent.click(rowOf(p, "AS64510 Example Cloud"));
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/dashboard/log"),
+    );
+    expect(new URLSearchParams(window.location.search).get("asn")).toBe(
+      "64510",
+    );
+    fireEvent.click(screen.getByRole("link", { name: "Alerts" }));
+    p = await alerts();
+    await within(p).findByText("50 alerts shown");
+    // The keyboard's way in: the row's first cell.
+    const spike = rowOf(p, "198.51.100.7 (AS64510 Example Cloud)");
+    fireEvent.click(within(spike).getByRole("button"));
+    const detail = await screen.findByRole("region", { name: "Visitor" });
+    expect(
+      await within(detail).findByText("Scraping attempt"),
+    ).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/dashboard/");
+  });
+
+  it("jumps from another domain's row to its panel and visitor", async () => {
+    start("/dashboard/alerts?site=console.example.com&all=1");
+    const p = await alerts();
+    await within(p).findByText("50 alerts shown");
+    fireEvent.click(rowOf(p, "198.51.100.7 (AS64510 Example Cloud)"));
+    await waitFor(() => expect(window.location.pathname).toBe("/dashboard/"));
+    expect(new URLSearchParams(window.location.search).get("site")).toBe(
+      "lens.example.com",
+    );
+    const detail = await screen.findByRole("region", { name: "Visitor" });
+    expect(
+      await within(detail).findByText("Scraping attempt"),
+    ).toBeInTheDocument();
+  });
+
+  it("says when there are none, and when they failed to load", async () => {
+    const first = start("/dashboard/alerts?site=blog.example.org");
+    const p = await alerts();
+    expect(
+      await within(p).findByText(
+        "Nothing has raised an alert on this domain yet.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(p).queryByRole("table")).toBeNull();
+    expect(
+      within(p).queryByRole("button", { name: /Load earlier/ }),
+    ).toBeNull();
+    first.unmount();
+    start("/dashboard/alerts?site=lens.example.com", {
+      fail: ["/api/dash/alerts"],
+    });
+    expect(await within(await alerts()).findByRole("alert")).toHaveTextContent(
+      "fixture failure",
+    );
+  });
+});
+
+describe("the footer's notifications", () => {
+  const block = async (opt: FixtureOptions = {}) => {
+    start("/dashboard/?site=lens.example.com", opt);
+    const d = await screen.findByRole("region", { name: "This domain" });
+    await within(d).findByText("Rate limit");
+    return within(d).getByRole("region", { name: "Notifications" });
+  };
+
+  it("shows faults, rules and each channel, warning only of a failing one", async () => {
+    const n = await block();
+    expect(within(n).getByText("Alerts").nextSibling).toHaveTextContent(/^on$/);
+    expect(
+      within(n).getByText(
+        'rule "api-latency": unknown channel "sms", the rule is off',
+      ),
+    ).toHaveClass("wrap-anywhere");
+    expect(
+      within(n)
+        .getByText(/unknown channel/)
+        .closest("ul"),
+    ).toHaveClass("text-ochre");
+    expect(
+      within(n).getByText(`9 active${SEP}1 off`, asIs),
+    ).toBeInTheDocument();
+    for (const c of ["ops", "mail", "pager"])
+      expect(within(n).getByText(c)).toBeInTheDocument();
+    expect(
+      within(n).getByText(`ntfy${SEP}every alert`, asIs),
+    ).toBeInTheDocument();
+    expect(
+      within(n).getByText(`email${SEP}normal and high`, asIs),
+    ).toBeInTheDocument();
+    expect(
+      within(n).getByText(`pushover${SEP}high only`, asIs),
+    ).toBeInTheDocument();
+    // The pager's error came after its last delivery, the mail's before.
+    expect(within(n).getByText(/invalid application token/)).toHaveClass(
+      "text-ochre",
+    );
+    expect(within(n).getByText(/SMTP 421/)).toHaveClass("text-muted");
+    expect(within(n).getAllByText(/^last delivered /)).toHaveLength(3);
+    expect(n.textContent).not.toMatch(/https?:|\/\//);
+  });
+
+  it("says it is switched off", async () => {
+    const n = await block({ notify: "off" });
+    expect(n).toHaveTextContent("switched off");
+    expect(within(n).getByText("pager")).toBeInTheDocument();
+  });
+
+  it("says it is not configured, also by a backend without alerts", async () => {
+    for (const notify of ["unconfigured", "missing"] as const) {
+      const n = await block({ notify });
+      expect(n).toHaveTextContent("not configured");
+      expect(within(n).queryByText("Rules")).toBeNull();
+      expect(within(n).queryByText("Channels")).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("lists faults of a configuration it could not take", async () => {
+    window.history.replaceState(null, "", "/dashboard/?site=lens.example.com");
+    const fx = fixtureFetch();
+    setFetcher(async (u, i) => {
+      const res = await fx(u, i);
+      if (!u.startsWith("/api/dash/domain?")) return res;
+      const d = await res.json();
+      return new Response(
+        JSON.stringify({
+          ...d,
+          notify: {
+            configured: false,
+            enabled: false,
+            faults: ['line 4: unknown service "sms"'],
+            rules: { active: 0, off: 0 },
+            // A Go nil slice.
+            channels: null,
+          },
+        }),
+      );
+    });
+    render(<App />);
+    const d = await screen.findByRole("region", { name: "This domain" });
+    const n = await within(d).findByRole("region", { name: "Notifications" });
+    expect(n).toHaveTextContent("not configured");
+    expect(
+      within(n)
+        .getByText(/unknown service/)
+        .closest("ul"),
+    ).toHaveClass("text-ochre");
+  });
+
+  it("says when no channel is set up", async () => {
+    const n = await block({ notify: "bare" });
+    expect(within(n).getByText("Channels").nextSibling).toHaveTextContent(
+      "none",
+    );
+    expect(within(n).queryByText("Config faults")).toBeNull();
+    expect(
+      within(n).getByText(`3 active${SEP}0 off`, asIs),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("an API", () => {
   it("shows calls instead of visits, and nothing only a browser reports", async () => {
     start("/dashboard/?site=api.example.com&aud=humans");
@@ -2435,6 +2771,14 @@ describe("separators", () => {
     expect(log.textContent).toContain(SEP);
     expect(plainDots()).toEqual([]);
     fourth.unmount();
+
+    // The alerts, every site's and the instance's.
+    const fifth = start("/dashboard/alerts?site=lens.example.com&all=1");
+    const al = await screen.findByRole("region", { name: "Alerts" });
+    await within(al).findByText("50 alerts shown");
+    expect(al.textContent).toContain(SEP);
+    expect(plainDots()).toEqual([]);
+    fifth.unmount();
 
     // The sign-in card.
     start("/dashboard/", { me: 401 });

@@ -436,6 +436,8 @@ export type Domain = {
     tz: string;
     llm: { calls_today: number; budget: number; configured: boolean };
   };
+  // Missing from a backend older than alerts: as not configured.
+  notify?: Notify;
 };
 
 // A path the watch judged: a refused path now answered (flip), a scanner's
@@ -499,6 +501,55 @@ export type Watch = {
   // the site's whole time.
   cut: number;
 };
+
+export type Severity = "low" | "normal" | "high";
+
+// Never a URL: the backend keeps a channel's address to itself.
+export type NotifyChannel = {
+  name: string;
+  service: string;
+  min_severity: Severity;
+  last_ok: string | null;
+  last_error: { at: string; text: string } | null;
+};
+
+export type Notify = {
+  configured: boolean;
+  enabled: boolean;
+  faults: string[];
+  rules: { active: number; off: number };
+  channels: NotifyChannel[];
+};
+
+export type AlertState = "open" | "cleared" | "once";
+export type DeliveryState = "sent" | "partial" | "failed" | "pending" | "none";
+
+// One alert as the history keeps it. text and detail are plain text, shown
+// as such; site "" is the instance's own.
+export type Alert = {
+  id: number;
+  site: string;
+  rule: string;
+  kind: string;
+  key: string;
+  severity: Severity;
+  state: AlertState;
+  text: string;
+  detail: string;
+  figure: number | null;
+  unit: string;
+  first_at: string;
+  last_at: string;
+  cleared_at: string | null;
+  delivery: {
+    state: DeliveryState;
+    at: string | null;
+    channels: { name: string; ok: boolean }[];
+  };
+  target: { panel: Panel; filter: Record<string, string> } | null;
+};
+
+export type Alerts = { alerts: Alert[]; next: string | null };
 
 export class ApiError extends Error {
   status: number;
@@ -687,6 +738,18 @@ export const api = {
   // audience or the comparison.
   watch: (s: Scope, signal?: AbortSignal) =>
     dash<Watch>("watch", { ...s, aud: "all", cmp: "prev" }, {}, signal),
+  // The history spans no range. site "" (or none): every site's and the
+  // instance's. before: a previous answer's next.
+  alerts: (
+    p: { site?: string; before?: string; limit?: number },
+    signal?: AbortSignal,
+  ) =>
+    dash<Alerts>(
+      "alerts",
+      null,
+      { site: p.site, before: p.before, limit: p.limit },
+      signal,
+    ),
 };
 
 export type LogFilter = {

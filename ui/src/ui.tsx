@@ -33,7 +33,12 @@ export type Dash = {
   // The class of API clients is shown (showsApiClients).
   apiClients: boolean;
   openLog: (f: LogFilter) => void;
-  goPanel: (p: PanelKey, filter?: Record<string, string>) => void;
+  // site: another listed domain's panel, shown with that domain's range.
+  goPanel: (
+    p: PanelKey,
+    filter?: Record<string, string>,
+    site?: string,
+  ) => void;
   visitor: string | null;
   selectVisitor: (key: string | null) => void;
   // The row a jump named (goPanel's filter key) in a card that marks it.

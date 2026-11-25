@@ -5,6 +5,8 @@
 // UI never does.
 
 import type {
+  Alert,
+  Alerts,
   Axis,
   Classes,
   ClassKey,
@@ -20,6 +22,7 @@ import type {
   Log,
   LogRow,
   Noteworthy,
+  Notify,
   Overview,
   SiteInfo,
   Tile,
@@ -1763,6 +1766,334 @@ function domain(site: string, feed: boolean, script: boolean): Domain {
   };
 }
 
+const ago = (min: number) =>
+  new Date(NOW.getTime() - min * 60_000).toISOString();
+
+// Where alerts go: three channels by severity, the pager's token gone bad.
+// The mail's last error is older than its last delivery: no warning.
+function notify(state: FixtureOptions["notify"]): Notify | undefined {
+  if (state === "missing") return undefined;
+  if (state === "unconfigured")
+    return {
+      configured: false,
+      enabled: false,
+      faults: [],
+      rules: { active: 0, off: 0 },
+      channels: [],
+    };
+  if (state === "bare")
+    return {
+      configured: true,
+      enabled: true,
+      faults: [],
+      rules: { active: 3, off: 0 },
+      channels: [],
+    };
+  return {
+    configured: true,
+    enabled: state !== "off",
+    faults: ['rule "api-latency": unknown channel "sms", the rule is off'],
+    rules: { active: 9, off: 1 },
+    channels: [
+      {
+        name: "ops",
+        service: "ntfy",
+        min_severity: "low",
+        last_ok: ago(4),
+        last_error: null,
+      },
+      {
+        name: "mail",
+        service: "email",
+        min_severity: "normal",
+        last_ok: ago(37),
+        last_error: { at: ago(300), text: "SMTP 421, try again later" },
+      },
+      {
+        name: "pager",
+        service: "pushover",
+        min_severity: "high",
+        last_ok: ago(2 * 24 * 60),
+        last_error: {
+          at: ago(37),
+          text: "HTTP 401: invalid application token",
+        },
+      },
+    ],
+  };
+}
+
+type Sent = Alert["delivery"];
+const OPS = { name: "ops", ok: true };
+const MAIL = { name: "mail", ok: true };
+const sent = (min: number, ...channels: Sent["channels"]): Sent => ({
+  state: channels.every((c) => c.ok)
+    ? "sent"
+    : channels.some((c) => c.ok)
+      ? "partial"
+      : "failed",
+  at: ago(min),
+  channels,
+});
+const NONE: Sent = { state: "none", at: null, channels: [] };
+
+// An alert raised min minutes ago and still so then (last), cleared since
+// when cleared is set.
+function alert(
+  id: number,
+  site: string,
+  kind: string,
+  severity: Alert["severity"],
+  min: number,
+  more: Partial<Alert> & { last?: number; cleared?: number },
+): Alert {
+  const { last, cleared, ...rest } = more;
+  return {
+    id,
+    site,
+    rule: kind.replace(".", "-"),
+    kind,
+    key: "",
+    severity,
+    state: cleared != null ? "cleared" : "once",
+    text: "",
+    detail: "",
+    figure: null,
+    unit: "",
+    first_at: ago(min),
+    last_at: ago(last ?? min),
+    cleared_at: cleared != null ? ago(cleared) : null,
+    delivery: sent(min - 1, OPS),
+    target: null,
+    ...rest,
+  };
+}
+
+// The history, newest first: every kind, state and delivery; the instance's
+// own under site ""; blog.example.org has none. lens.example.com has more
+// than a page.
+const ALERTS: Alert[] = [
+  alert(412, "lens.example.com", "error.new", "high", 38, {
+    key: 'TypeError: cannot read "prefixes"',
+    state: "open",
+    last: 4,
+    text: 'New error: TypeError: cannot read "prefixes"',
+    detail: "Safari on /AS:n pages, since build 3f2a91c",
+    figure: 14,
+    unit: "times",
+    delivery: sent(37, OPS, MAIL, { name: "pager", ok: false }),
+    target: { panel: "errors", filter: {} },
+  }),
+  alert(411, "lens.example.com", "spike.addr", "normal", 52, {
+    key: "198.51.100.7",
+    state: "open",
+    last: 6,
+    text: "198.51.100.7 (AS64510 Example Cloud)",
+    detail: "88.4 % of all requests, 0 in the prior 7 d",
+    figure: 2338,
+    unit: "requests",
+    delivery: sent(51, OPS, MAIL),
+    target: { panel: "visitors", filter: { key: "198.51.100.7" } },
+  }),
+  alert(410, "", "collector.unknown_domain", "normal", 75, {
+    state: "open",
+    last: 9,
+    text: "Events for no configured site, or with a wrong feed key",
+    detail: "most name staging.example.com",
+    figure: 1904,
+    unit: "events",
+    delivery: sent(74, { name: "ops", ok: false }, { name: "mail", ok: false }),
+    target: { panel: "domain", filter: {} },
+  }),
+  alert(409, "api.example.com", "level.failed", "high", 96, {
+    state: "open",
+    text: "Failed calls over 5 % in the last hour",
+    figure: 11.1,
+    unit: "%",
+    delivery: { state: "pending", at: null, channels: [] },
+    target: { panel: "failures", filter: {} },
+  }),
+  alert(408, "lens.example.com", "spike.net", "normal", 180, {
+    last: 95,
+    cleared: 60,
+    text: "AS64510 Example Cloud",
+    detail: "88.5 % of all requests, 0 in the prior 7 d",
+    figure: 2340,
+    unit: "requests",
+    delivery: sent(179, OPS, MAIL),
+    target: { panel: "log", filter: { kind: "request", asn: "64510" } },
+  }),
+  alert(407, "lens.example.com", "probe.new", "low", 240, {
+    key: "GET /.env",
+    text: "New probed path: GET /.env",
+    figure: 212,
+    unit: "probes",
+    target: { panel: "probed", filter: {} },
+  }),
+  alert(406, "console.example.com", "source.silent", "high", 420, {
+    key: "browser",
+    last: 400,
+    cleared: 375,
+    text: "No browser events for 45 minutes",
+    figure: 45,
+    unit: "minutes",
+    delivery: sent(419, OPS, MAIL, { name: "pager", ok: false }),
+    target: { panel: "domain", filter: {} },
+  }),
+  alert(405, "", "job.failed", "high", 610, {
+    key: "aggregate",
+    text: "The daily aggregate build failed",
+    detail: "database is locked",
+    delivery: sent(609, OPS, MAIL, { name: "pager", ok: true }),
+  }),
+  alert(404, "lens.example.com", "referrer.new", "low", 900, {
+    key: "news.ycombinator.com",
+    text: "New referrer: news.ycombinator.com",
+    figure: 749,
+    unit: "visitors",
+    delivery: NONE,
+    target: { panel: "referrers", filter: {} },
+  }),
+  alert(403, "lens.example.com", "trend.visitors", "low", 1300, {
+    text: "Visitors up against the prior 7 d",
+    detail: "2841, was 2291",
+    figure: 24,
+    unit: "%",
+  }),
+  alert(402, "", "llm.budget", "normal", 1500, {
+    last: 1500,
+    cleared: 1200,
+    text: "The model's budget for today is used up",
+    detail: "computed texts only until midnight",
+    figure: 200,
+    unit: "calls",
+    delivery: sent(1499, OPS, MAIL),
+    target: { panel: "domain", filter: {} },
+  }),
+  alert(401, "", "db.size_cap", "normal", 1700, {
+    state: "open",
+    text: "The database is near its size cap",
+    detail: "412 MB of 448 MB",
+    figure: 92,
+    unit: "%",
+    delivery: sent(1699, OPS, MAIL),
+  }),
+  alert(400, "api.example.com", "endpoint.new", "low", 1900, {
+    key: "POST /api/v1/whois/batch",
+    text: "New endpoint: POST /api/v1/whois/batch",
+    figure: 96,
+    unit: "calls",
+    target: { panel: "endpoints", filter: {} },
+  }),
+  alert(399, "api.example.com", "failure.new", "normal", 2000, {
+    key: "invalid_params",
+    text: "New failure reason: invalid_params",
+    figure: 44,
+    unit: "calls",
+    delivery: sent(1999, OPS, MAIL),
+    target: { panel: "log", filter: { failure: "invalid_params" } },
+  }),
+  alert(398, "api.example.com", "trend.calls", "low", 2100, {
+    text: "Calls up against the prior 7 d",
+    figure: 12,
+    unit: "%",
+    delivery: NONE,
+  }),
+  alert(397, "api.example.com", "trend.failed", "normal", 2300, {
+    last: 2250,
+    cleared: 2200,
+    text: "Failed calls up against the prior 7 d",
+    figure: 3.2,
+    unit: "pp",
+    delivery: sent(2299, OPS, MAIL),
+  }),
+  alert(396, "lens.example.com", "trend.auto_share", "normal", 2500, {
+    last: 2400,
+    cleared: 2350,
+    text: "Unknown automated share up against the prior 7 d",
+    figure: 31.4,
+    unit: "%",
+    delivery: sent(2499, OPS, MAIL),
+  }),
+  alert(395, "", "collector.refused", "normal", 2700, {
+    last: 2690,
+    cleared: 2680,
+    text: "Events refused by the rate limit",
+    figure: 312,
+    unit: "events",
+    delivery: sent(2699, OPS, MAIL),
+    target: { panel: "domain", filter: {} },
+  }),
+  alert(394, "", "collector.dropped", "high", 2900, {
+    last: 2890,
+    cleared: 2880,
+    text: "Events dropped, the queue was full",
+    figure: 87,
+    unit: "events",
+    delivery: sent(2899, OPS, MAIL, { name: "pager", ok: true }),
+    target: { panel: "domain", filter: {} },
+  }),
+  alert(393, "api.example.com", "level.p95", "normal", 3100, {
+    last: 3000,
+    cleared: 2950,
+    text: "95th percentile over 1 s in the last hour",
+    figure: 1480,
+    unit: "ms",
+    delivery: sent(3099, OPS, MAIL),
+    target: { panel: "endpoints", filter: {} },
+  }),
+  alert(392, "lens.example.com", "level.requests", "low", 3300, {
+    text: "Requests over 2000 in the last hour",
+    figure: 9120,
+    unit: "requests",
+  }),
+  alert(391, "lens.example.com", "level.visitors", "low", 3500, {
+    text: "Visitors over 500 today",
+    figure: 2841,
+    unit: "visitors",
+  }),
+  // A kind this UI does not know yet: shown by its id.
+  alert(390, "lens.example.com", "country.new", "low", 3700, {
+    key: "IS",
+    text: "New country: Iceland",
+    figure: 3,
+    unit: "visitors",
+  }),
+  // Older, routine ones: a second page.
+  ...Array.from({ length: 48 }, (_, i) =>
+    alert(
+      389 - i,
+      "lens.example.com",
+      "level.requests",
+      "low",
+      4000 + i * 420,
+      {
+        last: 3990 + i * 420,
+        cleared: 3960 + i * 420,
+        text: "Requests over 2000 in the last hour",
+        figure: 2100 + ((i * 37) % 400),
+        unit: "requests",
+      },
+    ),
+  ),
+];
+
+// The backend's page: newest first, the cursor the last id shown.
+function alerts(q: URLSearchParams): Alerts | null {
+  const before = q.get("before");
+  if (before && !/^\d+$/.test(before)) return null;
+  const limit = Math.min(Number(q.get("limit") || 50), 200);
+  const site = q.get("site");
+  const rows = ALERTS.filter(
+    (a) => (!site || a.site === site) && (!before || a.id < Number(before)),
+  );
+  const page = rows.slice(0, limit);
+  return {
+    alerts: page,
+    next: rows.length > limit ? String(page[page.length - 1].id) : null,
+  };
+}
+
 const clients: Clients = {
   ip_version: [
     { key: "IPv4", value: 1950, share: 68 },
@@ -1818,6 +2149,10 @@ export type FixtureOptions = {
   noModel?: boolean;
   // "watch": the briefing leads with the watch's findings.
   nw?: "watch";
+  // The domain's notifications: on with a fault and a failing channel by
+  // default; switched off, never set up, on without channels or faults, or
+  // a backend older than alerts that sends none.
+  notify?: "on" | "off" | "unconfigured" | "bare" | "missing";
 };
 
 // A fetch that answers the dashboard API from the fixtures above.
@@ -1919,7 +2254,12 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
       case "/api/dash/domain": {
         const d = domain(site, feed, script);
         if (opt.noModel) d.rules.llm.configured = false;
+        d.notify = notify(opt.notify);
         return json(d);
+      }
+      case "/api/dash/alerts": {
+        const a = alerts(q);
+        return a ? json(a) : json({ detail: "bad cursor" }, 400);
       }
     }
     return json({ detail: "no such endpoint" }, 404);

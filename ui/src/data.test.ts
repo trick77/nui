@@ -167,7 +167,13 @@ describe("state", () => {
       aud: "all",
       cmp: "prev",
       log: {},
+      all: false,
     });
+    expect(
+      parseView("/dashboard/alerts", "?site=a.example.com&all=1"),
+    ).toMatchObject({ page: "alerts", site: "a.example.com", all: true });
+    // All sites is the alerts' own switch.
+    expect(parseView("/dashboard/", "?all=1").all).toBe(false);
     const v = parseView(
       "/dashboard/log",
       "?site=a.example.com&range=12mo&aud=bots&cmp=yoy&addr=192.0.2.1&kind=request&bogus=1",
@@ -303,6 +309,20 @@ describe("state", () => {
     ).toBe(
       "/dashboard/log?site=a.example.com&range=7d&addr=2001%3Adb8%3A%3A%2F64&path=%2FAS%3An",
     );
+    // The alerts keep domain and range, never a log filter.
+    const alerts = {
+      ...v,
+      page: "alerts" as const,
+      site: "a.example.com",
+      range: "30d" as const,
+      log: { addr: "192.0.2.1" },
+    };
+    expect(viewHref("/dashboard/", alerts)).toBe(
+      "/dashboard/alerts?site=a.example.com&range=30d",
+    );
+    expect(viewHref("/dashboard/", { ...alerts, all: true })).toBe(
+      "/dashboard/alerts?site=a.example.com&range=30d&all=1",
+    );
   });
 
   it("names the domain and the log's address in the tab title", () => {
@@ -320,6 +340,13 @@ describe("state", () => {
       expect(tabTitle("a.example.com", { ...log, log: { asn } })).toBe(
         `Trakk${SEP}a.example.com${SEP}AS64500`,
       );
+    const alerts = { ...v, page: "alerts" as const };
+    expect(tabTitle("a.example.com", alerts)).toBe(
+      `Trakk${SEP}a.example.com${SEP}Alerts`,
+    );
+    expect(tabTitle("a.example.com", { ...alerts, all: true })).toBe(
+      `Trakk${SEP}Alerts`,
+    );
   });
 
   it("finds the mount", () => {
@@ -328,6 +355,9 @@ describe("state", () => {
     expect(basePath("/dashboard")).toBe("/dashboard/");
     expect(basePath("/")).toBe("/");
     expect(basePath("/log")).toBe("/");
+    expect(basePath("/dashboard/alerts")).toBe("/dashboard/");
+    expect(basePath("/dashboard/alerts/")).toBe("/dashboard/");
+    expect(basePath("/alerts")).toBe("/");
   });
 });
 
@@ -368,6 +398,28 @@ describe("api client", () => {
     expect(calls[2]).toContain("sort=requests&class=unknown&limit=7");
     expect(calls[3]).toContain("key=198.51.100.7");
     expect(calls[4]).toContain("addr=192.0.2.120&cursor=1795353582000.48211");
+  });
+
+  it("asks for the alerts of a site, or of all without one", async () => {
+    const calls: string[] = [];
+    const fx = fixtureFetch();
+    setFetcher((u, i) => {
+      calls.push(u);
+      return fx(u, i);
+    });
+    const all = await api.alerts({});
+    expect(calls[0]).toBe("/api/dash/alerts");
+    expect(all.alerts).toHaveLength(50);
+    expect(all.alerts.some((a) => a.site === "")).toBe(true);
+    await api.alerts({ site: "", before: all.next!, limit: 200 });
+    expect(calls[1]).toBe(`/api/dash/alerts?before=${all.next}&limit=200`);
+    const one = await api.alerts({ site: "api.example.com" });
+    expect(calls[2]).toBe("/api/dash/alerts?site=api.example.com");
+    expect(one.alerts.every((a) => a.site === "api.example.com")).toBe(true);
+    expect(one.next).toBeNull();
+    await expect(api.alerts({ before: "x" })).rejects.toMatchObject({
+      status: 400,
+    });
   });
 
   it("raises the backend's detail as an ApiError", async () => {

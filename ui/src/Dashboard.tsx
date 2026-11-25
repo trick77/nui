@@ -14,6 +14,7 @@ import {
   type Watch,
   frameOf,
 } from "./api";
+import { AlertsPage } from "./AlertsPage";
 import { ApiSection } from "./Calls";
 import { Content } from "./Content";
 import { DomainFooter } from "./DomainFooter";
@@ -212,17 +213,33 @@ export default function Dashboard({ me }: { me: Me }) {
   );
 
   const goPanel = useCallback(
-    (p: PanelKey, filter: Record<string, string> = {}) => {
-      if (p === "log") return openLog(filter);
-      if (p === "visitors" && filter.key && site)
-        setPicked({ site: site.site, key: filter.key });
-      if (FOCUSED.includes(p) && site)
-        setFocus(
-          filter.key ? { site: site.site, panel: p, key: filter.key } : null,
-        );
-      scrollToId(PANEL_ID[p]);
+    (p: PanelKey, filter: Record<string, string> = {}, at?: string) => {
+      if (!at || at === view.site) {
+        if (p === "log") return openLog(filter);
+        if (p === "visitors" && filter.key && site)
+          setPicked({ site: site.site, key: filter.key });
+        if (FOCUSED.includes(p) && site)
+          setFocus(
+            filter.key ? { site: site.site, panel: p, key: filter.key } : null,
+          );
+        return scrollToId(PANEL_ID[p]);
+      }
+      // Another domain's: one step there, with its own range, or the switch
+      // and the jump would each start from this view.
+      const there = { ...view, site: at, range: storedRange(at) };
+      if (p === "log") {
+        go({ ...there, page: "log", log: filter });
+        window.scrollTo?.(0, 0);
+        return;
+      }
+      if (p === "visitors" && filter.key)
+        setPicked({ site: at, key: filter.key });
+      if (FOCUSED.includes(p))
+        setFocus(filter.key ? { site: at, panel: p, key: filter.key } : null);
+      go({ ...there, page: "dash" });
+      scrollWhenThere(PANEL_ID[p]);
     },
-    [openLog, scrollToId, site],
+    [go, openLog, scrollToId, site, view],
   );
 
   const set = (patch: Partial<View>) => go({ ...view, ...patch });
@@ -278,6 +295,17 @@ export default function Dashboard({ me }: { me: Me }) {
             }}
           >
             Log
+          </a>
+          <a
+            href={viewHref(base, { ...view, page: "alerts" })}
+            aria-current={view.page === "alerts" ? "page" : undefined}
+            onClick={(e) => {
+              e.preventDefault();
+              go({ ...view, page: "alerts" });
+              window.scrollTo?.(0, 0);
+            }}
+          >
+            Alerts
           </a>
           <a
             href={`${viewHref(base, { ...view, page: "dash" })}#domain`}
@@ -356,6 +384,12 @@ export default function Dashboard({ me }: { me: Me }) {
             />
             {view.page === "log" ? (
               <LogPage filter={view.log} onFilter={filterLog} />
+            ) : view.page === "alerts" ? (
+              <AlertsPage
+                all={view.all}
+                onAll={(all) => set({ all })}
+                sites={list?.map((s) => s.site) ?? []}
+              />
             ) : (
               <>
                 <OverviewSection
@@ -443,12 +477,15 @@ function FilterBar({
           </optgroup>
         ))}
       </select>
-      <Seg
-        label="Range"
-        options={RANGES.map((r) => ({ key: r, label: r }))}
-        value={view.range}
-        onChange={onRange}
-      />
+      {/* The alerts' history spans no range. */}
+      {view.page !== "alerts" && (
+        <Seg
+          label="Range"
+          options={RANGES.map((r) => ({ key: r, label: r }))}
+          value={view.range}
+          onChange={onRange}
+        />
+      )}
       {dash && !isApi && (
         <Seg
           label="Audience"
