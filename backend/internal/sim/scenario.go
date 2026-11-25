@@ -372,6 +372,13 @@ func expectDeploy(w *World, _ *Scenario) []Expectation {
 			Check: hasFinding("err:" + DeployError)},
 		{Says: "the release's error is the site's own, with file and line", Endpoint: "error",
 			Params: params(s, "7d", "key", DeployError), Check: errorAt("own", "/assets/index-C4v1rT2s.js:1:48113")},
+		{Says: "the release's error has its stack", Endpoint: "error", Params: params(s, "7d", "key", DeployError),
+			Check: func(b map[string]any) error {
+				if st, _ := b["stack"].([]any); len(st) != 2 || b["type"] != "TypeError" {
+					return fmt.Errorf("type %v, stack %v", b["type"], b["stack"])
+				}
+				return nil
+			}},
 		{Says: "an error the browser hides says so, without a place", Endpoint: "error",
 			Params: params(s, "7d", "key", MaskedError), Check: errorAt("withheld", "")},
 		{Says: "the status breakdown has 5xx answers", Endpoint: "status", Params: params(s, "7d"),

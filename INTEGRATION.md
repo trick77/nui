@@ -42,6 +42,8 @@ On every page, in `<head>`:
   cross-origin`.
 - Collected on its own: session start, page views, outbound clicks, downloads, form start and submit (the form's
   id, name and action only), errors (script, resource, unhandled rejection), web vitals (TTFB, FCP, LCP, INP, CLS).
+  A script error or rejection carries its message, file, line and column, the error's type and its top 8 stack
+  frames, their URLs without query and fragment; never put personal data in an error's message.
   The only input value ever read is a search term: an `<input type="search">`, or a text input named `q`, `query`,
   `search`, `s` or `term`.
 - To tell people from automated browsers it also reads: globals and attributes automation tools leave in the page

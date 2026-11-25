@@ -373,6 +373,9 @@ export type ErrorDetail = {
     page: string;
     where: ErrorWhere;
   }[];
+  // The newest occurrence's with a stack; "" and empty without one.
+  type: string;
+  stack: string[];
   detail_since: string | null;
 };
 

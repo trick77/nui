@@ -197,6 +197,23 @@ function Body({ d, since }: { d: Detail; since: string | null }) {
           </div>
         ))}
       </dl>
+      {d.stack.length > 0 && (
+        <>
+          <div className="eyebrow mt-3">
+            Stack{SEP}the latest one{d.type && `, ${d.type}`}
+          </div>
+          <ol
+            aria-label="Stack"
+            className="mt-1.5 mb-0 list-none p-0 font-mono text-[12.5px] text-ink-dim"
+          >
+            {d.stack.map((f, i) => (
+              <li key={i} className="wrap-anywhere">
+                {f}
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
       <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 min-[700px]:grid-cols-2">
         <Breakdown
           title="Where"

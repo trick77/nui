@@ -395,7 +395,9 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 		}
 		if s.paths.lookup && pg.path != "/" && w.in("deploy-error", pg.at) && r.chance(0.5) {
 			add(i, pg.at.Add(700*time.Millisecond), "js_error", "", map[string]any{"msg": DeployError,
-				"src": "https://" + s.Domain + "/assets/index-C4v1rT2s.js", "line": 1, "col": 48113})
+				"src": "https://" + s.Domain + "/assets/index-C4v1rT2s.js", "line": 1, "col": 48113, "type": "TypeError",
+				"stack": []string{"at Lookup (https://" + s.Domain + "/assets/index-C4v1rT2s.js:1:48113)",
+					"at render (https://" + s.Domain + "/assets/index-C4v1rT2s.js:1:9021)"}})
 			if iOS(per.prof) { // and an error the browser hides
 				add(i, pg.at.Add(750*time.Millisecond), "js_error", "", strayError(per.prof, s.Domain))
 			}

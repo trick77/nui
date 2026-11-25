@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -35,6 +36,7 @@ const (
 	errorRecent = 10 // the latest occurrences listed
 	maxErrorKey = 256
 	maxPlace    = 300
+	maxFrames   = 8
 )
 
 // errorWhere is where one script error happened.
@@ -52,6 +54,25 @@ const errorPlace = `CASE WHEN kind = 'js_error' AND json_type(props, '$.p.src') 
 	THEN json_extract(props, '$.p.line') END,
 	CASE WHEN kind = 'js_error' AND json_type(props, '$.p.col') IN ('integer', 'real')
 	THEN json_extract(props, '$.p.col') END`
+
+// errorStack is an error's type and its stack (a JSON array) as SQL, "" for what is none.
+const errorStack = `CASE WHEN json_type(props, '$.p.type') = 'text' THEN json_extract(props, '$.p.type') ELSE '' END,
+	CASE WHEN json_type(props, '$.p.stack') = 'array' THEN json_extract(props, '$.p.stack') ELSE '' END`
+
+// stackFrames is the frames of a stored stack: its strings, as many as the script sends.
+func stackFrames(raw string) []string {
+	var all []any
+	if raw == "" || json.Unmarshal([]byte(raw), &all) != nil {
+		return nil
+	}
+	var out []string
+	for _, x := range all {
+		if f, ok := x.(string); ok && f != "" && len(out) < maxFrames {
+			out = append(out, truncate(f, maxPlace))
+		}
+	}
+	return out
+}
 
 // maskedError reports whether an error's message is the browser's stand-in for one it hides.
 func maskedError(name string) bool {
@@ -152,19 +173,22 @@ type errorSeen struct {
 
 // errorDetail is everything one message's events say.
 type errorDetail struct {
-	Count       int64          `json:"count"`
-	Visitors    int64          `json:"visitors"`
-	Sessions    int64          `json:"sessions"`
-	Viewers     int64          `json:"viewers"` // visitors with a page view in the same span
-	Share       *float64       `json:"share"`   // visitors of viewers in percent, null without viewers
-	First       any            `json:"first"`
-	Last        any            `json:"last"`
-	Places      errorBreakdown `json:"places"`
-	Pages       errorBreakdown `json:"pages"`
-	Clients     errorBreakdown `json:"clients"`
-	Classes     errorBreakdown `json:"classes"`
-	Recent      []errorSeen    `json:"recent"`
-	DetailSince any            `json:"detail_since"`
+	Count    int64          `json:"count"`
+	Visitors int64          `json:"visitors"`
+	Sessions int64          `json:"sessions"`
+	Viewers  int64          `json:"viewers"` // visitors with a page view in the same span
+	Share    *float64       `json:"share"`   // visitors of viewers in percent, null without viewers
+	First    any            `json:"first"`
+	Last     any            `json:"last"`
+	Places   errorBreakdown `json:"places"`
+	Pages    errorBreakdown `json:"pages"`
+	Clients  errorBreakdown `json:"clients"`
+	Classes  errorBreakdown `json:"classes"`
+	Recent   []errorSeen    `json:"recent"`
+	// Type and Stack are the newest occurrence's that has a stack; older scripts sent none, a hidden error has none.
+	Type        string   `json:"type"`
+	Stack       []string `json:"stack"`
+	DetailSince any      `json:"detail_since"`
 }
 
 // handleError is one script error, by its message: how many it hit, where, on what. Raw events only (no aggregate
@@ -196,14 +220,14 @@ func (s *Server) handleError(w http.ResponseWriter, r *http.Request, q *query) {
 
 // errorDetail reads one message's events over [from, to), newest first.
 func (s *Server) errorDetail(ctx context.Context, q *query, key string, from, to int64) (*errorDetail, error) {
-	d := &errorDetail{Recent: []errorSeen{}}
+	d := &errorDetail{Recent: []errorSeen{}, Stack: []string{}}
 	var visitors, sessions, viewers uniq
 	var first, last int64
 	places, pages, clients, classes := errorTally{}, errorTally{}, errorTally{}, errorTally{}
 	names := map[string]string{} // a client's name is parsed once per user agent
 	day := func(lo, hi int64) error {
-		rows, err := s.query(ctx, `SELECT ts, ip, ip_key, cls, visitor, sid, ua, path, template, `+errorPlace+`
-			FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND kind = 'js_error' AND name = ? AND `+
+		rows, err := s.query(ctx, `SELECT ts, ip, ip_key, cls, visitor, sid, ua, path, template, `+errorPlace+`,
+			`+errorStack+` FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND kind = 'js_error' AND name = ? AND `+
 			audWhere(q.aud)+` ORDER BY ts DESC, id DESC`, q.site.ID, lo, hi, key)
 		if err != nil {
 			return err
@@ -212,10 +236,16 @@ func (s *Server) errorDetail(ctx context.Context, q *query, key string, from, to
 		for rows.Next() {
 			var ts int64
 			var cls int
-			var ip, ipKey, visitor, sid, ua, path, tmpl, src string
+			var ip, ipKey, visitor, sid, ua, path, tmpl, src, typ, stack string
 			var line, col sql.NullFloat64
-			if err := rows.Scan(&ts, &ip, &ipKey, &cls, &visitor, &sid, &ua, &path, &tmpl, &src, &line, &col); err != nil {
+			if err := rows.Scan(&ts, &ip, &ipKey, &cls, &visitor, &sid, &ua, &path, &tmpl, &src, &line, &col, &typ,
+				&stack); err != nil {
 				return err
+			}
+			if len(d.Stack) == 0 {
+				if f := stackFrames(stack); f != nil {
+					d.Type, d.Stack = truncate(typ, maxPlace), f
+				}
 			}
 			client, ok := names[ua]
 			if !ok {
