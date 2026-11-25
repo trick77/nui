@@ -1,0 +1,21 @@
+{
+  "channels": {
+    "ops": "ntfy://ntfy.example.com/trakk-alerts",
+    "mail": {
+      "url": "smtp://user:password@mail.example.com:587/?from=trakk@example.com&to=ops@example.com",
+      "min_severity": "high",
+      "max_per_hour": 4
+    }
+  },
+  "defaults": { "channels": ["ops"], "cooldown": "1h" },
+  "rules": [
+    { "name": "new-errors", "on": "error.new", "min": 5 },
+    { "name": "new-probes", "on": "probe.new", "severity": "low" },
+    { "name": "addr-flood", "on": "spike.addr", "min": 500, "share": 25, "factor": 3, "sites": ["lens.example.com"] },
+    { "name": "feed-down", "on": "source.silent", "source": "server", "after": "30m", "severity": "high", "channels": ["ops", "mail"] },
+    { "name": "refused", "on": "collector.refused", "min": 100, "window": "15m" },
+    { "name": "jobs", "on": "job.failed", "severity": "high", "repeat": "12h" },
+    { "name": "api-slow", "on": "level.p95", "window": "15m", "factor": 3, "min": 800, "products": ["Lens"], "for": "10m" },
+    { "name": "quiet-night", "on": "level.requests", "window": "1h", "drop": 80, "baseline": "weekday", "enabled": false }
+  ]
+}

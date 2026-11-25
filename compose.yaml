@@ -34,7 +34,7 @@ services:
       start_period: 15s
     # ./data is what Trakk writes: app.db, the reference data cache (ref/) and session.secret when
     # BACKEND_SESSION_SECRET is empty. ./conf is what the operator writes, read-only inside: sites.json, the sites
-    # Trakk collects for (README).
+    # Trakk collects for, and notify.json, the alert rules and channels (README).
     volumes:
       - ./data:/data
       - ./conf:/conf:ro

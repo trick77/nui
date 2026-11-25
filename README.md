@@ -65,8 +65,10 @@ only: never together, never with `PUBLIC_FQDN` set.
 `make sim` runs the UI against a simulated world: the real server on a temporary data directory, sign-in off, a
 seeded history backfilled through the real collector and classifier, then advancing live each time the dashboard
 asks; Vite's dev server starts once that server answers on its port (a port in use stops `make sim` with a message)
-and proxies to it, and Ctrl-C stops both. `make sim-server` is the server alone, for curl or a second UI. The
-knobs, each falling back to its default with a warning when it does not parse:
+and proxies to it, and Ctrl-C stops both. `make sim-server` is the server alone, for curl or a second UI. Its
+alerts come from a generated `notify.json` with a rule of every group, stepped through the history's last six days
+on its clock; a recording channel takes every message, nothing is sent. The knobs, each falling back to its default
+with a warning when it does not parse:
 
 | Knob | Default | |
 |---|---|---|
@@ -266,6 +268,56 @@ A release that first deletes raw by days deletes nothing for 7 days after its fi
 footer says from when. Then raw from the day holding the months' cutoff back goes at once, the rest down to the raw
 days a day at a time in short steps, and the database file shrinks a MiB at a time (incremental vacuum, the mode
 Trakk creates its database in), at most 30 s per retention round, without locking the collector out.
+
+### Notifications
+
+Trakk records alerts from rules: what Noteworthy finds, a source gone silent, the collector refusing events, its own
+jobs failing, a figure leaving its usual level. The dashboard lists them (`GET /api/dash/alerts`); channels in
+`conf/notify.json` get them as messages. The file holds the channels' tokens: `chmod 600 conf/notify.json`, owned by
+65532 like the rest of `conf/`. Shape in [docs/notify.example.json](docs/notify.example.json):
+
+- `channels`: a name for each service URL (shoutrrr's format: `ntfy://`, `smtp://`, `gotify://`, …), or
+  `{"url": …, "min_severity": "high", "max_per_hour": 4}`. A channel gets only alerts at or above its
+  `min_severity` (default `low`), at most `max_per_hour` messages (default 10; the rest waits), one message per
+  step bundling what is due. The dashboard shows a channel's name and service, its last delivery and last error,
+  never its URL.
+- `defaults`: `channels`, `cooldown` (default `1h`) and `severity` (`low`, `normal`, `high`; default `normal`) for
+  every rule that does not set its own.
+- `rules`: each has a unique `name` (its identity: rename one and it starts anew), `on` (a trigger below), the
+  common `enabled`, `sites` and `products` (both left out: every site; a domain or product the sites file lacks is a
+  fault), `channels` (`[]`: recorded only), `cooldown`, `severity`, and for the states (source, collector, instance,
+  level) `for` (how long it holds before it is reported) and `repeat` (a reminder while it lasts; default never).
+
+| `on` | Parameters (default) |
+|---|---|
+| `error.new`, `failure.new`, `probe.new`, `endpoint.new`, `referrer.new` | `min` (1, 3, 3, 5, 2) |
+| `spike.addr`, `spike.net` | `min` requests (100, 200), `share` % of all (25, 40), `factor` over the 24 h before (3) |
+| `trend.visitors`, `trend.calls`, `trend.failed`, `trend.auto_share` | `min` (20 visitors, 100 calls, 100 calls in both periods; none for `auto_share`), `change` (20 %, 20 %, 5 pp, 5 pp), `direction` (`up`, `down`, `both`) |
+| `source.silent` | `after` (required), `source` (`browser`, `server`; both) |
+| `collector.refused`, `collector.dropped`, `collector.unknown_domain` | `min` (1), `window` (`1h`, counted by the whole hour) |
+| `job.failed` | `jobs`: `agg`, `retention`, `purge`, `refdata`, `classify`, `writer` (all) |
+| `db.size_cap`, `llm.budget` | none |
+| `level.requests`, `level.visitors`, `level.failed` (% of an API's calls), `level.p95` (an API's ms) | `window` (required, at most `24h`) and one or more of `min`, `max`, `factor`, `drop` (%), all of them together; `baseline` (`days`: the 7 days before, `weekday`: that weekday of the 4 weeks before), `floor` (20), `calls` (100, `level.failed` only) |
+
+The traffic triggers are Noteworthy's findings over the last 24 hours against the 24 before, checked when an hour
+closes; the others every five minutes. Each key is reported when it enters the set (a new error, a spiking
+address) and closed in silence when it leaves; a state is reported when it opens and when it clears. A key back
+within `cooldown` of leaving stays quiet. A rule's first pass, a changed threshold under the same name and a pass
+after six hours without one record what is there without sending it. A level's `factor` and `drop` compare with
+the median of the same window at the same time of day; with fewer than 3 days to compare it judges nothing, and
+without `min` or `max` a usual level below `floor` is no alert. After a downtime nothing older than six hours is
+sent.
+
+Switching off: `"enabled": false` on a rule (its history stays) or at the top of the file (alerts are recorded,
+nothing is sent). Without the file, or with no rule, Trakk records one rule per trigger that needs no parameter and
+sends nothing. A file with a fault never stops Trakk: it starts, records with those default rules, sends nothing,
+logs every fault and the footer lists them. The file is read at start: restart Trakk after changing it, and check
+it first:
+
+```sh
+docker compose run --rm trakk -notify-check   # every fault, exit 1 on any; sends nothing
+docker compose run --rm trakk -notify-test    # a test message to every channel, each one's outcome
+```
 
 ### Dashboard API
 
