@@ -134,12 +134,32 @@ const SEARCH_NAMES = /^(q|query|search|s|term)$/i;
 // Kinds the collector names by a host, a message or a URL (LIMITS.nameBytes);
 // every other kind but custom by at most 16 bytes, or not at all.
 const NAMED = /^(outbound_click|download|js_error|resource_error)$/;
-// A stack's frame: Chromium's "at f (URL:1:2)", Firefox's and WebKit's
-// "f@URL:1:2" or "f@[native code]". Its URL without query and fragment, and
-// its place.
-const FRAME = /^\s+at |^[^@\s]*@(?:\S+:\d+:\d+|\[native code\])$/;
-const FRAME_QUERY = /(:\/\/[^\s)?#]*)[?#][^\s)]*?(?=:\d+:\d+|[\s)]|$)/g;
-const FRAME_AT = /([a-z][a-z-]*:\/\/[^\s()]+?):(\d{1,9}):(\d{1,9})\)?$/;
+// A stack's frame is a head and a spot. The head is Chromium's "    at f ("
+// or "    at " (no space is in a URL: the last " (" opens the spot), or
+// Firefox's and WebKit's "f@", where a name with a space in it ("global
+// code@", "setTimeout handler*f@") needs a URL behind it; older WebKit prints
+// a nameless function's URL alone. The spot is, up to the line's end, a URL
+// (or a sourceURL's bare name), what is cut off it (query, fragment) and the
+// position; or it names no file. Each is tried at one place in a line, and
+// nothing in them nests: hostile text costs its length.
+const V8_HEAD = /^ +at (?:.* \(|async )?/;
+const AT_HEAD =
+  /^(?:(?=[a-z][\w+.-]*:\/\/)|.*?@(?=[a-z][\w+.-]*:\/\/)|[^@\s]*@)/i;
+// Positions: ":1:2", a wasm offset, Firefox's " line 5 > eval:1:1" and
+// Chromium's "https://…:5:6), <anonymous>:1:1)", both behind the place that
+// called eval.
+const SPOT = new RegExp(
+  "^(?:" +
+    "((?:[a-z][\\w+.-]*:\\/\\/|(?!\\S*@)[^\\s\\d:?#()<[])[^\\s?#]*)(?:[?#]\\S*)?" +
+    "((?: line \\d{1,9} > [\\w.]+)*" +
+    "(?::\\d{1,9}:\\d{1,9}(?:\\){1,9}, <anonymous>:\\d+:\\d+)?|:wasm-function\\[\\d+\\]:0x[\\da-f]+)\\)?)" +
+    "|(?:<anonymous>|native|index \\d+|unknown \\w+|\\[(?:native|wasm) code\\])(?::\\d+:\\d+)?" +
+    "(?:\\){1,9}, <anonymous>(?::\\d+:\\d+)?)?\\)?" +
+    ")$",
+  "i",
+);
+// A URL in a function's name.
+const NAME_QUERY = /(:\/\/[^\s?#]*)[?#]\S*?(?=@?$|\s)/g;
 const ID = /^[\da-f]{32}$/;
 
 // UTF-8 length without TextEncoder, which old browsers lack.
@@ -241,31 +261,69 @@ export function bound(v: unknown, key: string, depth: number): unknown {
 }
 
 // A thrown value's type and the top of its stack, as far as it has them. It
-// is the page's: any getter may throw. Only lines that are frames: an
-// engine that puts the message first would send it twice, unclipped.
-export function errorProps(v: unknown): Props {
+// is the page's: any getter may throw. Only lines that are frames: Chromium
+// puts the message first, which would go out twice, unclipped. With own (this
+// script's URL in a stack), where no event says it, its place too: the first
+// frame in a file that is not own. A line that has a URL and is not understood
+// ends the search, or its caller would be blamed.
+export function errorProps(v: unknown, own?: string): Props {
   const out: Props = {};
   if (!v || typeof v !== "object") return out;
-  const e = v as { name?: unknown; stack?: unknown };
+  const e = v as { name?: unknown; message?: unknown; stack?: unknown };
   try {
     if (typeof e.name === "string" && e.name) out.type = clip(e.name, 64);
   } catch {
     // no type
   }
   try {
-    if (typeof e.stack !== "string") return out;
-    const frames = e.stack
-      .slice(0, 8192)
-      .split("\n")
-      .filter((l) => FRAME.test(l))
-      .slice(0, LIMITS.stackFrames)
-      .map((l) =>
-        clip(
-          l.trim().slice(0, 1024).replace(FRAME_QUERY, "$1"),
-          LIMITS.frameBytes,
-        ),
+    const raw = e.stack;
+    if (typeof raw !== "string") return out;
+    let s = raw;
+    const msg = e.message;
+    if (typeof msg === "string" && msg)
+      for (const i of [0, s.slice(0, 256).indexOf(": ") + 2]) {
+        const end = i + msg.length;
+        if (s.startsWith(msg, i) && /^(?:\n|$)/.test(s.slice(end, end + 1))) {
+          s = s.slice(end);
+          break;
+        }
+      }
+    const lines = s.slice(0, 8192).split(/\n/);
+    // The last one may be cut.
+    if (s.length > 8192) lines.pop();
+    const v8 = lines.some((l) => V8_HEAD.test(l));
+    const stack: string[] = [];
+    let placed = own == null;
+    for (const l of lines) {
+      const h = (v8 ? V8_HEAD : AT_HEAD).exec(l);
+      const m = h && SPOT.exec(l.slice(h[0].length));
+      if (!h || !m) {
+        if ((h || !v8) && /:\/\/./.test(l)) placed = true;
+        continue;
+      }
+      if (!placed && m[1] && m[1] !== own) {
+        placed = true;
+        out.src = m[1];
+        const at = /^(?::| line )(\d+)(?::(\d+))?/.exec(m[2]);
+        out.line = at ? +at[1] : 0;
+        out.col = at ? +(at[2] || 0) : 0;
+      }
+      // Too long a frame keeps its position.
+      const tail = m[2] || "";
+      const text =
+        clip(h[0].trimStart(), LIMITS.frameBytes).replace(NAME_QUERY, "$1") +
+        (m[1] || m[0]);
+      stack.push(
+        utf8Len(text + tail) > LIMITS.frameBytes
+          ? clip(
+              clip(text, LIMITS.frameBytes - 3 - tail.length) + "..." + tail,
+              LIMITS.frameBytes,
+            )
+          : text + tail,
       );
-    if (frames.length) out.stack = frames;
+      if (stack.length >= LIMITS.stackFrames) break;
+    }
+    if (stack.length) out.stack = stack;
   } catch {
     // no stack
   }
@@ -1472,20 +1530,6 @@ export function start(
   // A thrown value's text; like its getters, the page's to throw in.
   const said = (v: unknown) =>
     String(v && typeof v === "object" && "message" in v ? v.message : v);
-  // A thrown value's props, with no event to say where: the place is its
-  // first frame's that has one and is not this script's.
-  const placed = (v: unknown): Props => {
-    const p = errorProps(v);
-    for (const f of (p.stack as string[] | undefined) || []) {
-      const m = FRAME_AT.exec(f);
-      if (!m || m[1] === ownFile) continue;
-      p.src = m[1];
-      p.line = +m[2];
-      p.col = +m[3];
-      break;
-    }
-    return p;
-  };
   on(
     win,
     "error",
@@ -1507,10 +1551,16 @@ export function start(
       const hid = thrown;
       thrown = undefined;
       if (!hid || at.src || at.line || !/^script error\.?$/i.test(ev.message)) {
-        jsError(ev.message || "Error", { ...at, ...errorProps(ev.error) });
+        // Out of a wrapped call the event names this script (WebKit, for a
+        // script's top-level code): the place is its caller's.
+        const ours = (at.src || "").replace(/[?#][^]*$/, "") === ownFile;
+        jsError(ev.message || "Error", {
+          ...at,
+          ...errorProps(ev.error, ours ? ownFile : undefined),
+        });
         return;
       }
-      const p = placed(hid[0]);
+      const p = errorProps(hid[0], ownFile);
       let msg = "";
       guard(() => (msg = said(hid[0])));
       // As the browsers word it.
@@ -1522,7 +1572,7 @@ export function start(
   on(win, "unhandledrejection", (e) => {
     const r = (e as PromiseRejectionEvent).reason as unknown;
     if (thrown && thrown[0] === r) thrown = undefined;
-    jsError("Unhandled rejection: " + said(r), placed(r));
+    jsError("Unhandled rejection: " + said(r), errorProps(r, ownFile));
   });
 
   // Web vitals, from the browser's own observers where it has them.
