@@ -1887,16 +1887,23 @@ describe("an API", () => {
     );
   });
 
-  it("gives a website with a feed its endpoints, one without none", async () => {
-    const { unmount } = start("/dashboard/?site=lens.example.com");
+  it("gives a website with a feed its endpoints and failures, one without none", async () => {
+    const { unmount } = start("/dashboard/?site=lens.example.com&aud=humans");
     await screen.findByRole("region", { name: "Endpoints" });
     expect(panel("Pages")).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Accounts" })).toBeNull();
+    const reason = await within(panel("Failures")).findByText("invalid_params");
+    // Whoever fails: the page's audience is people.
+    expect(calls.find((c) => c.includes("dim=failures"))).toContain("aud=all");
+    fireEvent.click(reason);
+    await screen.findByRole("region", { name: "Log" });
+    expect(lastCall("/api/dash/log").get("failure")).toBe("invalid_params");
     unmount();
     start("/dashboard/?site=console.example.com");
     await screen.findByRole("region", { name: "Pages" });
-    expect(screen.queryByRole("region", { name: "Endpoints" })).toBeNull();
-    expect(calls.some((c) => c.includes("dim=endpoints"))).toBe(false);
+    for (const name of ["Endpoints", "Failures"])
+      expect(screen.queryByRole("region", { name })).toBeNull();
+    expect(calls.some((c) => /dim=(endpoints|failures)/.test(c))).toBe(false);
   });
 });
 
