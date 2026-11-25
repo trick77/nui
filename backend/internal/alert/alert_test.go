@@ -161,6 +161,7 @@ func TestParse_Faults(t *testing.T) {
 		"errors drop":      {`{"rules": [{"name": "a", "on": "level.errors", "window": "1h", "min": 5, "drop": 9}]}`, "level.errors takes no drop"},
 		"errors floor":     {`{"rules": [{"name": "a", "on": "level.errors", "window": "1h", "min": 5, "floor": 9}]}`, "level.errors takes no floor"},
 		"errors calls":     {`{"rules": [{"name": "a", "on": "level.errors", "window": "1h", "min": 5, "calls": 9}]}`, "level.errors takes no calls"},
+		"script min":       {`{"rules": [{"name": "a", "on": "script.new", "min": 2}]}`, "takes no min"},
 	} {
 		c := Parse([]byte(tc.file), known)
 		joined := strings.Join(c.Faults, "\n")

@@ -21,14 +21,17 @@ import (
 // model never triggers anything: a rule reads computed facts and figures only, no reading or briefing.
 
 // Findings are Noteworthy's 24h facts of a site as of now at the thresholds th: the closed hours of the 24 before
-// now against the 24 before those, all classes. The briefing's set: the watch's provisional findings and those past
-// its bound are not among them. Unknown names the parts a gap left unjudged (a list's dimension, "spikes", "tiles"):
-// a fact missing there has not left.
+// now against the 24 before those, all classes. The watch's new script hosts are those the job made in those hours
+// and every provisional one of the days still open (an alert within the hour, not once the day closed), beside the
+// briefing's set or not. Unknown names the parts a gap left unjudged (a list's dimension, "spikes", "tiles"): a fact
+// missing there has not left.
 func (s *Server) Findings(ctx context.Context, site *sites.Site, now time.Time, th Thresholds) (facts []insight.Fact,
 	unknown map[string]bool, err error) {
-	q := &query{site: site, rng: "24h", loc: time.UTC, tz: "UTC", aud: "all", cmp: "prev", p: hoursPeriod(now, time.UTC)}
-	in, _, err := s.briefingInputWith(ctx, q, th)
-	return in.Facts, q.unknown, err
+	q := &query{site: site, rng: "24h", loc: time.UTC, tz: "UTC", aud: "all", cmp: "prev", p: hoursPeriod(now, time.UTC),
+		alerts: true}
+	in, un, err := s.briefingInputWith(ctx, q, th)
+	facts = append(append(slices.Clip(in.Facts), un.open...), un.over...)
+	return facts, q.unknown, err
 }
 
 // ScriptError is what a new script error's alert says beside its message: where it comes from and whom it hit, over

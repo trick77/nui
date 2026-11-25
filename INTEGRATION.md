@@ -99,8 +99,8 @@ load (the first 50):
 | `t` | Unix milliseconds the request arrived. Over an hour behind or a minute ahead, Trakk uses the receive time. |
 | `ip` | The client's address as the product resolves it, after its own trusted proxies. Required: without one the event is dropped. |
 | `method`, `path` | The request line. Query and fragment are dropped: strip them before sending, they can hold tokens. |
-| `route` | The router's pattern with the method, as Go's `r.Pattern` gives it (`GET /users/{id}`). Empty for an unmatched request: Trakk then names the path by the site's rules. An empty `route` weakens the findings about answered probes and new targets. |
-| `status`, `dur_ms`, `bytes` | Response status, handler time in ms, response body bytes. `bytes` is read: a path refused before and later answered with a clearly different size stands out. |
+| `route` | The router's pattern with the method, as Go's `r.Pattern` gives it (`GET /users/{id}`). Empty for an unmatched request: Trakk then names the path by the site's rules. |
+| `status`, `dur_ms`, `bytes` | Response status, handler time in ms, response body bytes. |
 | `ua`, `ref`, `lang` | `User-Agent`, `Referer`, `Accept-Language`. |
 | `ch_ua`, `sf_site`, `sf_mode`, `sf_dest` | `Sec-CH-UA`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`. |
 | `sig_agent` | `Signature-Agent` (Web Bot Auth): the agent a client says it is, as sent. Empty when absent. |

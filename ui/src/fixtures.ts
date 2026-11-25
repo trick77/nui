@@ -32,7 +32,6 @@ import type {
   Visitors,
   Watch,
   WatchHost,
-  WatchPath,
 } from "./api";
 import { joinSep } from "./format";
 
@@ -491,40 +490,9 @@ function noteworthy(site: string, watchFirst = false): Noteworthy {
   };
 }
 
-// The watch's findings as Noteworthy words them (FixtureOptions.nw):
-// answered probes, a new target, a new script host, and a refused path
-// answered before raw was kept, whose line opens the card.
+// The watch's finding as Noteworthy words it (FixtureOptions.nw): a new
+// script host, whose line opens the card.
 const WATCH_FINDINGS: Noteworthy["items"] = [
-  {
-    id: "flip:GET /wp-content/plugins/hello/up.php",
-    ids: ["flip:GET /wp-content/plugins/hello/up.php"],
-    kind: "problem",
-    figure: "1",
-    unit: "address",
-    gen: null,
-    text: "Refused path now answered: GET /wp-content/plugins/hello/up.php",
-    detail: [
-      "Refused since 2 Oct 10:14, answered 21 Nov 04:12 (up to 14 addresses refused a day)",
-      "Answered 18.4 kB, refused 512 B or 4.5 kB",
-    ],
-    target: {
-      panel: "log",
-      filter: { kind: "request", path: "GET /wp-content/plugins/hello/up.php" },
-    },
-  },
-  {
-    id: "hit:GET /.git/config",
-    ids: ["hit:GET /.git/config"],
-    kind: "problem",
-    figure: "1",
-    unit: "address",
-    gen: null,
-    text: "A scanner got an answer: GET /.git/config",
-    detail: [
-      "Answered 20 Nov 23:41 to 198.51.100.201, mostly refused that day",
-    ],
-    target: { panel: "visitors", filter: { key: "198.51.100.201" } },
-  },
   {
     id: "script:cdn.evil.example",
     ids: ["script:cdn.evil.example"],
@@ -535,119 +503,6 @@ const WATCH_FINDINGS: Noteworthy["items"] = [
     text: "New script host: cdn.evil.example",
     detail: ["First seen 21 Nov 18:02, pages load scripts from it"],
     target: { panel: "scripts", filter: { key: "cdn.evil.example" } },
-  },
-  {
-    id: "flip:GET /cgi-bin/status",
-    ids: ["flip:GET /cgi-bin/status"],
-    kind: "problem",
-    figure: "2",
-    unit: "addresses",
-    gen: null,
-    text: "Refused path now answered: GET /cgi-bin/status (its requests are no longer kept)",
-    detail: ["Refused since 2 Jul 06:00, answered 28 Aug 11:00"],
-    target: { panel: "answered", filter: { key: "GET /cgi-bin/status" } },
-  },
-  {
-    id: "endpoint:POST /xmlrpc.php",
-    ids: ["endpoint:POST /xmlrpc.php"],
-    kind: "automation",
-    figure: "3",
-    unit: "addresses",
-    gen: null,
-    text: "New target answered: POST /xmlrpc.php",
-    detail: [
-      "First answered 22 Nov 12:05",
-      "Provisional: judged on the day so far",
-    ],
-    target: {
-      panel: "log",
-      filter: { kind: "request", path: "POST /xmlrpc.php" },
-    },
-  },
-];
-
-const WATCH_PATHS: WatchPath[] = [
-  {
-    id: "endpoint:POST /xmlrpc.php",
-    kind: "endpoint",
-    key: "POST /xmlrpc.php",
-    at: "2026-11-22T11:05:00Z",
-    provisional: true,
-    raw: true,
-    refused_first: null,
-    refused_last: null,
-    refused_addrs: 0,
-    refused_bytes: null,
-    ok_first: "2026-11-22T11:05:00Z",
-    ok_last: "2026-11-22T13:02:00Z",
-    ok_addrs: 3,
-    ok_bytes: null,
-    hit_at: null,
-    hit_addr: "",
-    detail: ["First answered 22 Nov 12:05"],
-  },
-  {
-    id: "flip:GET /wp-content/plugins/hello/up.php",
-    kind: "flip",
-    key: "GET /wp-content/plugins/hello/up.php",
-    at: "2026-11-21T03:12:00Z",
-    provisional: false,
-    raw: true,
-    refused_first: "2026-10-02T08:14:00Z",
-    refused_last: "2026-11-20T21:40:00Z",
-    refused_addrs: 14,
-    refused_bytes: [512, 4515],
-    ok_first: "2026-11-21T03:12:00Z",
-    ok_last: "2026-11-22T09:30:00Z",
-    ok_addrs: 1,
-    ok_bytes: [18400, 18400],
-    hit_at: null,
-    hit_addr: "",
-    detail: [
-      "Refused since 2 Oct 10:14, answered 21 Nov 04:12 (up to 14 addresses refused a day)",
-      "Answered 18.4 kB, refused 512 B or 4.5 kB",
-    ],
-  },
-  {
-    id: "hit:GET /.git/config",
-    kind: "hit",
-    key: "GET /.git/config",
-    at: "2026-11-20T22:41:00Z",
-    provisional: false,
-    raw: true,
-    refused_first: "2026-09-14T02:00:00Z",
-    refused_last: "2026-11-20T22:40:00Z",
-    refused_addrs: 6,
-    refused_bytes: null,
-    ok_first: "2026-11-20T22:41:00Z",
-    ok_last: "2026-11-20T22:41:00Z",
-    ok_addrs: 1,
-    ok_bytes: null,
-    hit_at: "2026-11-20T22:41:00Z",
-    hit_addr: "198.51.100.201",
-    detail: [
-      "Answered 20 Nov 23:41 to 198.51.100.201, mostly refused that day",
-    ],
-  },
-  {
-    id: "flip:GET /cgi-bin/status",
-    kind: "flip",
-    key: "GET /cgi-bin/status",
-    // Within 90 d, before raw begins (DETAIL_SINCE).
-    at: "2026-08-28T09:00:00Z",
-    provisional: false,
-    raw: false,
-    refused_first: "2026-07-02T04:00:00Z",
-    refused_last: "2026-08-27T23:10:00Z",
-    refused_addrs: 3,
-    refused_bytes: null,
-    ok_first: "2026-08-28T09:00:00Z",
-    ok_last: "2026-08-29T10:00:00Z",
-    ok_addrs: 2,
-    ok_bytes: null,
-    hit_at: null,
-    hit_addr: "",
-    detail: ["Refused since 2 Jul 06:00, answered 28 Aug 11:00"],
   },
 ];
 
@@ -686,25 +541,19 @@ const WATCH_HOSTS: WatchHost[] = [
   })),
 ];
 
-// The watch's answer: a feed site's answered probes, every site's script
-// hosts but the API's (it has no browser); the blog still being read.
+// The watch's answer: every site's script hosts but the API's (it has no
+// browser); the blog still being read.
 function watch(site: string, range: string): Watch {
   const from = Date.parse(FROM[range] ?? FROM["7d"]);
-  const feed = FEEDS.includes(site);
   const ready = site !== "blog.example.org";
   const browser = SITES.find((s) => s.site === site)?.browser != null;
   return {
-    paths:
-      feed && ready ? WATCH_PATHS.filter((p) => Date.parse(p.at) >= from) : [],
     hosts:
       browser && ready
         ? WATCH_HOSTS.filter((h) => Date.parse(h.last_seen) >= from)
         : [],
-    feed,
     ready,
-    learning_until: ready ? "2026-06-08T00:00:00Z" : null,
     scripts_learning_until: ready && browser ? "2026-07-01T00:00:00Z" : null,
-    soft_day: site === "lens.example.com" ? "2026-11-18" : null,
     cut: site === "lens.example.com" ? 37 : 0,
   };
 }
@@ -1873,6 +1722,13 @@ function alert(
 // own under site ""; blog.example.org has none. lens.example.com has more
 // than a page.
 const ALERTS: Alert[] = [
+  alert(414, "lens.example.com", "script.new", "normal", 20, {
+    key: "cdn.evil.example",
+    text: "New script host: cdn.evil.example",
+    figure: 4,
+    unit: "addresses",
+    target: { panel: "scripts", filter: { key: "cdn.evil.example" } },
+  }),
   alert(413, "lens.example.com", "level.errors", "normal", 34, {
     last: 14,
     cleared: 9,

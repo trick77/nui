@@ -26,21 +26,21 @@ type rig struct {
 	evs  []store.Event
 }
 
-func newRig(t *testing.T, kind string) *rig {
+func newRig(t *testing.T) *rig {
 	t.Helper()
 	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "app.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	rows, err := st.SyncSites(t.Context(), []store.Site{{Domain: "a.example.com", Kind: kind, PathRules: "[]"}})
+	rows, err := st.SyncSites(t.Context(), []store.Site{{Domain: "a.example.com", Kind: "site", PathRules: "[]"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := &rig{t: t, st: st, site: rows["a.example.com"].ID}
-	// The site's first day: where the walk and its learning window begin. A pass that day: the job runs from the
-	// site's start, never a backfill (which finds nothing).
-	r.req(at(d0, 9), "192.0.2.1", "GET /", 200, false, 900)
+	// The site's first day: where the walk begins. A pass that day: the job runs from the site's start, never a
+	// backfill (which finds nothing).
+	r.req(at(d0, 9), "192.0.2.1")
 	r.pass(at(d0, 12))
 	return r
 }
@@ -48,12 +48,10 @@ func newRig(t *testing.T, kind string) *rig {
 // at is hour h of day d, unix ms.
 func at(d int64, h int) int64 { return d*dayMS + int64(h)*3_600_000 }
 
-// req queues a server request; the template's first word is its method.
-func (r *rig) req(ts int64, addr, tmpl string, status int, unrouted bool, bytes int64) {
-	method, path, _ := strings.Cut(tmpl, " ")
+// req queues a server request: raw the job walks past.
+func (r *rig) req(ts int64, addr string) {
 	r.evs = append(r.evs, store.Event{SiteID: r.site, TS: ts, Source: "server", Kind: "request", IP: addr, IPKey: addr,
-		Method: method, Path: path, Template: tmpl, Status: status, Unrouted: unrouted,
-		Props: fmt.Sprintf(`{"bytes":%d}`, bytes)})
+		Method: "GET", Path: "/", Template: "GET /", Status: 200, Props: `{"bytes":900}`})
 }
 
 // engage queues an engagement event from an address reporting script hosts: the event's props as given, in the
@@ -86,18 +84,6 @@ func (r *rig) pass(now int64) {
 	}
 }
 
-func (r *rig) path(tmpl string) Path {
-	r.t.Helper()
-	ps, err := readPaths(r.t.Context(), r.st.DB, sitePaths+` AND template = ?`, r.site, tmpl)
-	if err != nil {
-		r.t.Fatal(err)
-	}
-	if len(ps) == 0 {
-		return Path{}
-	}
-	return ps[0]
-}
-
 func (r *rig) site0() Site {
 	r.t.Helper()
 	s, _, err := SiteState(r.t.Context(), r.st.DB, r.site)
@@ -107,7 +93,19 @@ func (r *rig) site0() Site {
 	return s
 }
 
-// findings are the site's findings from day from on, as "kind:key" (provisional ones with a trailing ?).
+func (r *rig) host(name string) Host {
+	r.t.Helper()
+	hs, err := readHosts(r.t.Context(), r.st.DB, siteHosts+` AND host = ?`, r.site, name)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	if len(hs) == 0 {
+		return Host{}
+	}
+	return hs[0]
+}
+
+// findings are the site's findings from day from on, as "script:host" (provisional ones with a trailing ?).
 func (r *rig) findings(from int64) []string {
 	r.t.Helper()
 	fs, err := Findings(r.t.Context(), r.st.DB, r.site, from*dayMS)
@@ -116,7 +114,7 @@ func (r *rig) findings(from int64) []string {
 	}
 	out := []string{}
 	for _, f := range fs {
-		id := f.Kind + ":" + f.Key
+		id := "script:" + f.Key
 		if f.Provisional {
 			id += "?"
 		}
@@ -135,76 +133,37 @@ func want(t *testing.T, got []string, ids ...string) {
 	}
 }
 
-// scanner queues a scanner's day: n refused probes of distinct paths, then the given answered template.
-func (r *rig) scanner(d int64, addr string, n int, answered string, bytes int64) {
+// reported queues reports of hosts (their JSON strings, comma-separated) from addresses of n networks on day d.
+func (r *rig) reported(d int64, h, n int, hosts string) {
 	for i := range n {
-		r.req(at(d, 10)+int64(i)*1000, addr, fmt.Sprintf("GET /probe-%d.php", i), 404, true, 153)
-	}
-	if answered != "" {
-		r.req(at(d, 10)+int64(n)*1000, addr, answered, 200, true, bytes)
-	}
-}
-
-// A scanner's answer is judged on the whole day: its first nine requests do not make it a plain visitor. Seen at nine
-// requests the day finds nothing, at thirty the hit is provisional, and once the day closes it stays.
-func TestGrowingDay(t *testing.T) {
-	r := newRig(t, "site")
-	day := d0 + 10
-	r.req(at(day, 8), "192.0.2.10", "GET /", 200, true, 900)
-	r.scanner(day, "203.0.113.9", 8, "GET /backup.sql", 2_000_000)
-	r.pass(at(day, 12))
-	want(t, r.findings(day))
-
-	for i := range 21 {
-		r.req(at(day, 13)+int64(i)*1000, "203.0.113.9", fmt.Sprintf("GET /more-%d.php", i), 404, true, 153)
-	}
-	r.pass(at(day, 18))
-	want(t, r.findings(day), "hit:GET /backup.sql?")
-
-	r.pass(at(day+1, 3))
-	want(t, r.findings(day), "hit:GET /backup.sql")
-	p := r.path("GET /backup.sql")
-	if p.Found != "hit" || p.HitAddr != "203.0.113.9" || p.PlainFirst != 0 || p.OKHi != 2_000_000 {
-		t.Errorf("state %+v", p)
-	}
-}
-
-// Before 02:00 yesterday is open too: a refusal there and an answer after midnight flip for now, judged in order.
-func TestTwoOpenDays(t *testing.T) {
-	r := newRig(t, "site")
-	day := d0 + 10
-	r.req(at(day-1, 20), "198.51.100.7", "GET /cache.php", 404, true, 153)
-	r.req(at(day, 0)+60_000, "203.0.113.5", "GET /cache.php", 200, true, 48_000)
-	r.pass(at(day, 1))
-	want(t, r.findings(day-1), "flip:GET /cache.php?")
-	if p := r.path("GET /cache.php"); p.Template != "" {
-		t.Errorf("an open day merged: %+v", p)
+		r.engage(at(d, h)+int64(i), netKey(i), `{"scripts":[`+hosts+`]}`)
 	}
 }
 
 // Between a closed day's merge and the pass's new provisional rows a finding is stored twice a moment: it is read
 // once, as closed.
 func TestClosedOutranksOpen(t *testing.T) {
-	r := newRig(t, "site")
-	day := d0 + 10
-	r.req(at(day-1, 20), "198.51.100.7", "GET /cache.php", 404, true, 153)
-	r.req(at(day, 0)+60_000, "203.0.113.5", "GET /cache.php", 200, true, 48_000)
-	r.pass(at(day, 1))
+	r := newRig(t)
+	day := d0 + LearnDays + 2
+	r.engage(at(d0, 9), "192.0.2.1", `{"scripts":["cdn.example.org"]}`)
+	r.reported(day, 20, minNets, `"new.example.net"`)
+	r.pass(at(day, 23))
 	open, err := readOpen(t.Context(), r.st.DB, r.site)
-	if err != nil || len(open) != 1 {
+	if err != nil || len(open) != 2 {
 		t.Fatalf("open %v %v", open, err)
 	}
+	want(t, r.findings(day), "script:new.example.net?")
 	r.pass(at(day+1, 3))
 	if err := writeOpen(t.Context(), r.st.DB, r.site, open); err != nil {
 		t.Fatal(err)
 	}
-	want(t, r.findings(day-1), "flip:GET /cache.php")
+	want(t, r.findings(day), "script:new.example.net")
 }
 
 // The open days' hosts are listed before their day closes, as the closed state merged with them holds them; they
 // are no findings.
 func TestOpenHosts(t *testing.T) {
-	r := newRig(t, "site")
+	r := newRig(t)
 	day := d0 + 10
 	r.engage(at(day-1, 9), "192.0.2.1", `{"scripts":["cdn.example.org"]}`)
 	r.engage(at(day-1, 9), "192.0.2.2", `{"scripts":["cdn.example.org"]}`)
@@ -225,12 +184,12 @@ func TestOpenHosts(t *testing.T) {
 
 // Age retention cuts the state idle past the months, the rest stays.
 func TestRetention(t *testing.T) {
-	r := newRig(t, "site")
+	r := newRig(t)
 	r.history()
 	r.pass(at(d0+14, 3))
 	// An open row's first_seen is a finding's time, or a host's merged first sight: a long-known host's row stays.
 	if err := writeOpen(t.Context(), r.st.DB, r.site, []Open{{Kind: "host", Key: "cdn.example.org", FirstSeen: at(d0, 9),
-		Detail: "{}"}, {Kind: "flip", Key: "GET /old.php", FirstSeen: at(d0, 9), Detail: "{}"}}); err != nil {
+		Detail: "{}"}, {Kind: "script", Key: "old.example.net", FirstSeen: at(d0, 9), Detail: "{}"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.st.PruneAge(t.Context(), time.UnixMilli(at(d0+12, 0))); err != nil {
@@ -240,211 +199,37 @@ func TestRetention(t *testing.T) {
 		fmt.Sprint(at(d0, 9))+" {}}]" {
 		t.Errorf("open rows %v %v", open, err)
 	}
-	if p := r.path("GET /probe-3.php"); p.Template == "" {
-		t.Error("an active template was cut")
+	if h := r.host("cdn.example.org"); h.Host == "" {
+		t.Error("an active host was cut")
 	}
-	if p := r.path("GET /probe-12.php"); p.Template == "" {
-		t.Error("a template of the cutoff's day was cut")
+	if h := r.host("once.example.net"); h.Host != "" {
+		t.Errorf("an idle host was kept: %+v", h)
 	}
-	var n int64
-	if err := r.st.DB.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM path_state
-		WHERE MAX(refused_last, ok_last) < ?`, at(d0+12, 0)).Scan(&n); err != nil || n != 0 {
-		t.Errorf("%d idle templates left (%v)", n, err)
-	}
-	want(t, r.findings(d0), "script:pay.example.net", "endpoint:PUT /upload", "hit:GET /dump.sql",
-		"flip:GET /probe-3.php")
+	want(t, r.findings(d0), "script:pay.example.net")
 }
 
-// A path refused on earlier days that answers without a route flips; refused by three addresses the same day too,
-// by one it does not. The answer's own size is no error page's.
-func TestFlip(t *testing.T) {
-	r := newRig(t, "site")
-	day := d0 + 9
-	r.req(at(day-1, 4), "198.51.100.7", "GET /cache.php", 404, true, 153)
-	r.req(at(day, 2), "203.0.113.5", "GET /cache.php", 200, true, 48_000)
-	for i, a := range []string{"198.51.100.1", "198.51.100.2", "198.51.100.3"} {
-		r.req(at(day, 1)+int64(i), a, "GET /three.php", 404, true, 153)
-	}
-	r.req(at(day, 3), "203.0.113.5", "GET /three.php", 200, true, 48_000)
-	r.req(at(day, 1), "198.51.100.1", "GET /one.php", 404, true, 153)
-	r.req(at(day, 3), "203.0.113.5", "GET /one.php", 200, true, 48_000)
-	r.pass(at(day+1, 3))
-	want(t, r.findings(day), "flip:GET /three.php", "flip:GET /cache.php")
-}
-
-// Answered after one address's refusal that day is no flip, and where no route was named for a week an unrouted GET
-// is no new target: nothing.
-func TestFlip_OneAddressSameDay(t *testing.T) {
-	r := newRig(t, "site")
-	day := d0 + 9
-	r.req(at(day, 1), "198.51.100.1", "GET /one.php", 404, true, 153)
-	r.req(at(day, 3), "203.0.113.5", "GET /one.php", 200, true, 48_000)
-	r.pass(at(day+1, 3))
-	want(t, r.findings(day))
-}
-
-// The error page answered 2xx (the refusals' size, within 64 bytes or a tenth) is no answer; a shell size twenty
-// unrouted paths share is none either, that day and after.
-func TestSizes(t *testing.T) {
-	r := newRig(t, "site")
-	day := d0 + 9
-	for _, tmpl := range []string{"GET /a.php", "GET /b.php", "GET /c.php"} {
-		r.req(at(day-1, 4), "198.51.100.7", tmpl, 404, true, 5_000)
-	}
-	r.req(at(day, 2), "203.0.113.5", "GET /a.php", 200, true, 5_400) // the error page, answered 200
-	for i := range 20 {
-		r.req(at(day, 3), "192.0.2.10", fmt.Sprintf("GET /spa-%d", i), 200, true, 3_000)
-	}
-	r.req(at(day, 4), "203.0.113.5", "GET /b.php", 200, true, 3_000) // the shell
-	r.pass(at(day+1, 3))
-	want(t, r.findings(day))
-	if s := r.site0(); s.ShellBytes != 3_000 {
-		t.Errorf("shell %d", s.ShellBytes)
-	}
-	// The next day the shell size is still known; another size flips.
-	r.req(at(day+1, 4), "203.0.113.5", "GET /c.php", 200, true, 3_000)
-	r.req(at(day+1, 5), "203.0.113.5", "GET /b.php", 200, true, 9_000)
-	r.pass(at(day+2, 3))
-	want(t, r.findings(day), "flip:GET /b.php")
-}
-
-// A path with two error pages keeps both sizes: an answer between them is neither and flips, one near either is the
-// error page.
-func TestSizes_TwoErrorPages(t *testing.T) {
-	r := newRig(t, "site")
-	day := d0 + 9
-	for _, tmpl := range []string{"GET /x.php", "GET /y.php"} {
-		r.req(at(day-2, 4), "198.51.100.7", tmpl, 404, true, 153)
-		r.req(at(day-1, 4), "198.51.100.8", tmpl, 404, true, 4_515)
-		r.req(at(day-1, 5), "198.51.100.8", tmpl, 404, true, 4_530)
-	}
-	r.req(at(day, 2), "203.0.113.5", "GET /x.php", 200, true, 2_000)
-	r.req(at(day, 2), "203.0.113.5", "GET /y.php", 200, true, 4_600)
-	r.pass(at(day+1, 3))
-	want(t, r.findings(day), "flip:GET /x.php")
-	if p := r.path("GET /y.php"); fmt.Sprint(p.RefusedSizes) != "[153 4515]" || p.OKFirst != 0 {
-		t.Errorf("y %+v", p)
-	}
-}
-
-// A size list keeps distinct sizes in order, the first come of near ones, at most maxRefusedSizes; adding one twice
-// changes nothing.
-func TestAddSize(t *testing.T) {
-	var s []int64
-	for _, n := range []int64{4_515, 153, 0, 160, 4_600, 90_000, 20_000, 700_000, 153} {
-		s = addSize(s, n)
-	}
-	if fmt.Sprint(s) != "[153 4515 20000 90000]" {
-		t.Errorf("sizes %v", s)
-	}
-	if again := mergeSizes(s, s); fmt.Sprint(again) != fmt.Sprint(s) {
-		t.Errorf("merged twice %v", again)
-	}
-}
-
-// A day answering fifty new unrouted paths to several addresses is soft (a soft 404): its answers find nothing, the
-// day is noted. A path refused before keeps no answer that day: a webshell answered among them is judged on the next
-// day that is not soft.
-func TestSoftDay(t *testing.T) {
-	r := newRig(t, "site")
-	day := d0 + 9
-	for i := range 60 {
-		tmpl := fmt.Sprintf("GET /p%d.php", i)
-		r.req(at(day-1, 4), "198.51.100.7", tmpl, 404, true, 153)
-		r.req(at(day, 4), fmt.Sprintf("203.0.113.%d", 5+i%3), tmpl, 200, true, 5_000+int64(i)*100)
-	}
-	r.req(at(day-1, 4), "198.51.100.7", "GET /shell.php", 404, true, 153)
-	r.req(at(day, 5), "192.0.2.99", "GET /shell.php", 200, true, 48_000)
-	r.pass(at(day+1, 3))
-	want(t, r.findings(day))
-	if s := r.site0(); s.SoftDay != day {
-		t.Errorf("soft day %d, want %d", s.SoftDay, day)
-	}
-	if p := r.path("GET /shell.php"); p.OKFirst != 0 || p.RefusedFirst == 0 {
-		t.Errorf("answer kept on a soft day: %+v", p)
-	}
-	r.req(at(day+1, 5), "192.0.2.99", "GET /shell.php", 200, true, 48_000)
-	r.pass(at(day+2, 3))
-	want(t, r.findings(day), "flip:GET /shell.php")
-}
-
-// One sprayer answered at sixty new paths, ten of them refused on an earlier day, is a catch-all too: those ten are
-// no flips.
-func TestSoftDay_OneSprayer(t *testing.T) {
-	r := newRig(t, "site")
-	day := d0 + 9
-	for i := range 60 {
-		tmpl := fmt.Sprintf("GET /p%d.php", i)
-		if i < softRefused {
-			r.req(at(day-2, 4), "198.51.100.7", tmpl, 404, true, 153)
-		}
-		r.req(at(day, 4)+int64(i), "203.0.113.5", tmpl, 200, true, 5_000+int64(i)*100)
-	}
-	r.pass(at(day+1, 3))
-	want(t, r.findings(day))
-	if s := r.site0(); s.SoftDay != day {
-		t.Errorf("soft day %d, want %d", s.SoftDay, day)
-	}
-}
-
-// One client fetching many new files (a backup, a mirror) makes no soft day: a flip that day is found.
-func TestSoftDay_OneClient(t *testing.T) {
-	r := newRig(t, "site")
-	day := d0 + 9
-	for i := range 60 {
-		r.req(at(day, 4)+int64(i), "192.0.2.50", fmt.Sprintf("GET /files/%d.jpg", i), 200, true, 20_000+int64(i)*700)
-	}
-	r.req(at(day-1, 4), "198.51.100.7", "GET /cache.php", 404, true, 153)
-	r.req(at(day, 5), "203.0.113.5", "GET /cache.php", 200, true, 48_000)
-	r.pass(at(day+1, 3))
-	want(t, r.findings(day), "flip:GET /cache.php")
-	if s := r.site0(); s.SoftDay != 0 {
-		t.Errorf("soft day %d", s.SoftDay)
-	}
-}
-
-// The learning window finds nothing: a flip in the site's first week is learned, the same a week on is found.
+// The learning window finds nothing: a host three networks report in the first week of reports is learned, one a
+// week on is found.
 func TestLearningWindow(t *testing.T) {
-	r := newRig(t, "site")
-	r.req(at(d0+1, 4), "198.51.100.7", "GET /early.php", 404, true, 153)
-	r.req(at(d0+2, 4), "203.0.113.5", "GET /early.php", 200, true, 9_000)
-	r.req(at(d0+LearnDays, 4), "198.51.100.7", "GET /late.php", 404, true, 153)
-	r.req(at(d0+LearnDays+1, 4), "203.0.113.5", "GET /late.php", 200, true, 9_000)
+	r := newRig(t)
+	r.engage(at(d0+1, 9), "192.0.2.1", `{"scripts":["cdn.example.org"]}`)
+	r.reported(d0+3, 9, minNets, `"early.example.net"`)
+	r.reported(d0+1+LearnDays, 9, minNets, `"late.example.net"`)
 	r.pass(at(d0+LearnDays+2, 3))
-	want(t, r.findings(d0), "flip:GET /late.php")
-	if p := r.path("GET /early.php"); p.OKFirst == 0 || p.Found != "" {
-		t.Errorf("early %+v", p)
+	want(t, r.findings(d0), "script:late.example.net")
+	if s := r.site0(); s.ScriptsFrom != d0+1 {
+		t.Errorf("scripts from %d, want %d", s.ScriptsFrom, d0+1)
 	}
 }
 
-// A login refusing a prober (routed 401) and answering a person is no flip and no hit, also when the prober gets in.
-// A new POST target answered on a site is one.
-func TestLoginAndTargets(t *testing.T) {
-	r := newRig(t, "site")
-	r.req(at(d0+1, 4), "192.0.2.10", "POST /login", 200, false, 300)
-	day := d0 + 9
-	for i := range 30 {
-		r.req(at(day, 4)+int64(i)*2000, "203.0.113.66", "POST /login", 401, false, 44)
-	}
-	r.req(at(day, 5), "203.0.113.66", "POST /login", 200, false, 300)
-	r.req(at(day, 6), "192.0.2.11", "POST /xmlrpc.php", 200, true, 700)
-	r.pass(at(day+1, 3))
-	want(t, r.findings(day), "endpoint:POST /xmlrpc.php")
-	// An API's new endpoints are its lists': none here.
-	a := newRig(t, "api")
-	a.req(at(day, 6), "192.0.2.11", "POST /xmlrpc.php", 200, true, 700)
-	a.pass(at(day+1, 3))
-	want(t, a.findings(day))
-}
-
-// snapshot is every watch table's rows, as text.
+// snapshot is every watch table's rows, as text: the kept columns by name.
 func snapshot(t *testing.T, st *store.Store, skipCut bool) string {
 	t.Helper()
 	var b strings.Builder
-	for _, q := range []string{`SELECT * FROM path_state ORDER BY site_id, template`,
-		`SELECT * FROM script_host ORDER BY site_id, host`, `SELECT * FROM watch_open ORDER BY site_id, kind, key`,
-		`SELECT site_id, from_day, done_day, ready_at, routed_day, soft_day, shell_bytes, scripts_from, cut
-		FROM watch_site ORDER BY site_id`} {
+	for _, q := range []string{`SELECT site_id, host, first_seen, last_seen, addrs, nets, found_at, found_first
+		FROM script_host ORDER BY site_id, host`,
+		`SELECT site_id, kind, key, first_seen, detail FROM watch_open ORDER BY site_id, kind, key`,
+		`SELECT site_id, from_day, done_day, ready_at, scripts_from, cut FROM watch_site ORDER BY site_id`} {
 		rows, err := st.DB.QueryContext(t.Context(), q)
 		if err != nil {
 			t.Fatal(err)
@@ -469,19 +254,15 @@ func snapshot(t *testing.T, st *store.Store, skipCut bool) string {
 	return b.String()
 }
 
-// history fills a fortnight: people, scanners, a flip, a hit, a new target, script hosts.
+// history fills a fortnight: people loading the CDN's scripts, a host reported once, a new host.
 func (r *rig) history() {
 	for d := d0; d < d0+14; d++ {
 		for i := range 5 {
-			r.req(at(d, 8)+int64(i), fmt.Sprintf("192.0.2.%d", 10+i), "GET /", 200, false, 900)
+			r.req(at(d, 8)+int64(i), fmt.Sprintf("192.0.2.%d", 10+i))
 			r.engage(at(d, 9)+int64(i), fmt.Sprintf("192.0.2.%d", 10+i), `{"scripts":["cdn.example.org"]}`)
 		}
-		r.req(at(d, 7), "192.0.2.10", "POST /api/save", 200, false, 40)
-		r.scanner(d, fmt.Sprintf("203.0.113.%d", d%50), 12, "", 0)
 	}
-	r.req(at(d0+11, 12), "203.0.113.5", "GET /probe-3.php", 200, true, 48_000)
-	r.scanner(d0+12, "203.0.113.200", 15, "GET /dump.sql", 900_000)
-	r.req(at(d0+12, 13), "192.0.2.11", "PUT /upload", 201, true, 70)
+	r.engage(at(d0+1, 10), "192.0.2.10", `{"scripts":["once.example.net"]}`)
 	for i := range 4 {
 		r.engage(at(d0+13, 10)+int64(i), netKey(i), `{"scripts":["cdn.example.org","pay.example.net"]}`)
 	}
@@ -493,12 +274,11 @@ func netKey(i int) string { return fmt.Sprintf("2001:db8:%x::/64", 0x100+i) }
 // A pass merges each closed day once; a second changes nothing, and walking every closed day again (the cursor set
 // back) leaves the same state: every value is a first, a last, a most or set once.
 func TestIdempotent(t *testing.T) {
-	r := newRig(t, "site")
+	r := newRig(t)
 	r.history()
 	now := at(d0+14, 3)
 	r.pass(now)
-	want(t, r.findings(d0), "script:pay.example.net", "endpoint:PUT /upload", "hit:GET /dump.sql",
-		"flip:GET /probe-3.php")
+	want(t, r.findings(d0), "script:pay.example.net")
 	once := snapshot(t, r.st, false)
 	r.pass(now)
 	if again := snapshot(t, r.st, false); again != once {
@@ -517,12 +297,12 @@ func TestIdempotent(t *testing.T) {
 
 // A pass cut short mid-backfill goes on where it stopped: the state is what one uninterrupted pass makes.
 func TestRestartMidBackfill(t *testing.T) {
-	whole := newRig(t, "site")
+	whole := newRig(t)
 	whole.history()
 	now := at(d0+14, 3)
 	whole.pass(now)
 
-	r := newRig(t, "site")
+	r := newRig(t)
 	r.history()
 	r.flush()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -531,7 +311,7 @@ func TestRestartMidBackfill(t *testing.T) {
 	TraceSQL = func(q string, _ []any) {
 		mu.Lock()
 		defer mu.Unlock()
-		if q == serverRows {
+		if q == scriptRows {
 			if reads++; reads == 5 {
 				cancel()
 			}
@@ -553,7 +333,7 @@ func TestRestartMidBackfill(t *testing.T) {
 
 // The state outlives raw: once the events are gone a finding stays, and the next pass keeps it.
 func TestRawDeleted(t *testing.T) {
-	r := newRig(t, "site")
+	r := newRig(t)
 	r.history()
 	now := at(d0+14, 3)
 	r.pass(now)
@@ -561,62 +341,7 @@ func TestRawDeleted(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.pass(now + dayMS)
-	want(t, r.findings(d0), "script:pay.example.net", "endpoint:PUT /upload", "hit:GET /dump.sql",
-		"flip:GET /probe-3.php")
-}
-
-// A spray of ten thousand paths in a day keeps the day's bound of new templates, the most addresses first, and
-// counts the rest.
-func TestSpray(t *testing.T) {
-	r := newRig(t, "site")
-	day := d0 + 9
-	r.req(at(day, 1), "198.51.100.1", "GET /popular.php", 404, true, 153)
-	r.req(at(day, 1), "198.51.100.2", "GET /popular.php", 404, true, 153)
-	for i := range 10_000 {
-		r.req(at(day, 2)+int64(i), "203.0.113.9", fmt.Sprintf("GET /spray/%d.php", i), 404, true, 153)
-	}
-	r.pass(at(day+1, 3))
-	var n int64
-	if err := r.st.DB.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM path_state`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != maxNewTemplates {
-		t.Errorf("%d templates kept", n)
-	}
-	if p := r.path("GET /popular.php"); p.RefusedAddrs != 2 {
-		t.Errorf("the two addresses' path not kept: %+v", p)
-	}
-	if s := r.site0(); s.Cut != 10_001-maxNewTemplates {
-		t.Errorf("cut %d", s.Cut)
-	}
-}
-
-// At the site's bound new templates push out refusals alone, the longest idle first; a finding's row stays.
-func TestEviction(t *testing.T) {
-	st := &state{site: Site{FromDay: d0, ReadyAt: 1}, paths: map[string]*Path{}, hosts: map[string]*Host{}}
-	for i := range maxTemplates {
-		p := &Path{Template: fmt.Sprintf("GET /r%d", i), RefusedFirst: 1, RefusedLast: int64(1 + i)}
-		switch {
-		case i == 0:
-			p.Found, p.OKFirst, p.FoundAt = "flip", 5, 6
-		case i%2 == 1:
-			p.OKFirst, p.OKLast = 2, int64(1+i)
-		}
-		st.paths[p.Template] = p
-	}
-	d := &day{n: d0 + 20, addrs: map[string]*addrSums{}, tmpls: map[string]*tmplDay{}, sizes: map[int64]map[string]bool{},
-		hosts: map[string]*hostDay{}}
-	for i := range 3 {
-		d.tmpls[fmt.Sprintf("GET /new%d", i)] = &tmplDay{refFirst: 9, refLast: 9, refAddrs: map[string]int64{"a": 9}}
-	}
-	o := st.apply(&siteRef{id: 1, kind: "site"}, d, true, 10)
-	if got := fmt.Sprint(o.dropPaths); got != "[GET /r2 GET /r4 GET /r6]" {
-		t.Errorf("dropped %s", got)
-	}
-	st.commit(o)
-	if len(st.paths) != maxTemplates || st.paths["GET /r0"] == nil || st.paths["GET /new2"] == nil {
-		t.Errorf("%d templates, the finding's %v", len(st.paths), st.paths["GET /r0"])
-	}
+	want(t, r.findings(d0), "script:pay.example.net")
 }
 
 // Script hosts are the browser's word, counted by the addresses that reported them: lower-cased, a host name (an
@@ -625,7 +350,7 @@ func TestEviction(t *testing.T) {
 // after the learning window: three visitor ids of one address are one, three addresses of one /24 or three /64s of
 // one /48 are one network.
 func TestScriptHosts(t *testing.T) {
-	r := newRig(t, "site")
+	r := newRig(t)
 	for d := d0; d < d0+LearnDays+2; d++ {
 		r.engage(at(d, 9), "192.0.2.1", `{"scripts":["cdn.example.org"]}`)
 	}
@@ -688,7 +413,7 @@ func TestScriptHost(t *testing.T) {
 // One address reporting made-up names brings in at most dayHostsPerAddr a day; a name it could not bring in counts
 // once in the cut, however often reported, and not at all once another address brought it in.
 func TestScriptHostsPerAddress(t *testing.T) {
-	r := newRig(t, "site")
+	r := newRig(t)
 	day := d0 + LearnDays + 2
 	var names []string
 	for i := range 60 {
@@ -721,8 +446,7 @@ func TestHostEviction(t *testing.T) {
 	day := d0 + 20
 	// found: how many of the state's hosts were found (the rest one address keeps reporting, today too).
 	run := func(found int) (outcome, *state) {
-		st := &state{site: Site{FromDay: d0, ReadyAt: 1, ScriptsFrom: d0}, paths: map[string]*Path{},
-			hosts: map[string]*Host{}}
+		st := &state{site: Site{FromDay: d0, ReadyAt: 1, ScriptsFrom: d0}, hosts: map[string]*Host{}}
 		d := newDay(day)
 		for i := range maxHosts {
 			name := fmt.Sprintf("h%03d.example.net", i)
@@ -741,7 +465,7 @@ func TestHostEviction(t *testing.T) {
 			d.hosts[fmt.Sprintf("real%d.example.org", i)] = &hostDay{first: at(day, 2), last: at(day, 2), addrs: addrs,
 				nets: nets}
 		}
-		o := st.apply(&siteRef{id: 1, kind: "site"}, d, true, at(day+1, 3))
+		o := st.apply(d, true, at(day+1, 3))
 		st.commit(o)
 		if len(st.hosts) != maxHosts || len(o.found) != 3 {
 			t.Errorf("found %d: %d hosts, findings %v", found, len(st.hosts), o.found)
@@ -767,11 +491,11 @@ func TestHostEviction(t *testing.T) {
 // push a host many report out. Those that found no place are found the next day, reported again or not, at their
 // first sight the day they passed as new.
 func TestScriptHostSlots(t *testing.T) {
-	r := newRig(t, "site")
+	r := newRig(t)
 	day := d0 + LearnDays + 2
 	r.engage(at(d0, 9), "192.0.2.1", `{"scripts":["cdn.example.org"]}`)
 	// Each made-up name from more addresses than the real host has, of fewer networks.
-	for i := range maxPerKind + 1 {
+	for i := range maxPerDay + 1 {
 		for n := range minNets {
 			for k := range 2 {
 				r.engage(at(day, 9)+int64(i), fmt.Sprintf("2001:db8:%x:%x::/64", 0x100+n, k),
@@ -785,7 +509,7 @@ func TestScriptHostSlots(t *testing.T) {
 	r.pass(at(day+1, 3))
 	// The two past the day's bound wait: provisional on the day still open.
 	got := r.findings(day)
-	if len(got) != maxPerKind+2 || !slices.Contains(got, "script:real.example.org") ||
+	if len(got) != maxPerDay+2 || !slices.Contains(got, "script:real.example.org") ||
 		!slices.Contains(got, "script:h09.example.net?") || !slices.Contains(got, "script:h10.example.net?") {
 		t.Errorf("findings %v", got)
 	}
@@ -809,7 +533,7 @@ func TestScriptHostSlots(t *testing.T) {
 // A script host finding happens at its first sight on the day it was found, provisional or closed: the merging
 // pass's time is bookkeeping. A sight the day before, by too few networks, is no part of it.
 func TestScriptHostFoundTime(t *testing.T) {
-	r := newRig(t, "site")
+	r := newRig(t)
 	day := d0 + LearnDays + 2
 	r.engage(at(d0, 9), "192.0.2.1", `{"scripts":["cdn.example.org"]}`)
 	r.engage(at(day-1, 9), netKey(0), `{"scripts":["new.example.net"]}`)
@@ -835,35 +559,8 @@ func TestScriptHostFoundTime(t *testing.T) {
 	if got := times(); !slices.Equal(got, []int64{at(day, 9)}) {
 		t.Errorf("closed %v", got)
 	}
-	hs, err := readHosts(t.Context(), r.st.DB, siteHosts+` AND host = 'new.example.net'`, r.site)
-	if err != nil || len(hs) != 1 || hs[0].FoundAt != at(day+1, 5) || hs[0].FirstSeen != at(day-1, 9) {
-		t.Errorf("state %+v %v", hs, err)
-	}
-}
-
-// Past a day's ten findings of a kind the rest is kept late, not merged as seen: the next pass finds them, at their
-// first answer, provisional while a day is open and then closed.
-func TestPathSlots(t *testing.T) {
-	r := newRig(t, "site")
-	day := d0 + 9
-	var all []string
-	for i := range maxPerKind + 2 {
-		tmpl := fmt.Sprintf("GET /f%02d.php", i)
-		r.req(at(day-1, 4), "198.51.100.7", tmpl, 404, true, 153)
-		r.req(at(day, 1)+int64(i)*1000, "203.0.113.5", tmpl, 200, true, 48_000)
-		all = append([]string{"flip:" + tmpl}, all...)
-	}
-	r.pass(at(day+1, 3))
-	late := []string{"flip:GET /f11.php?", "flip:GET /f10.php?"}
-	want(t, r.findings(day), append(late, all[2:]...)...)
-	if p := r.path("GET /f11.php"); p.Found != "flip" || p.FoundAt != 0 || p.OKFirst != at(day, 1)+11_000 {
-		t.Errorf("late %+v", p)
-	}
-	r.pass(at(day+2, 3))
-	want(t, r.findings(day), all...)
-	fs, err := Findings(t.Context(), r.st.DB, r.site, 0)
-	if err != nil || fs[0].At != at(day, 1)+11_000 {
-		t.Errorf("first %+v %v", fs, err)
+	if h := r.host("new.example.net"); h.FoundAt != at(day+1, 5) || h.FirstSeen != at(day-1, 9) {
+		t.Errorf("state %+v", h)
 	}
 }
 
@@ -892,8 +589,8 @@ func TestPassGoesOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The first site's state cannot be read.
-	if _, err := st.DB.ExecContext(t.Context(), `INSERT INTO path_state (site_id, template, refused_sizes)
-		VALUES (?, 'GET /x', 'not json')`, a); err != nil {
+	if _, err := st.DB.ExecContext(t.Context(), `INSERT INTO script_host (site_id, host, first_seen, last_seen)
+		VALUES (?, 'x.example.net', 'not a time', 0)`, a); err != nil {
 		t.Fatal(err)
 	}
 	err = Pass(t.Context(), st, time.UnixMilli(at(d0+2, 3)))
@@ -906,7 +603,7 @@ func TestPassGoesOn(t *testing.T) {
 }
 
 // A site without raw is caught up and has no open rows; its first raw day, weeks on or a history older than the row,
-// starts the walk and the learning window.
+// starts the walk.
 func TestNoRaw(t *testing.T) {
 	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "app.db"))
 	if err != nil {
@@ -919,7 +616,7 @@ func TestNoRaw(t *testing.T) {
 		t.Fatal(err)
 	}
 	site, hist := rows["a.example.com"].ID, rows["b.example.com"].ID
-	if err := writeOpen(t.Context(), st.DB, site, []Open{{Kind: "flip", Key: "GET /x", FirstSeen: 1,
+	if err := writeOpen(t.Context(), st.DB, site, []Open{{Kind: "script", Key: "x.example.net", FirstSeen: 1,
 		Detail: "{}"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -955,7 +652,7 @@ func TestNoRaw(t *testing.T) {
 
 // Every statement the job reads events with stays in one site-day of the time index, without a sort.
 func TestPlans(t *testing.T) {
-	r := newRig(t, "site")
+	r := newRig(t)
 	r.history()
 	r.flush()
 	var mu sync.Mutex
@@ -967,7 +664,7 @@ func TestPlans(t *testing.T) {
 	}
 	t.Cleanup(func() { TraceSQL = nil })
 	r.pass(at(d0+14, 3))
-	if len(seen) != 2 {
+	if len(seen) != 1 {
 		t.Fatalf("%d statements traced", len(seen))
 	}
 	for q, args := range seen {

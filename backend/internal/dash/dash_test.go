@@ -352,7 +352,7 @@ func noNullLists(t *testing.T, where string, v any) {
 func listKey(k string) bool {
 	switch k {
 	case "rows", "items", "tiles", "series", "mean", "prev_mean", "delta", "labels", "ticks", "weekends", "partial", "signals", "detail", "trail", "hours",
-		"sites", "evidence", "related", "ip_version", "browsers", "os", "devices", "ids", "paths", "hosts":
+		"sites", "evidence", "related", "ip_version", "browsers", "os", "devices", "ids", "hosts":
 		return true
 	}
 	return false

@@ -1,11 +1,5 @@
 import { useState } from "react";
-import {
-  api,
-  type Classes,
-  type ListRow,
-  type Status,
-  type Watch,
-} from "./api";
+import { api, type Classes, type ListRow, type Status } from "./api";
 import { StackChart, Strip, type StripPart } from "./charts";
 import { ErrorDetail } from "./ErrorDetail";
 import { SEP, joinSep, num, pct } from "./format";
@@ -25,7 +19,6 @@ import {
   shownClasses,
   useDash,
 } from "./ui";
-import { AnsweredProbes } from "./Watch";
 
 // Who is asking: every class's share of all requests, whatever the
 // audience switch says (server only).
@@ -189,10 +182,7 @@ const mono = (s: string) => (
 // The server's view: requests per class, errors, probed paths, refused
 // requests by address. Shown only on a domain with a feed, always over
 // every class.
-export function Traffic(props: {
-  classes: Loaded<Classes>;
-  watch: Loaded<Watch>;
-}) {
+export function Traffic(props: { classes: Loaded<Classes> }) {
   return (
     <AllClasses>
       <TrafficPanels {...props} />
@@ -200,13 +190,7 @@ export function Traffic(props: {
   );
 }
 
-function TrafficPanels({
-  classes,
-  watch,
-}: {
-  classes: Loaded<Classes>;
-  watch: Loaded<Watch>;
-}) {
+function TrafficPanels({ classes }: { classes: Loaded<Classes> }) {
   const { scope, openLog, apiClients } = useDash();
   const shown = shownClasses(apiClients);
   const st = useApi<Status>(
@@ -278,10 +262,8 @@ function TrafficPanels({
           onRow={(r) => openLog({ path: r.key })}
           empty="Nothing probed in this range."
         />
-        <AnsweredProbes watch={watch} />
         <TopList
           id="refused-panel"
-          className="min-[1000px]:col-span-2"
           title="Refused requests by address"
           head={<span>not answered 2xx or 3xx</span>}
           tabs={[{ key: "refused", label: "Refused", dim: "refused" }]}

@@ -2,7 +2,7 @@
 
 # Database schema
 
-21 tables; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.
+20 tables; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.
 
 ## actor_class
 
@@ -398,43 +398,6 @@ Go types:
 | `input_tokens` | INTEGER | no | `0` |  |
 | `output_tokens` | INTEGER | no | `0` |  |
 
-## path_state
-
-Go types:
-
-- `watch.Path` (internal/watch): Path is one request template's state: its refusals, its answers, and the finding its first answer made. Times are unix ms, sizes bytes (0: none reported), addrs the most distinct address keys of one day.
-
-| Column | Type | Null | Default | PK |
-| --- | --- | --- | --- | --- |
-| `site_id` | INTEGER | no |  | 1 |
-| `template` | TEXT | no |  | 2 |
-| `refused_first` | INTEGER | no | `0` |  |
-| `refused_last` | INTEGER | no | `0` |  |
-| `refused_addrs` | INTEGER | no | `0` |  |
-| `refused_sizes` | TEXT | no | `'[]'` |  |
-| `ok_first` | INTEGER | no | `0` |  |
-| `ok_last` | INTEGER | no | `0` |  |
-| `ok_addrs` | INTEGER | no | `0` |  |
-| `ok_lo` | INTEGER | no | `0` |  |
-| `ok_hi` | INTEGER | no | `0` |  |
-| `plain_first` | INTEGER | no | `0` |  |
-| `hit_first` | INTEGER | no | `0` |  |
-| `hit_addr` | TEXT | no | `''` |  |
-| `found` | TEXT | no | `''` |  |
-| `found_at` | INTEGER | no | `0` |  |
-
-Foreign keys:
-
-- `site_id` → `site` (`id`)
-
-Indexes:
-
-- `path_state_found` (`site_id`, `found_at`)
-
-Checks:
-
-- `CHECK (found IN ('', 'flip', 'hit', 'endpoint'))`
-
 ## script_host
 
 Go types:
@@ -490,7 +453,7 @@ Checks:
 
 Go types:
 
-- `watch.Open` (internal/watch): Open is one provisional finding of a day not closed yet: its kind, template or host, when it was first answered or seen, and its state as of the pass (Detail, JSON of a Path or a Host). Kind host is no finding: a script host the open days reported, its state merged with theirs.
+- `watch.Open` (internal/watch): Open is one provisional finding of a day not closed yet (kind script): its host, its first sight that day and its state as of the pass (Detail, JSON of a Host). Kind host is no finding: a script host the open days reported, its state merged with theirs.
 
 | Column | Type | Null | Default | PK |
 | --- | --- | --- | --- | --- |
@@ -506,7 +469,7 @@ Foreign keys:
 
 Checks:
 
-- `CHECK (kind IN ('flip', 'hit', 'endpoint', 'script', 'host'))`
+- `CHECK (kind IN ('script', 'host'))`
 
 ## watch_site
 
@@ -520,9 +483,6 @@ Go types:
 | `from_day` | INTEGER | no |  |  |
 | `done_day` | INTEGER | no |  |  |
 | `ready_at` | INTEGER | no | `0` |  |
-| `routed_day` | INTEGER | no | `0` |  |
-| `soft_day` | INTEGER | no | `0` |  |
-| `shell_bytes` | INTEGER | no | `0` |  |
 | `scripts_from` | INTEGER | no | `0` |  |
 | `cut` | INTEGER | no | `0` |  |
 
@@ -755,24 +715,6 @@ erDiagram
         INTEGER input_tokens
         INTEGER output_tokens
     }
-    path_state {
-        INTEGER site_id PK, FK
-        TEXT template PK
-        INTEGER refused_first
-        INTEGER refused_last
-        INTEGER refused_addrs
-        TEXT refused_sizes
-        INTEGER ok_first
-        INTEGER ok_last
-        INTEGER ok_addrs
-        INTEGER ok_lo
-        INTEGER ok_hi
-        INTEGER plain_first
-        INTEGER hit_first
-        TEXT hit_addr
-        TEXT found
-        INTEGER found_at
-    }
     script_host {
         INTEGER site_id PK, FK
         TEXT host PK
@@ -806,9 +748,6 @@ erDiagram
         INTEGER from_day
         INTEGER done_day
         INTEGER ready_at
-        INTEGER routed_day
-        INTEGER soft_day
-        INTEGER shell_bytes
         INTEGER scripts_from
         INTEGER cut
     }
@@ -820,7 +759,6 @@ erDiagram
     agg_list }o--|| site : "site_id"
     event }o--|| site : "site_id"
     llm_briefing }o--|| site : "site_id"
-    path_state }o--|| site : "site_id"
     script_host }o--|| site : "site_id"
     watch_open }o--|| site : "site_id"
     watch_site |o--|| site : "site_id"

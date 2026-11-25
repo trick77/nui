@@ -3,8 +3,10 @@ package dispatch
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -142,63 +144,232 @@ func TestEvalFacts(t *testing.T) {
 	}
 }
 
-// The watch's findings (an answered probe, a new target, a new script host) are no rule's: a website's new target
-// shares its id's prefix with an API's new endpoint and still never reads as one, at any min.
-func TestEvalWatchFindings(t *testing.T) {
+// script.new: the watch's new script host, provisional while its day is open and then closed, one key throughout;
+// the addresses as its figure, the script hosts card as its target. No other rule reads it, and a website's new POST
+// target is no new endpoint: those are an API's.
+func TestEvalScriptHosts(t *testing.T) {
 	r := newEvalRig(t)
-	req := func(ago time.Duration, addr, tmpl string, status int, bytes int) {
-		r.requests(r.web, ago, 1, addr, func(e *store.Event) {
-			e.Template, e.Method, e.Status, e.Unrouted = tmpl, strings.Fields(tmpl)[0], status, true
-			e.Props = fmt.Sprintf(`{"bytes":%d}`, bytes)
-		})
-	}
 	engage := func(ago time.Duration, addr, hosts string) {
 		r.requests(r.web, ago, 1, addr, func(e *store.Event) {
 			e.Source, e.Kind, e.Visitor, e.Props = "browser", "engagement", "v-"+addr, `{"p":{"scripts":[`+hosts+`]}}`
 		})
 	}
-	req(240*time.Hour, "192.0.2.1", "GET /", 200, 900)
 	engage(240*time.Hour, "192.0.2.1", `"cdn.example.org"`)
 	// Caught up on its first day: a backfill finds nothing.
 	if err := watch.Pass(t.Context(), r.st, r.now.Add(-236*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	req(72*time.Hour, "198.51.100.7", "GET /cache.php", 404, 153)
-	req(20*time.Hour, "203.0.113.5", "GET /cache.php", 200, 48_000)
-	req(19*time.Hour, "192.0.2.11", "POST /xmlrpc.php", 200, 700)
+	r.requests(r.web, 3*time.Hour, 1, "192.0.2.11", func(e *store.Event) {
+		e.Template, e.Method, e.Path, e.Unrouted = "POST /xmlrpc.php", "POST", "/xmlrpc.php", true
+	})
 	for i, addr := range []string{"192.0.2.10", "198.51.100.11", "203.0.113.12"} {
-		engage(18*time.Hour+time.Duration(i)*time.Minute, addr, `"cdn.example.org","pay.example.net"`)
+		engage(2*time.Hour+time.Duration(i)*time.Minute, addr, `"cdn.example.org","pay.example.net"`)
 	}
 	if err := watch.Pass(t.Context(), r.st, r.now); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := watch.Findings(t.Context(), r.st.DB, r.web.ID, r.now.Add(-24*time.Hour).UnixMilli())
-	if err != nil {
+	rules := `{"name": "s", "on": "script.new"}, {"name": "e", "on": "endpoint.new", "min": 0},
+		{"name": "p", "on": "probe.new", "min": 0}, {"name": "r", "on": "referrer.new", "min": 0},
+		{"name": "x", "on": "error.new", "min": 0}`
+	v, c := r.eval(rules, time.Time{}, nil)
+	occ, ok := r.occ(v, c.Rules[0], r.web)
+	if !ok || keys(occ) != "pay.example.net" || *occ[0].Figure != 3 || occ[0].Unit != "addresses" ||
+		occ[0].Text != "New script host: pay.example.net" || !strings.Contains(occ[0].Detail, "Provisional") ||
+		occ[0].Target.Panel != "scripts" || occ[0].Target.Filter["key"] != "pay.example.net" {
+		t.Fatalf("provisional: %v %+v", ok, occ)
+	}
+	for _, rule := range c.Rules[1:] {
+		occ, ok := r.occ(v, rule, r.web)
+		if !ok || len(occ) != 0 {
+			t.Errorf("%s: %v %s", rule.Name, ok, keys(occ))
+		}
+	}
+	// The day closed: the same key, no longer provisional.
+	r.now = r.now.Add(15 * time.Hour)
+	if err := watch.Pass(t.Context(), r.st, r.now); err != nil {
 		t.Fatal(err)
 	}
-	found := map[string]bool{}
-	for _, f := range fs {
-		if !f.Provisional {
-			found[f.Kind+":"+f.Key] = true
+	v, c = r.eval(rules, time.Time{}, nil)
+	if occ, _ := r.occ(v, c.Rules[0], r.web); keys(occ) != "pay.example.net" || strings.Contains(occ[0].Detail,
+		"Provisional") {
+		t.Errorf("closed: %+v", occ)
+	}
+}
+
+// scriptSteps is the alert engine over the evaluator, a script.new rule, the watch's pass and the engine's step
+// each hour as the server runs them, from day d.
+type scriptSteps struct {
+	*evalRig
+	d int64
+	e *Engine
+}
+
+const dayMS = 86_400_000
+
+func newScriptSteps(t *testing.T) *scriptSteps {
+	t.Helper()
+	r := newEvalRig(t)
+	s := &scriptSteps{evalRig: r, d: r.now.UnixMilli() / dayMS}
+	c := alert.Parse([]byte(`{`+ops+`, "rules": [{"name": "s", "on": "script.new"}]}`),
+		alert.Known{Domains: []string{"example.com", "api.example.com"}, Products: []string{"Lens"}})
+	if len(c.Faults) > 0 {
+		t.Fatal(c.Faults)
+	}
+	rec := &Recorder{}
+	d := &dash.Server{DB: r.st, Sites: r.reg, RetentionMonths: 25}
+	s.e = New(Options{Store: r.st, Sites: r.reg, Config: c, Senders: rec.Senders(c), Board: alert.NewBoard(nil),
+		Source: NewEval(d, c.Rules, s.at(-10, 0), nil), PublicFQDN: "trakk.example.com",
+		Log: slog.New(slog.DiscardHandler)})
+	// A known host ten days back, walked that day: no backfill, the learning window long over.
+	s.engage(s.at(-10, 9), "192.0.2.1", `"cdn.example.org"`)
+	r.now = s.at(-10, 12)
+	if err := watch.Pass(t.Context(), r.st, r.now); err != nil {
+		t.Fatal(err)
+	}
+	r.now = s.at(0, 0).Add(5 * time.Minute)
+	s.step() // the rule's baseline: nothing yet
+	return s
+}
+
+// at is hour h of day d+day.
+func (s *scriptSteps) at(day int64, h int) time.Time {
+	return time.UnixMilli((s.d+day)*dayMS + int64(h)*3_600_000).UTC()
+}
+
+func (s *scriptSteps) engage(at time.Time, addr, hosts string) {
+	s.t.Helper()
+	s.requests(s.web, s.now.Sub(at), 1, addr, func(e *store.Event) {
+		e.Source, e.Kind, e.Visitor, e.Props = "browser", "engagement", "v-"+addr, `{"p":{"scripts":[`+hosts+`]}}`
+	})
+}
+
+func (s *scriptSteps) step() {
+	s.t.Helper()
+	if err := watch.Pass(s.t.Context(), s.st, s.now); err != nil {
+		s.t.Fatal(err)
+	}
+	if err := s.e.Step(s.t.Context(), s.now); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
+// until steps hourly up to end.
+func (s *scriptSteps) until(end time.Time) {
+	s.t.Helper()
+	for s.now.Add(time.Hour).Before(end.Add(time.Second)) {
+		s.now = s.now.Add(time.Hour)
+		s.step()
+	}
+}
+
+// scriptAlert is a script.new row as the test reads it.
+type scriptAlert struct {
+	id      int64
+	key     string
+	state   string
+	told    string
+	left    bool
+	firstAt int64
+	detail  string
+}
+
+func (s *scriptSteps) alerts() map[string]scriptAlert {
+	s.t.Helper()
+	rows, err := s.st.DB.QueryContext(s.t.Context(), `SELECT id, key, state, told, left_at IS NOT NULL, first_at, detail
+		FROM alert WHERE rule = 's'`)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]scriptAlert{}
+	for rows.Next() {
+		var a scriptAlert
+		if err := rows.Scan(&a.id, &a.key, &a.state, &a.told, &a.left, &a.firstAt, &a.detail); err != nil {
+			s.t.Fatal(err)
+		}
+		if _, ok := out[a.key]; ok {
+			s.t.Errorf("%s alerted twice", a.key)
+		}
+		out[a.key] = a
+	}
+	return out
+}
+
+// A third network late in the day finds a host first seen at its start: the alert comes with the finding, though the
+// 24 hours read then no longer hold its first sight. Provisional, then closed, one alert throughout; it leaves a day
+// after the job made it and never comes back.
+func TestScriptNewLateNetwork(t *testing.T) {
+	s := newScriptSteps(t)
+	hosts := `"cdn.example.org","late.example.net"`
+	s.engage(s.at(0, 0).Add(10*time.Minute), "192.0.2.10", hosts)
+	s.engage(s.at(0, 23).Add(30*time.Minute), "198.51.100.11", hosts)
+	s.engage(s.at(0, 23).Add(31*time.Minute), "203.0.113.12", hosts)
+	s.until(s.at(0, 23).Add(5 * time.Minute))
+	if as := s.alerts(); len(as) != 0 {
+		t.Fatalf("before the third network %v", as)
+	}
+	s.until(s.at(1, 0).Add(5 * time.Minute))
+	first := s.alerts()["late.example.net"]
+	if len(s.alerts()) != 1 || first.state != store.AlertOnce || first.told != "open" ||
+		!strings.Contains(first.detail, "Provisional") || !strings.Contains(first.detail, "First seen "+
+		s.at(0, 0).Format("2006-01-02")+" 00:10 UTC") {
+		t.Fatalf("provisional %+v", s.alerts())
+	}
+	// Its day closes at 02:00: the same row in the set every pass, never left (a re-entry within the cooldown would
+	// look the same at the end), its finding no longer provisional.
+	for range 3 {
+		s.until(s.now.Add(time.Hour))
+		if a := s.alerts()["late.example.net"]; a.id != first.id || a.left || a.told != "open" {
+			t.Fatalf("%s: %+v", s.now, a)
 		}
 	}
-	for _, id := range []string{"flip:GET /cache.php", "endpoint:POST /xmlrpc.php", "script:pay.example.net"} {
-		if !found[id] {
-			t.Fatalf("the watch found %v, no %s", found, id)
+	if a := s.alerts()["late.example.net"]; strings.Contains(a.detail, "Provisional") {
+		t.Fatalf("closed %+v", a)
+	}
+	if st, _, _ := watch.SiteState(t.Context(), s.st.DB, s.web.ID); st.DoneDay != s.d {
+		t.Fatalf("day not closed: %+v", st)
+	}
+	s.until(s.at(3, 6).Add(5 * time.Minute))
+	if as := s.alerts(); len(as) != 1 || !as["late.example.net"].left || as["late.example.net"].id != first.id {
+		t.Errorf("a day later %+v", as)
+	}
+}
+
+// A day finds ten hosts at most: the eleventh, first seen early that day, is found the next and alerted then; each
+// host once, provisional or closed.
+func TestScriptNewPastTheBound(t *testing.T) {
+	s := newScriptSteps(t)
+	var names []string
+	for i := range 11 {
+		names = append(names, fmt.Sprintf(`"p%02d.example.net"`, i))
+	}
+	for i, addr := range []string{"192.0.2.10", "198.51.100.11", "203.0.113.12"} {
+		s.engage(s.at(0, 0).Add(time.Duration(20+i)*time.Minute), addr, strings.Join(names, ","))
+	}
+	s.until(s.at(0, 23).Add(5 * time.Minute))
+	if as := s.alerts(); len(as) != 10 {
+		t.Fatalf("day 0: %d alerts", len(as))
+	}
+	if _, ok := s.alerts()["p10.example.net"]; ok {
+		t.Fatal("the eleventh found on its own day")
+	}
+	s.until(s.at(2, 6).Add(5 * time.Minute))
+	as := s.alerts()
+	last, ok := as["p10.example.net"]
+	if len(as) != 11 || !ok || last.told != "open" || last.firstAt < s.at(1, 0).UnixMilli() {
+		t.Fatalf("the eleventh %v %+v", ok, last)
+	}
+	for k, a := range as {
+		if a.state != store.AlertOnce || a.told != "open" {
+			t.Errorf("%s %+v", k, a)
 		}
 	}
-	v, c := r.eval(`{"name": "e", "on": "endpoint.new", "min": 0}, {"name": "p", "on": "probe.new", "min": 0},
-		{"name": "r", "on": "referrer.new", "min": 0}, {"name": "x", "on": "error.new", "min": 0}`, time.Time{}, nil)
-	for _, rule := range c.Rules {
-		occ, ok := r.occ(v, rule, r.web)
-		if !ok {
-			t.Errorf("%s: no judgement", rule.Name)
-		}
-		for _, o := range occ {
-			if o.Key == "GET /cache.php" || o.Key == "POST /xmlrpc.php" || o.Key == "pay.example.net" {
-				t.Errorf("%s matched the watch's %s", rule.Name, o.Key)
-			}
-		}
+	if h, err := watch.Hosts(t.Context(), s.st.DB, s.web.ID, 0); err != nil || len(h) != 12 {
+		t.Fatalf("hosts %v %v", h, err)
+	}
+	fs, err := watch.Findings(t.Context(), s.st.DB, s.web.ID, 0)
+	if err != nil || len(fs) != 11 || slices.ContainsFunc(fs, func(f watch.Finding) bool { return f.Provisional }) {
+		t.Errorf("findings %d %v", len(fs), err)
 	}
 }
 

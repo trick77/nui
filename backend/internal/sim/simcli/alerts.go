@@ -26,6 +26,7 @@ const NotifyFile = `{
     {"name": "new-probes", "on": "probe.new"},
     {"name": "new-endpoints", "on": "endpoint.new"},
     {"name": "new-referrers", "on": "referrer.new"},
+    {"name": "new-script-hosts", "on": "script.new", "severity": "high"},
     {"name": "addr-spike", "on": "spike.addr", "severity": "high"},
     {"name": "net-spike", "on": "spike.net", "severity": "high"},
     {"name": "visitors-trend", "on": "trend.visitors"},

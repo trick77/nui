@@ -402,8 +402,8 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile, th Thresh
 			return nil, un, err
 		}
 	}
-	// The watch's: answered probes, new targets, new script hosts. Whole state, not the closed part: the open days'
-	// are provisional, there to be seen within minutes, outside the briefing's set.
+	// The watch's new script hosts. Whole state, not the closed part: the open days' are provisional, there to be
+	// seen within minutes, outside the briefing's set.
 	if err := s.watchFindings(ctx, q, add, func(f insight.Fact) { un.open = append(un.open, tidy(f)) },
 		func(f insight.Fact) { un.over = append(un.over, tidy(f)) }); err != nil {
 		return nil, un, err

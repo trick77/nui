@@ -167,7 +167,7 @@ func uiRequests(site, rng, tz, cmp string, get func(endpoint string, params map[
 		for _, ep := range []string{"noteworthy", "classes", "status", "clients", "domain", "log"} {
 			reqs = append(reqs, []string{ep})
 		}
-		// The watch's cards ask in the whole audience only (api.ts).
+		// The script hosts card asks in the whole audience only (api.ts).
 		if aud == "all" {
 			reqs = append(reqs, []string{"watch"})
 		}

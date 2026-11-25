@@ -31,6 +31,7 @@ const KIND: Record<string, string> = {
   "probe.new": "New probed path",
   "endpoint.new": "New endpoint",
   "referrer.new": "New referrer",
+  "script.new": "New script host",
   "spike.addr": "Address spike",
   "spike.net": "Network spike",
   "trend.visitors": "Visitors trend",
@@ -66,12 +67,33 @@ const LOG_REACH: [Range, number][] = [
   ["90d", 89 * DAY],
 ];
 
-// The smallest log range that holds an alert's start, null when none does:
-// the log would open empty there.
-export function logRange(firstAt: string, now = Date.now()): Range | null {
-  const age = now - Date.parse(firstAt);
+// The smallest log range that holds an alert's start, back further still,
+// null when none does: the log would open empty there.
+export function logRange(
+  firstAt: string,
+  now = Date.now(),
+  back = 0,
+): Range | null {
+  const age = now - Date.parse(firstAt) + back;
   for (const [r, reach] of LOG_REACH) if (age <= reach) return r;
   return null;
+}
+
+// The panels a row opens over a range, and how far before the alert's start
+// it must reach: the log's rows from then on; the script hosts card lists a
+// host by its last sight, a day before when the watch found it a day late
+// (a day's findings past its ten).
+const RANGED: Record<string, number> = { log: 0, scripts: DAY };
+
+// The range a row opens its panel over: undefined for a panel shown as it
+// is, null when no range holds the alert.
+export function jumpRange(
+  a: Pick<Alert, "first_at" | "target">,
+  now = Date.now(),
+): Range | null | undefined {
+  const panel = a.target?.panel ?? "";
+  if (!Object.hasOwn(RANGED, panel)) return undefined;
+  return logRange(a.first_at, now, RANGED[panel]);
 }
 
 // A label and its dot; a value the UI does not know shows as it came.
@@ -163,13 +185,12 @@ export function AlertsPage({
   // are the previous one's: no paging from them.
   const fresh = !page.loading;
   const next = more.next ?? page.data?.next ?? "";
-  // A row leads where it happened: the log over a range that holds it, a
-  // panel as it is.
-  const toLog = (a: Alert) => a.target?.panel === "log";
+  // A row leads where it happened: the log or the script hosts over a range
+  // that holds it, another panel as it is.
   const leads = (a: Alert) =>
     a.target != null &&
     (a.site === "" || sites.includes(a.site)) &&
-    (!toLog(a) || logRange(a.first_at) != null);
+    jumpRange(a) !== null;
   return (
     <>
       <SectionHead
@@ -239,9 +260,7 @@ export function AlertsPage({
                                 a.target!.panel,
                                 a.target!.filter ?? {},
                                 a.site || undefined,
-                                toLog(a)
-                                  ? (logRange(a.first_at) ?? undefined)
-                                  : undefined,
+                                jumpRange(a) ?? undefined,
                               )
                           : undefined
                       }
