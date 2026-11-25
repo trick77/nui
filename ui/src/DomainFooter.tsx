@@ -194,8 +194,11 @@ export function DomainFooter() {
             <div className="grid grid-cols-1 border-t border-border min-[1000px]:grid-cols-2">
               <section className="px-[18px] py-4">
                 <div className="eyebrow">
-                  Sources{SEP}
-                  {site.site}
+                  {joinSep([
+                    "Sources",
+                    site.name,
+                    site.name.toLowerCase() !== site.site && site.site,
+                  ])}
                 </div>
                 <Dl
                   rows={[

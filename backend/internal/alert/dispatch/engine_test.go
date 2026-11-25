@@ -202,6 +202,21 @@ func TestFacts(t *testing.T) {
 	}
 }
 
+// A message calls a site as the dashboard does; its link goes by the domain.
+func TestNamedSite(t *testing.T) {
+	r := newRig(t, `{`+ops+`, "rules": [{"name": "errs", "on": "error.new", "sites": ["example.com"]}]}`)
+	s, _ := r.e.o.Sites.Lookup("example.com")
+	s.Name = "shop.example"
+	r.step(0)
+	r.src.occ["errs"] = occ("x")
+	r.step(time.Hour)
+	msgs := r.rec.Messages()
+	if len(msgs) != 1 || !strings.HasPrefix(msgs[0].Title, "[normal] shop.example: New error") ||
+		!strings.Contains(msgs[0].Body, "/dashboard/alerts?site=example.com") {
+		t.Fatalf("messages %+v", msgs)
+	}
+}
+
 // A condition: for before it opens, its clearing sent once its opening was, repeat while open.
 func TestConditions(t *testing.T) {
 	r := newRig(t, `{`+ops+`, "rules": [{"name": "silent", "on": "source.silent", "after": "30m", "for": "10m",

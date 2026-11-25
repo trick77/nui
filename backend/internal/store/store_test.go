@@ -67,6 +67,20 @@ func TestSyncSites(t *testing.T) {
 			t.Errorf("new site's order = %d, want %d", got, want)
 		}
 	}
+	// So does a name.
+	for _, want := range []string{"One", "Two", ""} {
+		sites, err = st.SyncSites(t.Context(), []Site{{Domain: "a.example.com", Name: want, Kind: "site",
+			PathRules: "[]"}, {Domain: "named" + want + ".example.com", Name: want, Kind: "site", PathRules: "[]"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := sites["a.example.com"].Name; got != want {
+			t.Errorf("known site's name = %q, want %q", got, want)
+		}
+		if got := sites["named"+want+".example.com"].Name; got != want {
+			t.Errorf("new site's name = %q, want %q", got, want)
+		}
+	}
 }
 
 func seed(t *testing.T, st *Store) int64 {
@@ -550,16 +564,19 @@ func TestUpgrade_0002(t *testing.T) {
 	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event`).Scan(&events); err != nil || events != 50 {
 		t.Errorf("events after upgrade = %d, %v", events, err)
 	}
-	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 9 {
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 10 {
 		t.Errorf("migrations = %d, %v", migrated, err)
 	}
-	// The site from before the upgrade has no order, and takes one under its id.
+	// The site from before the upgrade has no order and no name, and takes them under its id.
 	sites, err := st.Sites(t.Context())
-	if err != nil || sites["a.example.com"].ID != id || sites["a.example.com"].SortOrder != 0 {
+	if err != nil || sites["a.example.com"].ID != id || sites["a.example.com"].SortOrder != 0 ||
+		sites["a.example.com"].Name != "" {
 		t.Fatalf("sites after upgrade = %+v, %v", sites, err)
 	}
-	sites, err = st.SyncSites(t.Context(), []Site{{Domain: "a.example.com", Kind: "site", SortOrder: 3, PathRules: "[]"}})
-	if err != nil || sites["a.example.com"].ID != id || sites["a.example.com"].SortOrder != 3 {
+	sites, err = st.SyncSites(t.Context(), []Site{{Domain: "a.example.com", Name: "A", Kind: "site", SortOrder: 3,
+		PathRules: "[]"}})
+	if err != nil || sites["a.example.com"].ID != id || sites["a.example.com"].SortOrder != 3 ||
+		sites["a.example.com"].Name != "A" {
 		t.Errorf("site synced after upgrade = %+v, %v", sites, err)
 	}
 	for _, tbl := range []string{"agg_day", "agg_hour", "agg_list", "agg_addr"} {

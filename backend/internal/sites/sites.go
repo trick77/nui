@@ -6,6 +6,7 @@
 package sites
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -29,10 +30,13 @@ type File struct {
 type Config struct {
 	// Domain is the hostname the pages run on and the script reports as site.
 	Domain string `json:"domain"`
+	// Name is what the dashboard and the messages call the site; left out, its domain. Nothing is matched or linked
+	// by it.
+	Name string `json:"name,omitempty"`
 	// Product groups domains in the dashboard's menu ("Lens").
 	Product string `json:"product"`
 	// Order is the domain's place among its product's, from 1; 0 (or left out) is none: after the ordered ones, by
-	// domain.
+	// what they are called.
 	Order int `json:"order,omitempty"`
 	// Kind is site (pages) or api (with a feed, the dashboard shows calls instead of visits).
 	Kind string `json:"kind"`
@@ -55,6 +59,9 @@ type Rule struct {
 var (
 	domainRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
 	hashRE   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	// A name goes into messages as it is: nothing a channel reads as markup, a mention or a new line.
+	nameRE   = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{M}\p{N} .'()-]{0,63}$`)
+	spacesRE = regexp.MustCompile(` +`)
 )
 
 // Load reads and checks the sites file. A missing file is no sites (the collector then refuses everything), not an
@@ -80,10 +87,12 @@ func Parse(b []byte) ([]Config, error) {
 	}
 	var errs []error
 	seen := map[string]bool{}
-	keys := map[string]string{} // feed key hash → domain
+	keys := map[string]string{}  // feed key hash → domain
+	taken := map[string]string{} // a site's domain and its name, in lower case → domain
 	for i := range f.Sites {
 		c := &f.Sites[i]
 		c.Domain = strings.ToLower(strings.TrimSpace(c.Domain))
+		c.Name = strings.Trim(spacesRE.ReplaceAllString(c.Name, " "), " ")
 		c.FeedKeySHA256 = strings.ToLower(strings.TrimSpace(c.FeedKeySHA256))
 		if c.Kind == "" {
 			c.Kind = "site"
@@ -95,6 +104,18 @@ func Parse(b []byte) ([]Config, error) {
 			errs = append(errs, fmt.Errorf("site %s: listed twice", c.Domain))
 		}
 		seen[c.Domain] = true
+		if c.Name != "" && !nameRE.MatchString(c.Name) {
+			errs = append(errs, fmt.Errorf("site %s: name %q, want at most 64 letters, digits, spaces and .'()-, "+
+				"a letter or digit first", c.Domain, c.Name))
+		}
+		// Not another's domain either, whatever that one is called: an alert would read as the wrong host's.
+		for _, label := range []string{c.Domain, c.Name} {
+			key := strings.ToLower(label)
+			if d, ok := taken[key]; ok && d != c.Domain && label != "" {
+				errs = append(errs, fmt.Errorf("site %s: %q is also %s's, every site needs its own name", c.Domain, label, d))
+			}
+			taken[key] = c.Domain
+		}
 		if c.Kind != "site" && c.Kind != "api" {
 			errs = append(errs, fmt.Errorf("site %s: kind %q, want site or api", c.Domain, c.Kind))
 		}
@@ -130,7 +151,7 @@ func Rows(cs []Config) []store.Site {
 	out := make([]store.Site, 0, len(cs))
 	for _, c := range cs {
 		rules, _ := json.Marshal(nonNilRules(c.PathRules))
-		out = append(out, store.Site{Domain: c.Domain, Kind: c.Kind, Product: c.Product,
+		out = append(out, store.Site{Domain: c.Domain, Name: c.Name, Kind: c.Kind, Product: c.Product,
 			SortOrder: c.Order, FeedKeyHash: c.FeedKeySHA256, PathRules: string(rules), Active: true})
 	}
 	return out
@@ -145,8 +166,10 @@ func nonNilRules(r []Rule) []Rule {
 
 // Site is a configured site ready for the collector.
 type Site struct {
-	ID      int64
-	Domain  string
+	ID     int64
+	Domain string
+	// Name is the configured one, "" for none (Label).
+	Name    string
 	Product string
 	// Order is the place among the product's sites, 0 for none.
 	Order int
@@ -156,6 +179,9 @@ type Site struct {
 	keyHash []byte
 	rules   []compiled
 }
+
+// Label is what the site is called: its name, else its domain.
+func (s *Site) Label() string { return cmp.Or(s.Name, s.Domain) }
 
 // Registry is the active sites, read-only after New.
 type Registry struct {
@@ -178,8 +204,8 @@ func New(rows map[string]store.Site) (*Registry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("site %s: %w", row.Domain, err)
 		}
-		s := &Site{ID: row.ID, Domain: row.Domain, Product: row.Product, Order: row.SortOrder, Kind: row.Kind,
-			HasFeed: row.FeedKeyHash != "", rules: cr}
+		s := &Site{ID: row.ID, Domain: row.Domain, Name: row.Name, Product: row.Product, Order: row.SortOrder,
+			Kind: row.Kind, HasFeed: row.FeedKeyHash != "", rules: cr}
 		if s.HasFeed {
 			s.keyHash, _ = hex.DecodeString(row.FeedKeyHash)
 		}

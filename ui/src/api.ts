@@ -16,7 +16,10 @@ export type Me = { name: string };
 export type AuthMethods = { oidc: boolean; token: boolean };
 
 export type SiteInfo = {
+  // The domain: what every request and link names.
   site: string;
+  // What it is called, the domain without a configured name. Display only.
+  name: string;
   product: string;
   kind: "site" | "api";
   // null: the source has never delivered (for the server: or has no feed).

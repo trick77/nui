@@ -136,7 +136,7 @@ export function resolveView(v: View, sites: readonly string[]): Shown | null {
 
 export const PRODUCT = "Trakk";
 
-// The tab names the domain shown and, on the log, the address or network it
+// The tab names the domain shown as it is called and, on the log, the address or network it
 // follows or the log itself, on the alerts page that (without the domain when
 // they are every site's): several tabs open side by side stay apart. Range,
 // audience and the other filters stay out, a tab has no room for them.

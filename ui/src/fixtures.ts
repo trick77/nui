@@ -38,14 +38,17 @@ import { joinSep } from "./format";
 export const SITES: SiteInfo[] = [
   {
     site: "lens.example.com",
+    name: "lens.example.com",
     product: "Example Lens",
     kind: "site",
     browser: { last: "2026-11-22T13:12:00Z" },
     server: { last: "2026-11-22T13:20:00Z" },
     feed: true,
   },
+  // With a name.
   {
     site: "console.example.com",
+    name: "Console",
     product: "Example Lens",
     kind: "site",
     browser: { last: "2026-11-22T12:58:00Z" },
@@ -55,6 +58,7 @@ export const SITES: SiteInfo[] = [
   // Nothing delivered yet, its server feed configured (FEEDS).
   {
     site: "blog.example.org",
+    name: "blog.example.org",
     product: "Blog",
     kind: "site",
     browser: null,
@@ -64,6 +68,7 @@ export const SITES: SiteInfo[] = [
   // A server feed only: the script never loaded.
   {
     site: "api.example.com",
+    name: "api.example.com",
     product: "Example Lens",
     kind: "api",
     browser: null,

@@ -262,14 +262,14 @@ func (e *Engine) headline(a *store.Alert) string {
 	return prefix + e.where(a.SiteID) + ": " + notify.Plain(a.Text, maxText)
 }
 
-// where names a site by its domain, the instance as such.
+// where names a site as the dashboard does, the instance as such.
 func (e *Engine) where(site int64) string {
 	if site == 0 {
 		return "Trakk"
 	}
 	if e.o.Sites != nil {
 		if s, ok := e.o.Sites.ByID(site); ok {
-			return s.Domain
+			return s.Label()
 		}
 	}
 	return "site " + strconv.FormatInt(site, 10)

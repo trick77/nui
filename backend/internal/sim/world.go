@@ -19,7 +19,9 @@ import (
 
 // Site is one simulated site: what delivers its events and the shape of its paths.
 type Site struct {
-	Domain  string
+	Domain string
+	// Name is the sites file's name, "" for none.
+	Name    string
 	Product string
 	// Order is the sites file's order: the place among the product's sites, 0 for none.
 	Order int
@@ -57,12 +59,12 @@ var LookupRules = []sites.Rule{
 }
 
 // DefaultSites are the world's sites when none are configured: one of each delivery shape, the lookup site first. Only
-// the lookup site has an order, so its product's menu shows ordered and unordered domains side by side.
+// the lookup site has an order and only the console a name, so their product's menu shows sites with and without.
 func DefaultSites() []*Site {
 	return []*Site{
 		{Domain: "lens.example.com", Product: "Example Lens", Order: 1, Kind: "site", Script: true, Feed: true,
 			SPA: true, Rules: LookupRules},
-		{Domain: "console.example.com", Product: "Example Lens", Kind: "site", Script: true, SPA: true,
+		{Domain: "console.example.com", Name: "Console", Product: "Example Lens", Kind: "site", Script: true, SPA: true,
 			Rules: []sites.Rule{{Pattern: "/", Template: "/"}, {Pattern: "/projects/{int}", Template: "/projects/:n"},
 				{Pattern: "/projects/{int}/{seg}", Template: "/projects/:n/:tab"}, {Pattern: "/settings", Template: "/settings"}}},
 		{Domain: "api.example.com", Product: "Example Lens", Kind: "api", Feed: true},

@@ -18,10 +18,13 @@ The product's repo cannot do this part. The integrating side hands the operator 
 
 - `domain`: the exact hostname the pages are served from, case-insensitive. `www.example.com` and `example.com` are
   two sites. A page on a host not listed gets 403 and its script switches itself off.
+- `name`: optional, what the dashboard and the notifications call the site instead of its domain. Display only: the
+  script and the feed still send the domain. At most 64 letters, digits, spaces and `.'()-`, a letter or digit first;
+  a name that is another site's name or domain stops the start.
 - `product`: the product's name in the dashboard. `kind`: `site` (pages) or `api`.
 - `order`: optional, the domain's place among the product's in the dashboard's menu, a whole number from 1. Domains
-  without one (or with 0) follow by name, as do equal ones among themselves; a negative one stops the start. A Trakk
-  older than the field refuses the whole file: the host is updated first.
+  without one (or with 0) follow by name, as do equal ones among themselves; a negative one stops the start.
+- A Trakk older than a field (`name`, `order`) refuses the whole file: the host is updated first.
 - `path_rules`: raw paths to templates, first match wins, unmatched paths go to a heuristic. Placeholders: `{int}`,
   `{seg}` (one segment), `{text}` (one segment that is no file name), `{any}` (slashes included), `{ipv4}`,
   `{ipv6}`, `{cidr}`. Literal text matches case-insensitively. Example: [docs/sites.example.json](docs/sites.example.json).
