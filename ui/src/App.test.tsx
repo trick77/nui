@@ -646,8 +646,9 @@ describe("dashboard on a domain with a server feed", () => {
       within(v).getByText(`AS64510 Example Cloud${SEP}Hosting`, asIs),
     ).toBeInTheDocument();
     expect(v.textContent).toContain(
-      `Mostly refused${SEP}API only, no page loaded${SEP}Rapid requests${SEP}Hosting network`,
+      `Program: python-requests/2.32.3${SEP}Mostly refused${SEP}API calls only${SEP}Rapid requests${SEP}From a data center`,
     );
+    expect(v.textContent).not.toContain("Bot signals");
     expect(within(v).getByText(/Top 7 of 17 addresses/)).toBeInTheDocument();
     // A refused share of 20 % or more is red.
     expect(within(v).getByText(/^2['’]338$/)).toHaveClass("bad");
@@ -829,6 +830,20 @@ describe("dashboard on a domain with a server feed", () => {
     start();
     const d = await screen.findByRole("region", { name: "Visitor" });
     expect(await within(d).findByText(/Same class in this \/24/)).toBeTruthy();
+    // A signal a reading cites, in the words of the signals.
+    expect(
+      within(d).getByText("From a data center", { selector: "li" }),
+    ).toBeInTheDocument();
+    // One signal per line.
+    const bot = within(d).getByText("Bot signals").parentElement!;
+    expect([...bot.children].map((c) => c.textContent)).toEqual([
+      "Bot signals",
+      "Program: python-requests/2.32.3",
+      "Mostly refused",
+      "API calls only",
+      "Rapid requests",
+      "From a data center",
+    ]);
     fireEvent.click(
       await within(d).findByRole("button", { name: "198.51.100.201" }),
     );
@@ -2832,8 +2847,8 @@ describe("separators", () => {
     await within(d).findByText("Person");
     expect(body()).toContain(`Chrome${SEP}macOS`);
     expect(d.textContent).toMatch(new RegExp(`AS\\d+ [^·]+${SEP}ISP`));
-    expect(d.textContent).toContain(
-      `Script beacon${SEP}Engaged${SEP}Assets loaded${SEP}Also unknown`,
+    expect(v.textContent).toContain(
+      `Uses a real browser${SEP}Active on the page${SEP}Loads images and styles${SEP}Also unknown automated: curl/8.4.0, 12 of 330 events (Program: curl/8.4.0)`,
     );
     expect(plainDots()).toEqual([]);
 

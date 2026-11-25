@@ -84,13 +84,13 @@ export function WhoIsAsking({ classes }: { classes: Loaded<Classes> }) {
             {SEP}
             ipverse bot list (CIDR, user agent, reverse DNS)
             {SEP}
-            <span className="font-mono">navigator.webdriver</span>
-            {SEP}
+            remote-controlled browser (
+            <span className="font-mono">navigator.webdriver</span>){SEP}
             {joinSep([
-              "automation user agent",
+              "program (user agent)",
               "missing browser headers",
               "machine pace",
-              "neither script beacon nor assets.",
+              "no real browser (runs no scripts, loads no images or styles).",
             ])}
           </p>
         </>
