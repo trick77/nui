@@ -2,6 +2,7 @@ package alert
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -135,6 +136,28 @@ func TestParse_Faults(t *testing.T) {
 	}
 	if s := strings.Join(c.Faults, " "); strings.Contains(s, "hunter2") || strings.Contains(s, "x.example.com") {
 		t.Errorf("a URL in the faults: %s", s)
+	}
+}
+
+// The documented example holds no fault against the example sites file.
+func TestExampleFile(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "sites.example.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sf struct {
+		Sites []struct{ Domain, Product string } `json:"sites"`
+	}
+	if err := json.Unmarshal(b, &sf); err != nil {
+		t.Fatal(err)
+	}
+	var k Known
+	for _, s := range sf.Sites {
+		k.Domains, k.Products = append(k.Domains, s.Domain), append(k.Products, s.Product)
+	}
+	c := Load(filepath.Join("..", "..", "..", "docs", "notify.example.json"), k)
+	if len(c.Faults) > 0 || !c.Sending() || len(c.Rules) < 8 {
+		t.Errorf("example: %v %+v", c.Faults, c)
 	}
 }
 
