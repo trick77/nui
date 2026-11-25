@@ -11,6 +11,7 @@ import (
 	"github.com/trick77/trakk/backend/internal/alert"
 	"github.com/trick77/trakk/backend/internal/alert/dispatch"
 	"github.com/trick77/trakk/backend/internal/app"
+	"github.com/trick77/trakk/backend/internal/sim"
 	"github.com/trick77/trakk/backend/internal/sites"
 )
 
@@ -62,6 +63,20 @@ func notifyCmd(ctx context.Context, cfg app.Config, test bool, out io.Writer) in
 		return 1
 	}
 	return 0
+}
+
+// sendersFor are the senders a run sends with: the wired ones in a normal run on data the simulator did not write,
+// else rec's, which keeps every message: simulated traffic never reaches a real channel (-sim, -demo, a normal start
+// on a directory the simulator wrote). Said once in the log.
+func sendersFor(cfg app.Config, mode runMode, c alert.Config, wired map[string]dispatch.Sender,
+	rec *dispatch.Recorder) map[string]dispatch.Sender {
+	if mode == normalRun && !sim.Owned(cfg.DataDir) {
+		return wired
+	}
+	if len(c.Channels) > 0 {
+		slog.Info("Simulated traffic: alerts are recorded, no channel is sent to")
+	}
+	return rec.Senders(c)
 }
 
 // ruleState says whether a rule runs and where it sends.

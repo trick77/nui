@@ -18,7 +18,8 @@ CREATE TABLE alert (
     -- The number it is about and what it counts; NULL and '' for none.
     figure      REAL,
     unit        TEXT    NOT NULL DEFAULT '',
-    -- One line each, defused already: the outside world's text never reaches a message as it came.
+    -- One line each, the outside world's text as it came (the dashboard shows it); a message defuses it on its way
+    -- out.
     text        TEXT    NOT NULL,
     detail      TEXT    NOT NULL DEFAULT '',
     -- Where its row jumps to in the dashboard: a panel and its filter (JSON object).

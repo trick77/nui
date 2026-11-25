@@ -29,9 +29,15 @@ type Eval struct {
 	factsAt time.Time
 	// errors are the script errors looked at, by site and message, kept while they are new; looked counts this pass's
 	// looks per site (lookedAt the pass).
-	errors   map[string]dash.ScriptError
+	errors   map[string]lookedError
 	looked   map[int64]int
 	lookedAt time.Time
+}
+
+// lookedError is a script error as looked at, and its fact's count and visitors then.
+type lookedError struct {
+	e               dash.ScriptError
+	count, visitors float64
 }
 
 // siteFacts are a site's findings and the parts a gap left unjudged.
@@ -58,7 +64,7 @@ var factPart = map[string]string{"error.new": "errors", "failure.new": "failures
 // started (source.silent judges only after its after since then); model, when configured, is what llm.budget asks.
 func NewEval(d *dash.Server, rules []alert.Rule, started time.Time, model insight.Model) *Eval {
 	v := &Eval{d: d, model: model, started: started, loosest: map[int64]dash.Thresholds{},
-		errors: map[string]dash.ScriptError{}}
+		errors: map[string]lookedError{}}
 	d.Now = func() time.Time { return v.now }
 	if d.Sites != nil {
 		for _, s := range d.Sites.All() {
@@ -302,24 +308,25 @@ func errorTarget(key string, server bool) *alert.Target {
 // as it is.
 func (v *Eval) scriptErrors(ctx context.Context, now time.Time, r alert.Rule, site *sites.Site,
 	fs []insight.Fact, occ []alert.Occurrence) ([]alert.Occurrence, error) {
-	server := map[string]bool{}
+	facts := map[string]insight.Fact{}
 	for _, f := range fs {
 		if k, ok := strings.CutPrefix(f.ID, factPrefix["error.new"]); ok {
-			server[k] = f.Server
+			facts[k] = f
 		}
 	}
 	var out []alert.Occurrence
 	for _, o := range occ {
-		if server[o.Key] {
+		f := facts[o.Key]
+		if f.Server {
 			out = append(out, o)
 			continue
 		}
-		e, ok, err := v.scriptError(ctx, now, site, o.Key)
+		e, ok, err := v.scriptError(ctx, now, site, o.Key, f)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
-			out = append(out, alert.Occurrence{Key: o.Key, Hold: true})
+			out = append(out, alert.Occurrence{Key: o.Key, Hold: true, Wait: true})
 			continue
 		}
 		// Its events gone meanwhile: no origin known, nothing to filter by.
@@ -335,25 +342,28 @@ func (v *Eval) scriptErrors(ctx context.Context, now time.Time, r alert.Rule, si
 }
 
 // scriptError is a site's script error as looked at while it is new, ok false when this pass's looks at the site are
-// spent.
-func (v *Eval) scriptError(ctx context.Context, now time.Time, site *sites.Site, key string) (dash.ScriptError, bool,
-	error) {
+// spent and it was never looked at. It is looked at again once its fact grew (more occurrences or visitors): an
+// error first seen once from an extension and then thrown by the site's own code is another error now. Without a
+// look left, the last one stands until the next pass.
+func (v *Eval) scriptError(ctx context.Context, now time.Time, site *sites.Site, key string, f insight.Fact) (
+	dash.ScriptError, bool, error) {
 	k := strconv.FormatInt(site.ID, 10) + "\x00" + key
-	if e, ok := v.errors[k]; ok {
-		return e, true, nil
+	last, known := v.errors[k]
+	if known && f.Value <= last.count && f.Visitors <= last.visitors {
+		return last.e, true, nil
 	}
 	if !now.Equal(v.lookedAt) {
 		v.looked, v.lookedAt = map[int64]int{}, now
 	}
 	if v.looked[site.ID] >= maxLooks {
-		return dash.ScriptError{}, false, nil
+		return last.e, known, nil
 	}
 	v.looked[site.ID]++
 	e, err := v.d.ScriptErrorOf(ctx, site, key, now)
 	if err != nil {
 		return e, false, err
 	}
-	v.errors[k] = e
+	v.errors[k] = lookedError{e: e, count: f.Value, visitors: f.Visitors}
 	return e, true, nil
 }
 
@@ -411,7 +421,7 @@ func (v *Eval) silent(ctx context.Context, now time.Time, r alert.Rule, site *si
 			continue
 		}
 		if now.Sub(v.started) < r.P.After {
-			out = append(out, alert.Occurrence{Key: src.name, Hold: true})
+			out = append(out, alert.Occurrence{Key: src.name, Hold: true, Wait: true})
 			continue
 		}
 		quiet := now.Sub(src.last)
@@ -482,7 +492,7 @@ func (v *Eval) level(ctx context.Context, now time.Time, r alert.Rule, site *sit
 	if err != nil {
 		return nil, false, err
 	}
-	hold := []alert.Occurrence{{Hold: true}}
+	hold := []alert.Occurrence{{Hold: true, Wait: true}}
 	if math.IsNaN(cur.Value) || (r.Spec.ID == "level.failed" && cur.Calls < p.Calls) {
 		return hold, true, nil
 	}

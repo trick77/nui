@@ -286,6 +286,27 @@ func TestEvalManyErrors(t *testing.T) {
 	}
 }
 
+// An error first seen from an extension and then thrown by the site's own code is looked at again once it grew.
+func TestEvalErrorLookedAgain(t *testing.T) {
+	r := newEvalRig(t)
+	throw := func(src string, n int) {
+		r.requests(r.web, 2*time.Hour, n, "192.0.2.9", func(e *store.Event) {
+			e.Source, e.Kind, e.Name, e.UA, e.Visitor = "browser", "js_error", "TypeError: z", "Mozilla/5.0", "v1"
+			e.Props = `{"p":{"src":"` + src + `","line":1,"col":1}}`
+		})
+	}
+	throw("chrome-extension://abc/x.js", 1)
+	v, c := r.eval(`{"name": "def", "on": "error.new"}`, time.Time{}, nil)
+	if occ, _ := r.occ(v, c.Rules[0], r.web); len(occ) != 0 {
+		t.Fatalf("an extension's error: %s", keys(occ))
+	}
+	throw("https://example.com/app.js", 50)
+	r.now = r.now.Add(time.Minute)
+	if occ, _ := r.occ(v, c.Rules[0], r.web); keys(occ) != "TypeError: z" {
+		t.Fatalf("the site's own, later: %s", keys(occ))
+	}
+}
+
 // A gap in a list's reads is no judgement: the rule is not evaluated, nothing left.
 func TestEvalGap(t *testing.T) {
 	r := newEvalRig(t)

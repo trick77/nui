@@ -316,12 +316,14 @@ func (e *Engine) apply(ctx context.Context, now time.Time, r alert.Rule, site in
 		open[rows[i].Key] = &rows[i]
 	}
 	seen := map[string]bool{}
+	waiting := false
 	for _, occ := range set {
 		occ.Key = alert.ClipKey(occ.Key, maxKey)
 		if seen[occ.Key] {
 			continue
 		}
 		seen[occ.Key] = true
+		waiting = waiting || (occ.Hold && occ.Wait)
 		if a, in := open[occ.Key]; in {
 			if occ.Hold {
 				continue
@@ -344,6 +346,11 @@ func (e *Engine) apply(ctx context.Context, now time.Time, r alert.Rule, site in
 				return err
 			}
 		}
+	}
+	if baseline && waiting {
+		// Not recorded: the next pass is the baseline still, for the keys judged only then (a source silent since
+		// before the start would otherwise be sent as news once its after passed).
+		return nil
 	}
 	return st.SetAlertRule(ctx, store.AlertRule{Rule: r.Name, SiteID: site, Sig: r.Sig, CheckedAt: nowMS})
 }

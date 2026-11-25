@@ -502,6 +502,13 @@ func parseRule(raw json.RawMessage, def ruleDefaults, c *Config, k Known) (Rule,
 	if spec.Group == "level" && !r.P.HasMin && !r.P.HasMax && !r.P.HasFactor && !r.P.HasDrop {
 		bad("%s needs min, max, factor or drop", spec.ID)
 	}
+	// Every bound a level rule sets holds at once: two that no value meets make a rule that never fires.
+	if spec.Group == "level" && r.P.HasFactor && r.P.HasDrop {
+		bad("factor and drop exclude each other (far above the usual and far below it at once): two rules for both")
+	}
+	if spec.Group == "level" && r.P.HasMin && r.P.HasMax && r.P.Min > r.P.Max {
+		bad("min %v is above max %v: no value is both", r.P.Min, r.P.Max)
+	}
 	r.Sig = signature(r)
 	return r, errs
 }

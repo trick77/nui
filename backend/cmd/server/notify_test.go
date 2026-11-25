@@ -10,8 +10,40 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/trick77/trakk/backend/internal/alert"
+	"github.com/trick77/trakk/backend/internal/alert/dispatch"
 	"github.com/trick77/trakk/backend/internal/app"
+	"github.com/trick77/trakk/backend/internal/sim"
 )
+
+// Simulated traffic never reaches a real channel: -sim, -demo and a normal start on the simulator's data record
+// every message; only a normal run on real data sends.
+func TestSendersFor(t *testing.T) {
+	c := alert.Parse([]byte(`{"channels": {"ops": "ntfy://ntfy.example.com/t"}}`), alert.Known{})
+	wired := map[string]dispatch.Sender{"ops": nil} // stands for the real one
+	real, owned := t.TempDir(), t.TempDir()
+	if err := sim.Mark(owned); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		mode runMode
+		dir  string
+		real bool
+	}{{normalRun, real, true}, {normalRun, owned, false}, {demoRun, real, false}, {simRun, owned, false}} {
+		rec := &dispatch.Recorder{}
+		got := sendersFor(app.Config{DataDir: tc.dir}, tc.mode, c, wired, rec)
+		isReal := got["ops"] == nil
+		if isReal != tc.real {
+			t.Errorf("mode %v, owned %v: real channel %v", tc.mode, tc.dir == owned, isReal)
+		}
+		if !isReal {
+			got["ops"].Deliver(t.Context(), "t", "b", alert.Low)
+			if len(rec.Messages()) != 1 {
+				t.Errorf("mode %v: not recorded", tc.mode)
+			}
+		}
+	}
+}
 
 // -notify-check and -notify-test: the file against the sites file, every fault printed, exit 1 on any; no URL.
 func TestNotifyCmd(t *testing.T) {

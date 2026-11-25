@@ -54,14 +54,18 @@ func (e *Engine) dispatch(ctx context.Context, now time.Time) error {
 		}
 		title, body, sev := e.render(items)
 		res := sender.Deliver(ctx, title, body, sev)
+		failure := Failure(res)
 		if ctx.Err() != nil {
-			// The channels before this one took their message: kept, or they would get it again after the restart.
+			// What took its message is kept, this channel's too when it did before the cut, or they would get it
+			// again after the restart. A send the cut ended is no attempt.
+			if failure == "" {
+				delivered(items, name, nowMS, touched)
+			}
 			pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistBudget)
 			errs = append(errs, e.settle(pctx, now, touched), ctx.Err())
 			cancel()
 			return errors.Join(errs...)
 		}
-		failure := Failure(res)
 		if failure == "" { // the cap spares the recipient; a refused send reached nobody (the backoff spaces those)
 			e.sent[name] = append(e.sent[name], now)
 		}
@@ -72,22 +76,30 @@ func (e *Engine) dispatch(ctx context.Context, now time.Time) error {
 			e.log.Warn("Notification not delivered, tried again later", "channel", ch, "alerts", len(items),
 				"error", failure)
 		}
-		for _, a := range items {
-			touched[a.ID] = a
-			if failure != "" {
+		if failure != "" {
+			for _, a := range items {
+				touched[a.ID] = a
 				a.Failed = appendNew(a.Failed, name)
-				continue
 			}
-			a.Delivered = appendNew(a.Delivered, name)
-			a.Failed = slices.DeleteFunc(a.Failed, func(n string) bool { return n == name })
-			a.NotifiedAt = &nowMS
-			a.Told = "open"
-			if a.Due == "clear" {
-				a.Told = "clear"
-			}
+			continue
 		}
+		delivered(items, name, nowMS, touched)
 	}
 	return errors.Join(append(errs, e.settle(ctx, now, touched))...)
+}
+
+// delivered records that a channel took a message about items: what its recipients now know.
+func delivered(items []*store.Alert, name string, nowMS int64, touched map[int64]*store.Alert) {
+	for _, a := range items {
+		touched[a.ID] = a
+		a.Delivered = appendNew(a.Delivered, name)
+		a.Failed = slices.DeleteFunc(a.Failed, func(n string) bool { return n == name })
+		a.NotifiedAt = &nowMS
+		a.Told = "open"
+		if a.Due == "clear" {
+			a.Told = "clear"
+		}
+	}
 }
 
 // persistBudget bounds the write of what a send cut by the shutdown already delivered: well inside the shutdown's
@@ -142,7 +154,10 @@ func (e *Engine) sendable(ctx context.Context, now time.Time) ([]*store.Alert, [
 			if a.DueAt != nil {
 				at, id = *a.DueAt, a.ID
 			}
-			if a.DueAt == nil || nowMS-*a.DueAt > staleAfter.Milliseconds() {
+			// A clearing of what the recipients know open never ages out: dropped, they would believe it open for
+			// good. It goes once the channel takes it again.
+			stale := a.DueAt == nil || nowMS-*a.DueAt > staleAfter.Milliseconds()
+			if heard := a.Due == "clear" && a.Told == "open"; stale && !heard {
 				for _, n := range a.Channels {
 					if !slices.Contains(a.Delivered, n) && !slices.Contains(a.Failed, n) {
 						a.Failed = append(a.Failed, n)
