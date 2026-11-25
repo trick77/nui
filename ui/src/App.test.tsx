@@ -255,6 +255,132 @@ describe("sign-in", () => {
   });
 });
 
+describe("the last domain and each domain's range", () => {
+  const remember = (site: string, range: string) => {
+    localStorage.setItem("app.site", site);
+    localStorage.setItem(`app.range.${site}`, range);
+  };
+  const query = () => new URLSearchParams(window.location.search);
+  const at = () => [query().get("site"), query().get("range")];
+  // Every overview asked for, in order: the first must already be right.
+  const asked = () =>
+    calls
+      .filter((c) => c.startsWith("/api/dash/overview"))
+      .map((c) => {
+        const q = new URL(c, "http://x").searchParams;
+        return [q.get("site"), q.get("range")];
+      });
+  const ready = () => screen.findByRole("combobox", { name: "Domain" });
+  const pick = (site: string) =>
+    fireEvent.change(screen.getByRole("combobox", { name: "Domain" }), {
+      target: { value: site },
+    });
+
+  it("open with a bare URL, which then names them", async () => {
+    remember("console.example.com", "30d");
+    const steps = window.history.length;
+    start("/dashboard/#origin");
+    expect(await ready()).toHaveValue("console.example.com");
+    await waitFor(() =>
+      expect(asked()).toEqual([["console.example.com", "30d"]]),
+    );
+    expect(at()).toEqual(["console.example.com", "30d"]);
+    // Replaced, not pushed, the fragment kept.
+    expect(window.history.length).toBe(steps);
+    expect(window.location.hash).toBe("#origin");
+  });
+
+  it("start with the first domain and 7d, the range in the URL", async () => {
+    start();
+    expect(await ready()).toHaveValue("lens.example.com");
+    expect(at()).toEqual(["lens.example.com", "7d"]);
+    expect(localStorage.getItem("app.site")).toBe("lens.example.com");
+    expect(localStorage.getItem("app.range.lens.example.com")).toBe("7d");
+  });
+
+  it("give way to the URL, whose view becomes the last", async () => {
+    remember("console.example.com", "30d");
+    start("/dashboard/?site=lens.example.com&range=90d");
+    expect(await ready()).toHaveValue("lens.example.com");
+    await waitFor(() => expect(asked()).toEqual([["lens.example.com", "90d"]]));
+    expect(localStorage.getItem("app.site")).toBe("lens.example.com");
+    expect(localStorage.getItem("app.range.lens.example.com")).toBe("90d");
+    expect(localStorage.getItem("app.range.console.example.com")).toBe("30d");
+  });
+
+  it("follow a switch in the menu, each domain with its own", async () => {
+    remember("lens.example.com", "30d");
+    start("/dashboard/?aud=bots&cmp=off");
+    await ready();
+    pick("console.example.com");
+    await waitFor(() => expect(at()).toEqual(["console.example.com", "7d"]));
+    // Audience and comparison stay as they were.
+    expect([query().get("aud"), query().get("cmp")]).toEqual(["bots", "off"]);
+    fireEvent.click(screen.getByRole("button", { name: "24h" }));
+    await waitFor(() => expect(at()).toEqual(["console.example.com", "24h"]));
+    pick("lens.example.com");
+    await waitFor(() => expect(at()).toEqual(["lens.example.com", "30d"]));
+    pick("console.example.com");
+    await waitFor(() => expect(at()).toEqual(["console.example.com", "24h"]));
+    expect(localStorage.getItem("app.site")).toBe("console.example.com");
+    expect(localStorage.getItem("app.range.lens.example.com")).toBe("30d");
+    // No domain was ever asked for with another's range.
+    expect(asked()).not.toContainEqual(["console.example.com", "30d"]);
+    expect(asked()).not.toContainEqual(["lens.example.com", "24h"]);
+    expect(asked()).not.toContainEqual(["lens.example.com", "7d"]);
+  });
+
+  it("fall back to the first domain when the last is gone", async () => {
+    remember("gone.example.com", "30d");
+    start();
+    expect(await ready()).toHaveValue("lens.example.com");
+    await waitFor(() => expect(asked()).toEqual([["lens.example.com", "7d"]]));
+    expect(localStorage.getItem("app.site")).toBe("lens.example.com");
+  });
+
+  it("stay put in this tab when another one moves on", async () => {
+    start();
+    await ready();
+    remember("console.example.com", "12mo");
+    fireEvent.click(screen.getByRole("button", { name: "30d" }));
+    await waitFor(() => expect(at()).toEqual(["lens.example.com", "30d"]));
+  });
+
+  it("fill a gap on a step back without sending it forward again", async () => {
+    start();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "30d" }));
+    expect(at()).toEqual(["lens.example.com", "30d"]);
+    act(() => {
+      window.history.back();
+    });
+    await waitFor(() => expect(at()).toEqual(["lens.example.com", "7d"]));
+    // A URL with the gap itself, as a step back onto it.
+    remember("console.example.com", "90d");
+    act(() => {
+      window.history.replaceState(null, "", "/dashboard/");
+    });
+    const steps = window.history.length;
+    act(() => {
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await waitFor(() => expect(at()).toEqual(["console.example.com", "90d"]));
+    expect(window.history.length).toBe(steps);
+  });
+
+  it("open the log too", async () => {
+    remember("console.example.com", "24h");
+    start("/dashboard/log?kind=page_view");
+    await screen.findByRole("region", { name: "Log" });
+    expect(at()).toEqual(["console.example.com", "24h"]);
+    expect(query().get("kind")).toBe("page_view");
+    await waitFor(() =>
+      expect(lastCall("/api/dash/log").get("range")).toBe("24h"),
+    );
+    expect(lastCall("/api/dash/log").get("site")).toBe("console.example.com");
+  });
+});
+
 describe("dashboard on a domain with a server feed", () => {
   it("shows every section in order with the sources labelled", async () => {
     start();
@@ -1374,7 +1500,6 @@ describe("dashboard on a domain without a server feed", () => {
     );
     expect(serverOnly).toEqual([]);
     expect(calls.some((c) => c.startsWith("/api/dash/list"))).toBe(true);
-    // The domain switch keeps the other filters.
     fireEvent.change(screen.getByRole("combobox", { name: "Domain" }), {
       target: { value: "lens.example.com" },
     });

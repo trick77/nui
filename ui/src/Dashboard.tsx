@@ -28,9 +28,13 @@ import {
   RANGES,
   basePath,
   parseView,
+  resolveView,
   storeAudience,
+  storeShown,
+  storedRange,
   tabTitle,
   viewHref,
+  type Shown,
   type View,
 } from "./state";
 import { ErrorsPanel, Traffic, WhoIsAsking } from "./Traffic";
@@ -77,7 +81,7 @@ function scrollWhenThere(id: string, tries = 20) {
 
 export default function Dashboard({ me }: { me: Me }) {
   const base = useMemo(() => basePath(window.location.pathname), []);
-  const [view, setView] = useState<View>(() =>
+  const [asked, setView] = useState<View>(() =>
     parseView(window.location.pathname, window.location.search),
   );
   const [picked, setPicked] = useState<{ site: string; key: string } | null>(
@@ -108,17 +112,35 @@ export default function Dashboard({ me }: { me: Me }) {
       cur.page === "log" ? { ...cur, log: change(cur.log) } : cur,
     );
   }, []);
-  useEffect(() => {
-    if (view.page !== "log") return;
-    const href = viewHref(base, view);
-    if (href !== window.location.pathname + window.location.search)
-      window.history.replaceState(null, "", href);
-  }, [base, view]);
 
   const sites = useApi("sites", (s) => api.sites(s));
   const list = sites.data?.sites ?? null;
+  // What the URL left open is filled in once the domains are known, after a
+  // step back too: while rendering, an effect would load the wrong domain
+  // first. Kept as the state, so another tab's choice never moves this one.
+  const shown = list
+    ? resolveView(
+        asked,
+        list.map((s) => s.site),
+      )
+    : null;
+  if (shown && shown !== asked) setView(shown);
+  const view: View = shown ?? asked;
   const site: SiteInfo | null =
-    list?.find((s) => s.site === view.site) ?? list?.[0] ?? null;
+    list?.find((s) => s.site === shown?.site) ?? null;
+  // The URL follows the view. Replaced, not pushed: Back would land on the
+  // URL with the gap and be sent forward again.
+  useEffect(() => {
+    if (!shown) return;
+    const href = viewHref(base, shown);
+    if (href !== window.location.pathname + window.location.search)
+      window.history.replaceState(null, "", href + window.location.hash);
+  }, [base, shown]);
+  const shownSite = shown?.site;
+  const shownRange = shown?.range;
+  useEffect(() => {
+    if (shownSite && shownRange) storeShown(shownSite, shownRange);
+  }, [shownSite, shownRange]);
 
   const title = tabTitle(site?.site ?? null, view);
   useEffect(() => {
@@ -138,8 +160,8 @@ export default function Dashboard({ me }: { me: Me }) {
   // An API's callers are programs: no audience to pick there, and the one
   // remembered from a website would empty it.
   const aud: Audience = isApi ? "all" : view.aud;
-  const scope: Scope | null = site
-    ? { site: site.site, range: view.range, aud, cmp: view.cmp }
+  const scope: Scope | null = shown
+    ? { site: shown.site, range: shown.range, aud, cmp: shown.cmp }
     : null;
   const ov = useApi<Overview>(
     scope ? `overview|${JSON.stringify(scope)}` : null,
@@ -293,15 +315,15 @@ export default function Dashboard({ me }: { me: Me }) {
             script on it; its numbers appear here.
           </div>
         )}
-        {dash && (
+        {dash && shown && (
           <DashContext.Provider value={dash}>
             <FilterBar
               sites={list ?? []}
-              view={view}
+              view={shown}
               overview={ov.data}
               busy={ov.loading}
               isApi={isApi}
-              onSite={(s) => set({ site: s })}
+              onSite={(s) => set({ site: s, range: storedRange(s) })}
               onRange={(r) => set({ range: r })}
               onAud={(a) => {
                 storeAudience(a);
@@ -352,7 +374,7 @@ function FilterBar({
   onCmp,
 }: {
   sites: SiteInfo[];
-  view: View;
+  view: Shown;
   overview: Overview | null;
   busy: boolean;
   isApi: boolean;
