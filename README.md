@@ -337,8 +337,9 @@ docker compose run --rm trakk -notify-test    # a test message to every channel:
 
 Every start sends each channel that test message too, whatever its `min_severity` and outside `max_per_hour`: a
 channel that cannot deliver shows in the log and the footer at the start, not at the first alert. A channel that
-took a message in the last ten minutes gets none (a restart loop sends one, not one per start); a failed one is
-tested again at the next start. Never with simulated traffic.
+took a message in the last ten minutes gets none (a restart loop sends one, not one per start), under a changed
+URL too: `-notify-test` always sends. A failed one is tested again at the next start. Nothing is sent with
+`"enabled": false`, in a file without a rule, or with simulated traffic.
 
 ### Dashboard API
 

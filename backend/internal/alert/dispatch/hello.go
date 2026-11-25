@@ -10,30 +10,34 @@ import (
 )
 
 // helloQuiet is how long after a channel took a message a start sends it no test: a restart loop, or an update right
-// after an alert, tells the recipients nothing they do not know. A failure never quiets the next start's test: that
-// start is the one checking the fix.
+// after an alert, tells the recipients nothing they do not know. A failure since never quiets the next start's test:
+// that start is the one checking the fix.
 const helloQuiet = 10 * time.Minute
 
 // hello sends every channel a test message at the start and records its outcome as any delivery's (the footer shows
 // it): a channel that cannot deliver is known now, not at the first alert. Every channel whatever its least
-// severity, as -notify-test; outside the hourly cap, or a cap of one would hold back the hour's first alert. A send
-// the shutdown cut is no attempt, and no failure stops the engine.
-func (e *Engine) hello(ctx context.Context, now time.Time) {
+// severity, as -notify-test; outside the hourly cap, or a cap of one would hold back the hour's first alert. It
+// touches none of the engine's step state: Run sends it beside the steps, so a channel that times out holds no
+// alert back. A send the shutdown cut is no attempt (one the channel took before the cut is kept), and no failure
+// stops the engine.
+func (e *Engine) hello(ctx context.Context, now func() time.Time) {
 	if !e.o.Hello || !e.sending {
 		return
 	}
 	known, err := e.o.Store.AlertChannels(ctx)
-	if err != nil {
-		e.log.Warn("Start's test message not sent: the channels' state not read", logging.Err(err))
+	if ctx.Err() != nil {
 		return
+	}
+	if err != nil { // every channel is tested then: a start without its test finds a dead channel at the first alert
+		e.log.Warn("Channels' state not read: the start's test message goes to every channel", logging.Err(err))
 	}
 	for _, ch := range e.o.Config.Channels {
 		sender := e.o.Senders[ch.Name]
 		if sender == nil {
 			continue // New said so
 		}
-		if k, ok := known[ch.Name]; ok && k.LastOK != nil {
-			if since := now.Sub(time.UnixMilli(*k.LastOK)); since >= 0 && since < helloQuiet {
+		if k, ok := known[ch.Name]; ok && k.LastOK != nil && (k.ErrorAt == nil || *k.ErrorAt < *k.LastOK) {
+			if since := now().Sub(time.UnixMilli(*k.LastOK)); since >= 0 && since < helloQuiet {
 				e.log.Info("Start's test message skipped: the channel took a message minutes ago", "channel", ch)
 				continue
 			}
@@ -43,11 +47,19 @@ func (e *Engine) hello(ctx context.Context, now time.Time) {
 			body = "Trakk on " + e.o.PublicFQDN + " started. " + body
 		}
 		failure := Failure(sender.Deliver(ctx, title, body, alert.Low))
-		if ctx.Err() != nil {
+		at, cut := now(), ctx.Err() != nil
+		if cut && failure != "" {
 			return
 		}
-		if err := e.o.Store.ChannelDelivered(ctx, ch.Name, now, failure); err != nil {
+		// What the channel took before the cut is kept, or the next start sends it again.
+		pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistBudget)
+		err := e.o.Store.ChannelDelivered(pctx, ch.Name, at, failure)
+		cancel()
+		if err != nil {
 			e.log.Warn("Start's test message: outcome not recorded", "channel", ch, logging.Err(err))
+		}
+		if cut {
+			return
 		}
 		if failure != "" {
 			e.log.Warn("Start's test message not delivered", "channel", ch, "error", failure)
