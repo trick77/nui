@@ -124,7 +124,10 @@ export type Panel =
   | "endpoints"
   | "failures"
   | "domain"
-  | "log";
+  | "log"
+  // The watch's cards, a row named by the filter's key.
+  | "answered"
+  | "scripts";
 
 // A briefing line may cover several findings of one kind (ids): its text
 // is then "<lead text>, and N related", detail names each finding with its
@@ -435,6 +438,68 @@ export type Domain = {
   };
 };
 
+// A path the watch judged: a refused path now answered (flip), a scanner's
+// address answered (hit), a new target answered (endpoint). Times are null
+// where there is none; sizes in bytes, null when none was reported: the
+// answers' [lo, hi], the refusals' distinct sizes (a path's error pages).
+// *_addrs are the most distinct addresses of one day.
+export type WatchPath = {
+  id: string;
+  kind: "flip" | "hit" | "endpoint";
+  // The request template, method and path.
+  key: string;
+  at: string;
+  // Of a day still open: judged on the day so far, it may go again.
+  provisional: boolean;
+  // Its requests are still kept: the log (a hit: the visitor) opens them.
+  raw: boolean;
+  refused_first: string | null;
+  refused_last: string | null;
+  refused_addrs: number;
+  refused_bytes: number[] | null;
+  ok_first: string | null;
+  ok_last: string | null;
+  ok_addrs: number;
+  ok_bytes: [number, number] | null;
+  hit_at: string | null;
+  hit_addr: string;
+  // The backend's lines, as Noteworthy's detail.
+  detail: string[];
+};
+
+// A host the pages loaded scripts from; addrs the most addresses of one day
+// that reported it. new: first seen in the range, a finding; provisional:
+// that finding is of a day still open.
+export type WatchHost = {
+  host: string;
+  first_seen: string;
+  last_seen: string;
+  addrs: number;
+  new: boolean;
+  provisional: boolean;
+};
+
+export type Watch = {
+  // Newest first; empty without a feed.
+  paths: WatchPath[];
+  // New ones first.
+  hosts: WatchHost[];
+  // A server feed is configured.
+  feed: boolean;
+  // The kept requests have been read once.
+  ready: boolean;
+  // Until then the paths (scripts: the hosts) are only learned. Once set,
+  // never cleared: compare with now.
+  learning_until: string | null;
+  scripts_learning_until: string | null;
+  // The latest UTC day the site answered unknown paths 2xx: no paths are
+  // judged on such a day.
+  soft_day: string | null;
+  // Paths and hosts the limits left out, each counted once a day it was:
+  // the site's whole time.
+  cut: number;
+};
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -618,6 +683,10 @@ export const api = {
     dash<ErrorDetail>("error", s, { key }, signal),
   domain: (s: Scope, signal?: AbortSignal) =>
     dash<Domain>("domain", s, {}, signal),
+  // Answered probes and script hosts: domain and range apply, never the
+  // audience or the comparison.
+  watch: (s: Scope, signal?: AbortSignal) =>
+    dash<Watch>("watch", { ...s, aud: "all", cmp: "prev" }, {}, signal),
 };
 
 export type LogFilter = {

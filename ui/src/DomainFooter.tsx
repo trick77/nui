@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { api, type Domain, type SourceState } from "./api";
+import { api, type Domain, type SourceState, type Watch } from "./api";
 import { SEP, bytes, date, dateTime, joinSep, num } from "./format";
-import { useApi } from "./hooks";
+import { type Loaded, useApi } from "./hooks";
 import { scopeKey } from "./lists";
 import { ErrorBox, Panel, SectionHead, Skeleton, useDash } from "./ui";
 
@@ -43,8 +43,10 @@ function Source({ s, missing }: { s: SourceState | null; missing: string }) {
 
 // How the domain is connected, what Trakk accepted and refused, what is
 // stored, and the rules behind it all.
-export function DomainFooter() {
+export function DomainFooter({ watch }: { watch: Loaded<Watch> }) {
   const { scope, site } = useDash();
+  // A UTC day: in the viewer's zone it could read as the day before.
+  const softDay = watch.data?.soft_day;
   const { range } = scope;
   const d = useApi<Domain>(
     scopeKey("domain", { site: site.site, range }),
@@ -125,20 +127,32 @@ export function DomainFooter() {
                     ],
                     [
                       "Server",
-                      <Source
-                        s={x.sources.server}
-                        missing={
-                          x.sources.feed
-                            ? joinSep([
-                                "configured, no events yet",
-                                "requests, status codes and bots without JavaScript show once the feed delivers",
-                              ])
-                            : joinSep([
-                                "not connected",
-                                "bots without JavaScript, requests and status codes are not visible for this domain",
-                              ])
-                        }
-                      />,
+                      <>
+                        <Source
+                          s={x.sources.server}
+                          missing={
+                            x.sources.feed
+                              ? joinSep([
+                                  "configured, no events yet",
+                                  "requests, status codes and bots without JavaScript show once the feed delivers",
+                                ])
+                              : joinSep([
+                                  "not connected",
+                                  "bots without JavaScript, requests and status codes are not visible for this domain",
+                                ])
+                          }
+                        />
+                        {/* A hint, not a finding: on such a day a 2xx says
+                            nothing about a probed path. */}
+                        {softDay && (
+                          <div className="text-[12px] text-muted">
+                            {joinSep([
+                              `answers unknown paths 2xx, last on ${date(`${softDay}T00:00:00Z`, "UTC")} (UTC)`,
+                              "answered probes are not judged on such a day",
+                            ])}
+                          </div>
+                        )}
+                      </>,
                     ],
                     [
                       "Script",

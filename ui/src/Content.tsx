@@ -1,9 +1,11 @@
 import { Endpoints } from "./Calls";
-import type { ListRow } from "./api";
+import type { ListRow, Watch } from "./api";
 import { num, pct } from "./format";
+import type { Loaded } from "./hooks";
 import { type Col, TopList } from "./lists";
 import { NetworksPanel } from "./Origin";
 import { Delta, SectionHead, useDash } from "./ui";
+import { ScriptHosts } from "./Watch";
 
 const mono = (s: string) => (
   <span className="font-mono text-[12.5px] wrap-anywhere">{s}</span>
@@ -14,7 +16,7 @@ const change: Col = {
   cell: (r) => <Delta change={r.change} verdict={r.verdict} />,
 };
 
-export function Content() {
+export function Content({ watch }: { watch: Loaded<Watch> }) {
   const { feed, openLog, scope } = useDash();
   const cmp = scope.cmp !== "off";
   const pageCols: Col[] = [
@@ -52,7 +54,7 @@ export function Content() {
       <SectionHead
         id="content"
         title="Content"
-        lead="What people look at, where they came from and what they clicked."
+        lead="What people look at, where they came from, what they clicked and where the pages load scripts from."
         sources={["browser"]}
       />
       <div className="grid grid-cols-1 gap-3 min-[1000px]:grid-cols-2">
@@ -93,6 +95,9 @@ export function Content() {
           empty="No referrers in this range yet."
         />
         <NetworksPanel />
+      </div>
+      <div className="mt-3">
+        <ScriptHosts watch={watch} />
       </div>
       {feed && (
         <div className="mt-3">

@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
-import type { ListRow } from "./api";
+import type { ListRow, Watch } from "./api";
 import { num, pct } from "./format";
+import type { Loaded } from "./hooks";
 import { type Col, TopList } from "./lists";
 import { AllClasses, Delta, SectionHead, useDash } from "./ui";
+import { ScriptHosts } from "./Watch";
 
 // A site's calls: server requests but 404s and refusals without a route, per endpoint (route and
 // operation), account and reason to fail. Always over every class: an API's
@@ -129,8 +131,10 @@ function ApiPanels() {
   );
 }
 
-// What an API has instead of Content.
-export function ApiSection() {
+// What an API has instead of Content. Its pages that run the script report
+// their script hosts too: then the card is there, where a new host's
+// finding jumps.
+export function ApiSection({ watch }: { watch: Loaded<Watch> }) {
   return (
     <AllClasses>
       <SectionHead
@@ -140,6 +144,11 @@ export function ApiSection() {
         sources={["server"]}
       />
       <ApiPanels />
+      {!!watch.data?.hosts.length && (
+        <div className="mt-3">
+          <ScriptHosts watch={watch} />
+        </div>
+      )}
     </AllClasses>
   );
 }

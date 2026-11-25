@@ -36,6 +36,8 @@ export type Dash = {
   goPanel: (p: PanelKey, filter?: Record<string, string>) => void;
   visitor: string | null;
   selectVisitor: (key: string | null) => void;
+  // The row a jump named (goPanel's filter key) in a card that marks it.
+  focus: { panel: PanelKey; key: string } | null;
 };
 
 export const DashContext = createContext<Dash | null>(null);
