@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setFetcher } from "./api";
+import { type Watch, type WatchHost, setFetcher } from "./api";
 import App from "./App";
 import { MainChart, StackChart, scaleLines } from "./charts";
 import { type FixtureOptions, TRAIL_NEXT, fixtureFetch } from "./fixtures";
@@ -2670,5 +2670,314 @@ describe("main chart", () => {
     expect(xs.length).toBeGreaterThan(5);
     for (let i = 1; i < xs.length; i++)
       expect(xs[i] - xs[i - 1]).toBeGreaterThan(6 * 6.4);
+  });
+});
+
+describe("the watch", () => {
+  // The fixtures' watch answer with patch over it.
+  function startWatch(
+    url: string,
+    patch: Partial<Watch>,
+    opt: FixtureOptions = {},
+  ) {
+    window.history.replaceState(null, "", url);
+    calls = [];
+    const fx = fixtureFetch(opt);
+    setFetcher(async (u, i) => {
+      calls.push(u);
+      const res = await fx(u, i);
+      if (!u.startsWith("/api/dash/watch")) return res;
+      return new Response(JSON.stringify({ ...(await res.json()), ...patch }));
+    });
+    return render(<App />);
+  }
+  const rowOf = (region: HTMLElement, text: string) =>
+    within(region).getByText(text).closest("tr")!;
+  const host = (h: string, isNew = false): WatchHost => ({
+    host: h,
+    first_seen: "2026-11-01T09:00:00Z",
+    last_seen: "2026-11-22T13:00:00Z",
+    addrs: 5,
+    new: isNew,
+    provisional: false,
+  });
+
+  it("lists answered probes beside the probed paths and opens their requests", async () => {
+    start();
+    const a = await screen.findByRole("region", { name: "Answered probes" });
+    await within(a).findByText("GET /wp-content/plugins/hello/up.php");
+    // Newest first, what happened in words, the backend's lines under it.
+    const rows = within(a).getAllByRole("row").slice(1);
+    expect(rows.map((r) => r.querySelector(".font-mono")?.textContent)).toEqual(
+      [
+        "POST /xmlrpc.php",
+        "GET /wp-content/plugins/hello/up.php",
+        "GET /.git/config",
+      ],
+    );
+    expect(rows[0]).toHaveTextContent("new target");
+    expect(within(rows[0]).getByText("provisional")).toBeInTheDocument();
+    expect(rows[1]).toHaveTextContent("refused path now answered");
+    expect(rows[1]).toHaveTextContent(
+      "Answered 18.4 kB, refused 512 B or 4.5 kB",
+    );
+    expect(within(rows[1]).queryByText("provisional")).toBeNull();
+    expect(rows[2]).toHaveTextContent("a scanner got an answer");
+    // Its neighbour in the same row of cards.
+    expect(a.previousElementSibling).toHaveAttribute(
+      "aria-label",
+      "Probed paths",
+    );
+    // Counted over the site's whole time, not the range, once a day a key
+    // was left out.
+    expect(a).toHaveTextContent(
+      "Past the watch's limits, a path or script host was left out 37 times (at most once a day each).",
+    );
+    // One answer for both cards, whatever the audience.
+    const asked = calls.filter((c) => c.startsWith("/api/dash/watch"));
+    expect(asked).toHaveLength(1);
+    expect(new URL(asked[0], "http://x").searchParams.get("aud")).toBe("all");
+    // A scanner's row opens its address.
+    fireEvent.click(rows[2]);
+    const d = await screen.findByRole("region", { name: "Visitor" });
+    expect(
+      await within(d).findByText(/Headless Chrome stepping/),
+    ).toBeInTheDocument();
+    // A path's its requests.
+    fireEvent.click(rows[1]);
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/dashboard/log"),
+    );
+    const q = new URLSearchParams(window.location.search);
+    expect([q.get("path"), q.get("kind")]).toEqual([
+      "GET /wp-content/plugins/hello/up.php",
+      "request",
+    ]);
+  });
+
+  it("opens nothing once a probe's requests are gone", async () => {
+    start("/dashboard/?range=90d");
+    const a = await screen.findByRole("region", { name: "Answered probes" });
+    await within(a).findByText("GET /cgi-bin/status");
+    const row = rowOf(a, "GET /cgi-bin/status");
+    expect(row).toHaveTextContent("requests no longer kept");
+    expect(row).not.toHaveClass("click");
+    expect(within(row).queryByRole("button")).toBeNull();
+  });
+
+  it("lists the script hosts, new ones first and marked", async () => {
+    start();
+    const s = await screen.findByRole("region", { name: "Script hosts" });
+    await within(s).findByText("cdn.evil.example");
+    const rows = within(s).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(6);
+    expect(within(rows[0]).getByText("new")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("provisional")).toBeInTheDocument();
+    expect(within(rows[2]).queryByText("new")).toBeNull();
+    // A host is no link anywhere.
+    expect(rows[0]).not.toHaveClass("click");
+    // Addresses, not visitors (a visitor id is the browser's word), and a
+    // day's, said under the table.
+    expect(within(s).getAllByRole("columnheader")[3]).toHaveTextContent(
+      "Addresses",
+    );
+    expect(rows[0]).toHaveTextContent("4");
+    expect(s).toHaveTextContent(
+      "Addresses: the most of one day that reported the host.",
+    );
+    fireEvent.click(within(s).getByRole("button", { name: "Show all 9 →" }));
+    expect(within(s).getAllByRole("row")).toHaveLength(10);
+  });
+
+  it("jumps from its findings to the log, the visitor or the marked row", async () => {
+    start("/dashboard/?range=90d", { nw: "watch" });
+    const nw = await screen.findByRole("region", { name: "Noteworthy" });
+    const lines = await within(nw).findAllByRole("button");
+    expect(lines.map((b) => b.getAttribute("aria-label"))).toEqual([
+      "1 address: Refused path now answered: GET /wp-content/plugins/hello/up.php",
+      "1 address: A scanner got an answer: GET /.git/config",
+      "4 addresses loaded: New script host: cdn.evil.example",
+      "2 addresses: Refused path now answered: GET /cgi-bin/status (its requests are no longer kept)",
+      "3 addresses: New target answered: POST /xmlrpc.php",
+    ]);
+    // A new script host: its row in the card, marked.
+    const s = await screen.findByRole("region", { name: "Script hosts" });
+    await within(s).findByText("cdn.evil.example");
+    expect(rowOf(s, "cdn.evil.example")).not.toHaveClass("sel");
+    fireEvent.click(lines[2]);
+    expect(rowOf(s, "cdn.evil.example")).toHaveClass("sel");
+    expect(rowOf(s, "cdn.evil.example")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    // A path whose requests are gone: its row in the answered probes.
+    const a = screen.getByRole("region", { name: "Answered probes" });
+    await within(a).findByText("GET /cgi-bin/status");
+    fireEvent.click(lines[3]);
+    expect(rowOf(a, "GET /cgi-bin/status")).toHaveClass("sel");
+    expect(rowOf(s, "cdn.evil.example")).not.toHaveClass("sel");
+    // A scanner's hit: its address.
+    fireEvent.click(lines[1]);
+    const d = await screen.findByRole("region", { name: "Visitor" });
+    expect(
+      await within(d).findByText(/Headless Chrome stepping/),
+    ).toBeInTheDocument();
+    // A flipped path: its requests.
+    fireEvent.click(lines[0]);
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/dashboard/log"),
+    );
+    expect(new URLSearchParams(window.location.search).get("path")).toBe(
+      "GET /wp-content/plugins/hello/up.php",
+    );
+  });
+
+  it("shows the row a jump names past the first ones", async () => {
+    const others = Array.from({ length: 8 }, (_, i) =>
+      host(`h${i}.example.net`),
+    );
+    startWatch(
+      "/dashboard/",
+      { hosts: [...others, host("cdn.evil.example", true)] },
+      { nw: "watch" },
+    );
+    const s = await screen.findByRole("region", { name: "Script hosts" });
+    await within(s).findByText("h0.example.net");
+    expect(within(s).queryByText("cdn.evil.example")).toBeNull();
+    const nw = screen.getByRole("region", { name: "Noteworthy" });
+    fireEvent.click(
+      await within(nw).findByRole("button", { name: /New script host/ }),
+    );
+    expect(rowOf(s, "cdn.evil.example")).toHaveClass("sel");
+    expect(within(s).queryByRole("button", { name: /Show all/ })).toBeNull();
+  });
+
+  it("says when it is still reading, learning or has nothing", async () => {
+    // Still reading: both cards say so.
+    const first = startWatch("/dashboard/", {
+      ready: false,
+      paths: [],
+      hosts: [],
+    });
+    const a = await screen.findByRole("region", { name: "Answered probes" });
+    expect(
+      await within(a).findByText(/Still reading the kept requests/),
+    ).toBeInTheDocument();
+    expect(
+      within(panel("Script hosts")).getByText(
+        /Still reading the kept requests/,
+      ),
+    ).toBeInTheDocument();
+    first.unmount();
+    // Learning: until when.
+    const second = startWatch("/dashboard/", {
+      paths: [],
+      hosts: [],
+      learning_until: "2099-01-02T00:00:00Z",
+      scripts_learning_until: null,
+    });
+    const b = await screen.findByRole("region", { name: "Answered probes" });
+    expect(
+      await within(b).findByText(
+        "Learning which paths this site refuses until 2.1.2099: nothing is judged before.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(panel("Script hosts")).getByText(
+        /No page has reported its script hosts yet/,
+      ),
+    ).toBeInTheDocument();
+    second.unmount();
+    // Learned, nothing in the range.
+    const third = startWatch("/dashboard/", { paths: [], hosts: [], cut: 0 });
+    const c = await screen.findByRole("region", { name: "Answered probes" });
+    expect(
+      await within(c).findByText("No probe got an answer in this range."),
+    ).toBeInTheDocument();
+    expect(
+      within(panel("Script hosts")).getByText(
+        "No page loaded scripts from another host in this range.",
+      ),
+    ).toBeInTheDocument();
+    expect(c).not.toHaveTextContent("left out");
+    third.unmount();
+    // Learning the hosts: they show, none new yet.
+    startWatch("/dashboard/", {
+      hosts: [host("fonts.example.net")],
+      scripts_learning_until: "2099-01-02T00:00:00Z",
+    });
+    const s = await screen.findByRole("region", { name: "Script hosts" });
+    await within(s).findByText("fonts.example.net");
+    expect(s).toHaveTextContent(
+      "Learning the hosts until 2.1.2099: none is new before.",
+    );
+  });
+
+  it("shows a failed answer in both cards", async () => {
+    start("/dashboard/", { fail: ["/api/dash/watch"] });
+    const a = await screen.findByRole("region", { name: "Answered probes" });
+    expect(await within(a).findByRole("alert")).toHaveTextContent(
+      "fixture failure",
+    );
+    expect(
+      within(panel("Script hosts")).getByRole("alert"),
+    ).toBeInTheDocument();
+  });
+
+  it("names a day the site answered unknown paths in the domain footer", async () => {
+    start();
+    const footer = await screen.findByRole("region", { name: "This domain" });
+    await within(footer).findByText("Rate limit");
+    await waitFor(() =>
+      expect(footer.textContent).toContain(
+        `answers unknown paths 2xx, last on 18.11.2026 (UTC)${SEP}answered probes are not judged on such a day`,
+      ),
+    );
+  });
+
+  it("has no answered probes without a feed, the script hosts still", async () => {
+    const first = start("/dashboard/?site=console.example.com", {
+      nw: "watch",
+    });
+    const s = await screen.findByRole("region", { name: "Script hosts" });
+    await within(s).findByText("cdn.evil.example");
+    expect(
+      screen.queryByRole("region", { name: "Answered probes" }),
+    ).toBeNull();
+    const nw = screen.getByRole("region", { name: "Noteworthy" });
+    expect(
+      await within(nw).findByText("New script host: cdn.evil.example"),
+    ).toBeInTheDocument();
+    expect(within(nw).queryByText(/Refused path/)).toBeNull();
+    first.unmount();
+    // An answer that says no feed: no card either.
+    startWatch("/dashboard/?site=lens.example.com", { feed: false });
+    const s2 = await screen.findByRole("region", { name: "Script hosts" });
+    await within(s2).findByText("cdn.evil.example");
+    await screen.findByRole("region", { name: "Probed paths" });
+    expect(
+      screen.queryByRole("region", { name: "Answered probes" }),
+    ).toBeNull();
+  });
+
+  it("shows an API its answered probes, no script hosts", async () => {
+    start("/dashboard/?site=api.example.com");
+    await screen.findByRole("region", { name: "Answered probes" });
+    expect(screen.queryByRole("region", { name: "Script hosts" })).toBeNull();
+  });
+
+  it("shows an API the script hosts its pages report, where a finding jumps", async () => {
+    startWatch(
+      "/dashboard/?site=api.example.com",
+      { hosts: [host("cdn.evil.example", true)] },
+      { nw: "watch" },
+    );
+    const s = await screen.findByRole("region", { name: "Script hosts" });
+    await within(s).findByText("cdn.evil.example");
+    const nw = screen.getByRole("region", { name: "Noteworthy" });
+    fireEvent.click(
+      await within(nw).findByRole("button", { name: /New script host/ }),
+    );
+    expect(rowOf(s, "cdn.evil.example")).toHaveClass("sel");
   });
 });

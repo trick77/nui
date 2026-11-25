@@ -11,6 +11,7 @@ import {
   type Range,
   type Scope,
   type SiteInfo,
+  type Watch,
   frameOf,
 } from "./api";
 import { ApiSection } from "./Calls";
@@ -70,7 +71,12 @@ const PANEL_ID: Record<Exclude<PanelKey, "log">, string> = {
   endpoints: "endpoints-panel",
   failures: "failures-panel",
   domain: "domain",
+  answered: "answered-panel",
+  scripts: "scripts-panel",
 };
+
+// The cards that mark the row a jump names.
+const FOCUSED: PanelKey[] = ["answered", "scripts"];
 
 // Scroll to an element, waiting a few frames for it after a page switch.
 function scrollWhenThere(id: string, tries = 20) {
@@ -87,6 +93,11 @@ export default function Dashboard({ me }: { me: Me }) {
   const [picked, setPicked] = useState<{ site: string; key: string } | null>(
     null,
   );
+  const [focus, setFocus] = useState<{
+    site: string;
+    panel: PanelKey;
+    key: string;
+  } | null>(null);
 
   useEffect(() => {
     const f = () =>
@@ -176,6 +187,13 @@ export default function Dashboard({ me }: { me: Me }) {
     (s) => api.classes(scope!, s),
     scope?.site,
   );
+  // Answered probes (Traffic) and script hosts (Content, an API's section
+  // when its pages report them) share one answer; domain and range only.
+  const watch = useApi<Watch>(
+    scope && view.page === "dash" ? `watch|${scope.site}|${scope.range}` : null,
+    (s) => api.watch(scope!, s),
+    scope?.site,
+  );
 
   const openLog = useCallback(
     (f: LogFilter) => {
@@ -198,6 +216,10 @@ export default function Dashboard({ me }: { me: Me }) {
       if (p === "log") return openLog(filter);
       if (p === "visitors" && filter.key && site)
         setPicked({ site: site.site, key: filter.key });
+      if (FOCUSED.includes(p) && site)
+        setFocus(
+          filter.key ? { site: site.site, panel: p, key: filter.key } : null,
+        );
       scrollToId(PANEL_ID[p]);
     },
     [openLog, scrollToId, site],
@@ -218,6 +240,7 @@ export default function Dashboard({ me }: { me: Me }) {
           visitor: picked?.site === site.site ? picked.key : null,
           selectVisitor: (key) =>
             setPicked(key ? { site: site.site, key } : null),
+          focus: focus?.site === site.site ? focus : null,
         }
       : null;
 
@@ -348,11 +371,15 @@ export default function Dashboard({ me }: { me: Me }) {
                   <Noteworthy />
                   {feed ? <WhoIsAsking classes={classes} /> : <ErrorsPanel />}
                 </div>
-                {feed && <Traffic classes={classes} />}
+                {feed && <Traffic classes={classes} watch={watch} />}
                 <Visitors aud={aud} />
-                {isApi ? <ApiSection /> : <Content />}
+                {isApi ? (
+                  <ApiSection watch={watch} />
+                ) : (
+                  <Content watch={watch} />
+                )}
                 <Origin aud={aud} api={isApi} />
-                <DomainFooter />
+                <DomainFooter watch={watch} />
               </>
             )}
           </DashContext.Provider>

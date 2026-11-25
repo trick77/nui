@@ -22,12 +22,12 @@ import {
 
 export type Sort = "volume" | "change";
 
-export type Col = {
+export type Col<R = ListRow> = {
   head: string;
   num?: boolean;
-  cell: (r: ListRow) => ReactNode;
+  cell: (r: R) => ReactNode;
   // A column only some answers carry.
-  show?: (rows: ListRow[]) => boolean;
+  show?: (rows: R[]) => boolean;
 };
 
 export type ListTab = { key: string; label: string; dim: Dim; sub?: string };
@@ -219,15 +219,7 @@ function RowsTable({
   const cols = allCols.filter((c) => !c.show || c.show(list.rows));
   return (
     <table className="t">
-      <thead>
-        <tr>
-          {cols.map((c) => (
-            <th key={c.head} className={c.num ? "n" : ""}>
-              {c.head}
-            </th>
-          ))}
-        </tr>
-      </thead>
+      <TableHead cols={cols} />
       <tbody>
         {list.rows.map((r, i) => (
           <Row
@@ -261,9 +253,71 @@ function RowsTable({
   );
 }
 
-// A cell's content; in a clickable row's first cell, the row's button.
-function cell(c: Col, r: ListRow, onRow?: (r: ListRow) => void) {
-  return onRow ? <RowButton>{c.cell(r)}</RowButton> : c.cell(r);
+export function TableHead<R>({ cols }: { cols: Col<R>[] }) {
+  return (
+    <thead>
+      <tr>
+        {cols.map((c) => (
+          <th key={c.head} className={c.num ? "n" : ""}>
+            {c.head}
+          </th>
+        ))}
+      </tr>
+    </thead>
+  );
+}
+
+// One row of a table: clickable with onRow, its first cell then the row's
+// button (the keyboard's way in). lead goes before the first cell's
+// content (an expander), indent moves that cell in (a row under another);
+// sel marks the row picked or jumped to.
+export function TableRow<R>({
+  r,
+  cols,
+  onRow,
+  lead,
+  indent = false,
+  sel = false,
+  className = "",
+}: {
+  r: R;
+  cols: Col<R>[];
+  onRow?: (r: R) => void;
+  lead?: ReactNode;
+  indent?: boolean;
+  sel?: boolean;
+  className?: string;
+}) {
+  const first = (c: Col<R>) =>
+    onRow ? <RowButton>{c.cell(r)}</RowButton> : c.cell(r);
+  return (
+    <tr
+      className={
+        [className, onRow && "click", sel && "sel"].filter(Boolean).join(" ") ||
+        undefined
+      }
+      aria-selected={sel || undefined}
+      onClick={onRow ? () => onRow(r) : undefined}
+    >
+      {cols.map((c, j) => (
+        <td
+          key={c.head}
+          className={c.num ? "n" : j === 0 && indent ? "pl-8" : ""}
+        >
+          {j > 0 ? (
+            c.cell(r)
+          ) : lead ? (
+            <span className="inline-flex items-baseline gap-1.5">
+              {lead}
+              {first(c)}
+            </span>
+          ) : (
+            first(c)
+          )}
+        </td>
+      ))}
+    </tr>
+  );
 }
 
 function Row({
@@ -285,34 +339,27 @@ function Row({
 }) {
   return (
     <>
-      <tr
-        className={onRow ? "click" : ""}
-        onClick={onRow ? () => onRow(r) : undefined}
-      >
-        {cols.map((c, j) => (
-          <td key={c.head} className={c.num ? "n" : ""}>
-            {j === 0 && expandDim ? (
-              <span className="inline-flex items-baseline gap-1.5">
-                <button
-                  type="button"
-                  className="link !text-muted"
-                  aria-expanded={open}
-                  aria-label={`${open ? "Close" : "Open"} ${r.label}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onToggle();
-                  }}
-                >
-                  {open ? "▾" : "▸"}
-                </button>
-                {cell(c, r, onRow)}
-              </span>
-            ) : (
-              cell(c, r, j === 0 ? onRow : undefined)
-            )}
-          </td>
-        ))}
-      </tr>
+      <TableRow
+        r={r}
+        cols={cols}
+        onRow={onRow}
+        lead={
+          expandDim && (
+            <button
+              type="button"
+              className="link !text-muted"
+              aria-expanded={open}
+              aria-label={`${open ? "Close" : "Open"} ${r.label}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggle();
+              }}
+            >
+              {open ? "▾" : "▸"}
+            </button>
+          )
+        }
+      />
       {open && expandDim && (
         <Within
           dim={expandDim}
@@ -363,17 +410,14 @@ function Within({
   return (
     <>
       {l.data.rows.map((r, i) => (
-        <tr
+        <TableRow
           key={i}
-          className={`bg-white/[.02] ${onRow ? "click" : ""}`}
-          onClick={onRow ? () => onRow(r) : undefined}
-        >
-          {cols.map((c, j) => (
-            <td key={c.head} className={c.num ? "n" : j === 0 ? "pl-8" : ""}>
-              {cell(c, r, j === 0 ? onRow : undefined)}
-            </td>
-          ))}
-        </tr>
+          r={r}
+          cols={cols}
+          onRow={onRow}
+          indent
+          className="bg-white/[.02]"
+        />
       ))}
       {(l.data.other.count > 0 || since) && (
         <tr className="bg-white/[.02]">
