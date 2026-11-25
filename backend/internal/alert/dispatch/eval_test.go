@@ -253,6 +253,60 @@ func TestEvalErrors(t *testing.T) {
 	}
 }
 
+// The rules see every new error, past Noteworthy's ten; the script errors are looked at ten a site and pass, the
+// rest held until the next.
+func TestEvalManyErrors(t *testing.T) {
+	r := newEvalRig(t)
+	for i := range 12 {
+		msg := fmt.Sprintf("TypeError: e%02d", i)
+		r.requests(r.web, 3*time.Hour, 1+i, "192.0.2.9", func(e *store.Event) {
+			e.Source, e.Kind, e.Name, e.UA, e.Visitor = "browser", "js_error", msg, "Mozilla/5.0", "v1"
+		})
+	}
+	v, c := r.eval(`{"name": "def", "on": "error.new"}`, time.Time{}, nil)
+	count := func(occ []alert.Occurrence) (seen, held int) {
+		for _, o := range occ {
+			if o.Hold {
+				held++
+			} else {
+				seen++
+			}
+		}
+		return seen, held
+	}
+	occ, _ := r.occ(v, c.Rules[0], r.web)
+	if seen, held := count(occ); seen != 10 || held != 2 {
+		t.Fatalf("first pass: %d seen, %d held (%s)", seen, held, keys(occ))
+	}
+	r.now = r.now.Add(time.Minute) // the next pass: the two left are looked at, the ten known not again
+	occ, _ = r.occ(v, c.Rules[0], r.web)
+	if seen, held := count(occ); seen != 12 || held != 0 || v.looked[r.web.ID] != 2 {
+		t.Fatalf("second pass: %d seen, %d held, %d looked at", seen, held, v.looked[r.web.ID])
+	}
+}
+
+// A gap in a list's reads is no judgement: the rule is not evaluated, nothing left.
+func TestEvalGap(t *testing.T) {
+	r := newEvalRig(t)
+	r.requests(r.web, 3*time.Hour, 1, "192.0.2.9", func(e *store.Event) {
+		e.Source, e.Kind, e.Name, e.UA = "browser", "js_error", "TypeError: a", "Mozilla/5.0"
+	})
+	v, c := r.eval(`{"name": "def", "on": "error.new"}, {"name": "p", "on": "probe.new"}`, time.Time{}, nil)
+	if _, ok := r.occ(v, c.Rules[0], r.web); !ok {
+		t.Fatal("no gap: not evaluated")
+	}
+	// Retention cut yesterday's raw, nothing built from it: the comparison has a gap.
+	day := r.now.UnixMilli()/86_400_000 - 1
+	if _, err := r.st.DB.Exec(`INSERT INTO agg_day (site_id, day, raw, version) VALUES (?, ?, 0, 1)`, r.web.ID,
+		day); err != nil {
+		t.Fatal(err)
+	}
+	v, c = r.eval(`{"name": "def", "on": "error.new"}`, time.Time{}, nil)
+	if occ, ok := r.occ(v, c.Rules[0], r.web); ok {
+		t.Fatalf("a gap judged: %s", keys(occ))
+	}
+}
+
 // The loosest thresholds per site: a rule loosens only the sites it selects.
 func TestLoosen(t *testing.T) {
 	r := newEvalRig(t)

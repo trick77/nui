@@ -19,7 +19,7 @@ import (
 // recording sender takes (its URL is never dialled).
 const NotifyFile = `{
   "channels": {"sim": "generic://sim.example.com/hook"},
-  "defaults": {"channels": ["sim"], "cooldown": "1h"},
+  "defaults": {"channels": ["sim"]},
   "rules": [
     {"name": "new-errors", "on": "error.new"},
     {"name": "new-failures", "on": "failure.new"},

@@ -281,7 +281,7 @@ jobs failing, a figure leaving its usual level. The dashboard lists them (`GET /
   `min_severity` (default `low`), at most `max_per_hour` messages (default 10; the rest waits), one message per
   step bundling what is due. The dashboard shows a channel's name and service, its last delivery and last error,
   never its URL.
-- `defaults`: `channels`, `cooldown` (default `1h`) and `severity` (`low`, `normal`, `high`; default `normal`) for
+- `defaults`: `channels`, `cooldown` (default `2h`) and `severity` (`low`, `normal`, `high`; default `normal`) for
   every rule that does not set its own.
 - `rules`: each has a unique `name` (its identity: rename one and it starts anew), `on` (a trigger below), the
   common `enabled`, `sites` and `products` (both left out: every site; a domain or product the sites file lacks is a

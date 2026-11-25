@@ -7,7 +7,7 @@
       "max_per_hour": 4
     }
   },
-  "defaults": { "channels": ["ops"], "cooldown": "1h" },
+  "defaults": { "channels": ["ops"], "cooldown": "2h" },
   "rules": [
     { "name": "new-errors", "on": "error.new", "min": 5, "visitors": 2, "origins": ["own", "unknown", "withheld"] },
     { "name": "new-probes", "on": "probe.new", "severity": "low" },

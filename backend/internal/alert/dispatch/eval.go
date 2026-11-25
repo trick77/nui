@@ -25,21 +25,45 @@ type Eval struct {
 	// loosest are each site's thresholds: the loosest of its fact rules', Noteworthy's where a rule asks for more.
 	loosest map[int64]dash.Thresholds
 	// facts are this pass's findings by site (factsAt the pass).
-	facts   map[int64][]insight.Fact
+	facts   map[int64]siteFacts
 	factsAt time.Time
-	// errors are this pass's script errors looked at, by site and message (errorsAt the pass).
+	// errors are the script errors looked at, by site and message, kept while they are new; looked counts this pass's
+	// looks per site (lookedAt the pass).
 	errors   map[string]dash.ScriptError
-	errorsAt time.Time
+	looked   map[int64]int
+	lookedAt time.Time
 }
+
+// siteFacts are a site's findings and the parts a gap left unjudged.
+type siteFacts struct {
+	facts   []insight.Fact
+	unknown map[string]bool
+}
+
+const (
+	// alertNewKeys is the most new keys of one list the rules see: far past Noteworthy's ten, since a rule's own
+	// filters run after the cut.
+	alertNewKeys = 100
+	// maxLooks bounds the script errors looked at a site and pass (a day of raw a statement each, two at most per
+	// day): one not looked at yet waits for the next pass, its row held.
+	maxLooks = 10
+)
+
+// factPart is the part of the findings each fact trigger is in: a gap there is no judgement.
+var factPart = map[string]string{"error.new": "errors", "failure.new": "failures", "probe.new": "probed",
+	"endpoint.new": "endpoints", "referrer.new": "referrers", "spike.addr": "spikes", "spike.net": "spikes",
+	"trend.visitors": "tiles", "trend.calls": "tiles", "trend.failed": "tiles", "trend.auto_share": "tiles"}
 
 // NewEval reads through d, a dashboard server of its own: its clock becomes the step's. started is when the process
 // started (source.silent judges only after its after since then); model, when configured, is what llm.budget asks.
 func NewEval(d *dash.Server, rules []alert.Rule, started time.Time, model insight.Model) *Eval {
-	v := &Eval{d: d, model: model, started: started, loosest: map[int64]dash.Thresholds{}}
+	v := &Eval{d: d, model: model, started: started, loosest: map[int64]dash.Thresholds{},
+		errors: map[string]dash.ScriptError{}}
 	d.Now = func() time.Time { return v.now }
 	if d.Sites != nil {
 		for _, s := range d.Sites.All() {
 			th := dash.DefaultThresholds()
+			th.NewKeys = alertNewKeys
 			for _, r := range rules {
 				if r.Enabled && selects(r, s) {
 					loosen(&th, r)
@@ -111,13 +135,16 @@ func (v *Eval) Occurrences(ctx context.Context, now time.Time, r alert.Rule, sit
 		if r.Spec.ID == "endpoint.new" && site.Kind != "api" {
 			return nil, true, nil
 		}
-		fs, err := v.findings(ctx, now, site)
+		sf, err := v.findings(ctx, now, site)
 		if err != nil {
 			return nil, false, err
 		}
-		occ := factOccurrences(r, fs)
+		if sf.unknown[factPart[r.Spec.ID]] { // a gap: nothing left, nothing is new
+			return nil, false, nil
+		}
+		occ := factOccurrences(r, sf.facts)
 		if r.Spec.ID == "error.new" {
-			if occ, err = v.scriptErrors(ctx, now, r, site, fs, occ); err != nil {
+			if occ, err = v.scriptErrors(ctx, now, r, site, sf.facts, occ); err != nil {
 				return nil, false, err
 			}
 		}
@@ -164,23 +191,40 @@ func (v *Eval) Instance(ctx context.Context, now time.Time, r alert.Rule) ([]ale
 }
 
 // findings are a site's facts at its loosest thresholds, computed once a pass.
-func (v *Eval) findings(ctx context.Context, now time.Time, site *sites.Site) ([]insight.Fact, error) {
+func (v *Eval) findings(ctx context.Context, now time.Time, site *sites.Site) (siteFacts, error) {
 	if !now.Equal(v.factsAt) {
-		v.facts, v.factsAt = map[int64][]insight.Fact{}, now
+		v.facts, v.factsAt = map[int64]siteFacts{}, now
 	}
-	if fs, ok := v.facts[site.ID]; ok {
-		return fs, nil
+	if sf, ok := v.facts[site.ID]; ok {
+		return sf, nil
 	}
 	th, ok := v.loosest[site.ID]
 	if !ok {
 		th = dash.DefaultThresholds()
+		th.NewKeys = alertNewKeys
 	}
-	fs, err := v.d.Findings(ctx, site, now, th)
+	fs, unknown, err := v.d.Findings(ctx, site, now, th)
 	if err != nil {
-		return nil, err
+		return siteFacts{}, err
 	}
-	v.facts[site.ID] = fs
-	return fs, nil
+	sf := siteFacts{facts: fs, unknown: unknown}
+	v.facts[site.ID] = sf
+	// The script errors looked at stay while they are new: an error no longer among the facts is forgotten.
+	if !unknown["errors"] {
+		prefix := strconv.FormatInt(site.ID, 10) + "\x00"
+		keep := map[string]bool{}
+		for _, f := range fs {
+			if k, ok := strings.CutPrefix(f.ID, factPrefix["error.new"]); ok {
+				keep[prefix+k] = true
+			}
+		}
+		for k := range v.errors {
+			if strings.HasPrefix(k, prefix) && !keep[k] {
+				delete(v.errors, k)
+			}
+		}
+	}
+	return sf, nil
 }
 
 // factUnits are the units an alert names a fact's figure by.
@@ -253,8 +297,9 @@ func errorTarget(key string, server bool) *alert.Target {
 }
 
 // scriptErrors keeps the new script errors of occ that come from one of rule r's origins and says, for each kept, its
-// place, type and the share of visitors it hit: one look at its raw events per key (at most ten new keys a site and
-// pass), the same key looked at once a pass whatever the rules. A server error is kept as it is.
+// place, type and the share of visitors it hit: one look at its raw events per key while it stays new, at most
+// maxLooks a site and pass (the largest counts first); one not looked at yet holds its row. A server error is kept
+// as it is.
 func (v *Eval) scriptErrors(ctx context.Context, now time.Time, r alert.Rule, site *sites.Site,
 	fs []insight.Fact, occ []alert.Occurrence) ([]alert.Occurrence, error) {
 	server := map[string]bool{}
@@ -269,9 +314,13 @@ func (v *Eval) scriptErrors(ctx context.Context, now time.Time, r alert.Rule, si
 			out = append(out, o)
 			continue
 		}
-		e, err := v.scriptError(ctx, now, site, o.Key)
+		e, ok, err := v.scriptError(ctx, now, site, o.Key)
 		if err != nil {
 			return nil, err
+		}
+		if !ok {
+			out = append(out, alert.Occurrence{Key: o.Key, Hold: true})
+			continue
 		}
 		// Its events gone meanwhile: no origin known, nothing to filter by.
 		if len(e.Origins) > 0 && !slices.ContainsFunc(e.Origins, func(x string) bool {
@@ -285,20 +334,27 @@ func (v *Eval) scriptErrors(ctx context.Context, now time.Time, r alert.Rule, si
 	return out, nil
 }
 
-// scriptError is a site's script error as read this pass.
-func (v *Eval) scriptError(ctx context.Context, now time.Time, site *sites.Site, key string) (dash.ScriptError, error) {
-	if !now.Equal(v.errorsAt) {
-		v.errors, v.errorsAt = map[string]dash.ScriptError{}, now
-	}
+// scriptError is a site's script error as looked at while it is new, ok false when this pass's looks at the site are
+// spent.
+func (v *Eval) scriptError(ctx context.Context, now time.Time, site *sites.Site, key string) (dash.ScriptError, bool,
+	error) {
 	k := strconv.FormatInt(site.ID, 10) + "\x00" + key
 	if e, ok := v.errors[k]; ok {
-		return e, nil
+		return e, true, nil
 	}
+	if !now.Equal(v.lookedAt) {
+		v.looked, v.lookedAt = map[int64]int{}, now
+	}
+	if v.looked[site.ID] >= maxLooks {
+		return dash.ScriptError{}, false, nil
+	}
+	v.looked[site.ID]++
 	e, err := v.d.ScriptErrorOf(ctx, site, key, now)
-	if err == nil {
-		v.errors[k] = e
+	if err != nil {
+		return e, false, err
 	}
-	return e, err
+	v.errors[k] = e
+	return e, true, nil
 }
 
 // scriptErrorText is a script error's second line: its type and place, and whom it hit. Foreign text all of it: the

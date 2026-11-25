@@ -99,6 +99,19 @@ type query struct {
 	cmp  string
 	p    period
 	plan *plan // made on first use (planOf)
+	// unknown are the findings' parts a gap left unjudged (a list's dimension, "spikes", "tiles"): no fact there says
+	// nothing about what is new. Only the alert rules read it (Findings).
+	unknown map[string]bool
+	// maxNew is the most new keys of a list the findings take, 0 for Noteworthy's maxNewKeys.
+	maxNew int
+}
+
+// unknownPart marks a part of the findings a gap left unjudged.
+func (q *query) unknownPart(part string) {
+	if q.unknown == nil {
+		q.unknown = map[string]bool{}
+	}
+	q.unknown[part] = true
 }
 
 var ranges = map[string]bool{"24h": true, "7d": true, "30d": true, "90d": true, "12mo": true}

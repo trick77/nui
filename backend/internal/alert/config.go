@@ -26,7 +26,8 @@ const FileName = "notify.json"
 const DefaultMaxPerHour = 10
 
 // DefaultCooldown is how long after a key left its set a re-entry stays quiet unless the rule says otherwise.
-const DefaultCooldown = time.Hour
+// Two hours, safely past the facts' hourly pass: a key missing from one pass and back at the next stays quiet.
+const DefaultCooldown = 2 * time.Hour
 
 // Channel is one named delivery target. Its URL holds the service's token: unexported, never logged, never shown.
 type Channel struct {
