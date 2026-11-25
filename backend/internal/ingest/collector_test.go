@@ -393,6 +393,23 @@ func TestFeed(t *testing.T) {
 	}
 }
 
+// The key says whose batch it is: without a site (or an empty one) it is stored under the key's, as with its domain in
+// any case. A site that is another's is refused (TestFeed_Hostile), even one listed.
+func TestFeed_KeyNamesTheSite(t *testing.T) {
+	r := newRig(t, 0, true)
+	for i, site := range []string{`"v":1`, `"v":1,"site":""`, `"v":1,"site":"` + strings.ToUpper(domain) + `"`} {
+		body := `{` + site + `,"events":[{"ip":"192.0.2.1","method":"GET","path":"/","status":200}]}`
+		if w := r.feed(body, feedKey); w.Code != http.StatusNoContent {
+			t.Fatalf("%s: %d %s", site, w.Code, w.Body)
+		}
+		waitEvents(t, r.st, i+1)
+	}
+	var n int
+	if err := r.st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE site_id = ?`, r.siteID(domain)).Scan(&n); err != nil || n != 3 {
+		t.Errorf("%d events under the key's site, %v", n, err)
+	}
+}
+
 // The agent a Web Bot Auth client names is kept: from the script's request as a header, from the feed as sig_agent,
 // clipped there like every feed string.
 func TestSignatureAgentKept(t *testing.T) {

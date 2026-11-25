@@ -118,6 +118,7 @@ func (q *Request) Body(clock Clock) []byte {
 			}
 			evs = append(evs, e)
 		}
+		// The site, though the key says it: live's -key may be another's.
 		v = map[string]any{"v": 1, "site": q.Site.Domain, "events": evs}
 	} else {
 		b := q.batch

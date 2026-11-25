@@ -83,7 +83,7 @@ load (the first 50):
 `POST https://trakk.example.com/api/feed`, `Authorization: Bearer <key>`, `Content-Type: application/json`:
 
 ```json
-{"v": 1, "site": "example.com", "events": [
+{"v": 1, "events": [
   {"t": 1764000000000, "ip": "203.0.113.7", "method": "GET", "path": "/users/42", "route": "GET /users/{id}",
    "status": 200, "dur_ms": 12, "bytes": 5123, "ua": "Mozilla/5.0 ...", "ref": "https://example.org/",
    "lang": "en-US,en;q=0.9", "ch_ua": "\"Chromium\";v=\"142\"", "sf_site": "cross-site", "sf_mode": "navigate",
@@ -92,7 +92,9 @@ load (the first 50):
 ]}
 ```
 
-`site` is the key's own domain; another is a 400.
+The key says which site the batch is for, so a swapped one files it under the wrong site. Emitters from before name the
+domain as `site` beside `v`, which must be the key's (else a 400); new ones leave it out. A Trakk from before answers
+such a batch 400 and the emitter drops it: the host is updated first.
 
 | Field | What |
 |---|---|
@@ -131,16 +133,14 @@ The emitter must never slow down or break the product:
 
 ## Settings
 
-The same three variables in every product, under these names, no prefix of the product's own:
+The same two variables in every product, under these names, no prefix of the product's own:
 
 | Variable | What |
 |---|---|
 | `ANALYTICS_URL` | Trakk's origin. Alone it turns on the browser script: the tag and the two CSP entries. |
-| `ANALYTICS_FEED_KEY` | The site's feed key, a secret. Adds the server feed; needs the other two. |
-| `ANALYTICS_SITE` | The domain the key was issued for, the feed's `site`. |
+| `ANALYTICS_FEED_KEY` | The site's feed key, a secret. Adds the server feed; needs `ANALYTICS_URL`. |
 
-- All three come from `.env`: no value in code, none written into `compose.yaml`, no site derived from another
-  setting. `.env.example` lists them.
-- Compose passes `.env` on only for what `compose.yaml` names: list all three as `${ANALYTICS_URL:-}` and so on. A
+- Both come from `.env`: no value in code, none written into `compose.yaml`. `.env.example` lists them.
+- Compose passes `.env` on only for what `compose.yaml` names: list both as `${ANALYTICS_URL:-}` and so on. A
   deployment needs the new `compose.yaml` together with the image.
-- All unset: no tag, the CSP as before, no feed.
+- Both unset: no tag, the CSP as before, no feed.
