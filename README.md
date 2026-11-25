@@ -29,6 +29,15 @@ Trakk is part of the analysis: it works from what Trakk has already worked out a
 
 Both screenshots show simulated traffic, without a model.
 
+## Plugins
+
+Ready-made integrations, script and server feed in one:
+
+- **[WordPress](https://github.com/trick77/trakk-wordpress)**: install the ZIP of its
+  [latest release](https://github.com/trick77/trakk-wordpress/releases/latest), enter your Trakk host under Settings.
+
+Anything else: [INTEGRATION.md](INTEGRATION.md).
+
 ## Development
 
 ```sh
@@ -169,8 +178,8 @@ The key goes to the product's feed emitter (`Authorization: Bearer <key>` on `PO
 
 ### Browser script
 
-Adding a product, script and feed: [INTEGRATION.md](INTEGRATION.md); a WordPress site:
-[trakk-wordpress](https://github.com/trick77/trakk-wordpress). On a page, include the script:
+Adding a product, script and feed: [INTEGRATION.md](INTEGRATION.md), or a [plugin](#plugins). On a page, include the
+script:
 
 ```html
 <script src="https://trakk.example.com/trakk.js" defer></script>
