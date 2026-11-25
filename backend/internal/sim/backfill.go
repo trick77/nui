@@ -21,6 +21,7 @@ import (
 	"github.com/trick77/trakk/backend/internal/ingest"
 	"github.com/trick77/trakk/backend/internal/sites"
 	"github.com/trick77/trakk/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/watch"
 )
 
 // Stats is what a delivery did.
@@ -297,16 +298,21 @@ func (b *backfill) drain() {
 	b.col.Writer = b.writer()
 }
 
-// settle ends a simulated day: the queue written, the counters flushed, the classifier's pass run.
+// settle ends a simulated day: the queue written, the counters flushed, the classifier's pass run, then the watch's,
+// as a live server's jobs do at the day's end. The watch's runs every day, classified or not: it walks from the
+// site's first day on, as a job that ran all along (a first pass over a whole history is a backfill and finds
+// nothing).
 func (b *backfill) settle(classify bool) error {
 	b.drain()
 	if err := b.col.Counters.Flush(b.ctx, b.st); err != nil {
 		return err
 	}
 	if classify {
-		return b.cls.Pass(b.ctx)
+		if err := b.cls.Pass(b.ctx); err != nil {
+			return err
+		}
 	}
-	return nil
+	return watch.Pass(b.ctx, b.st, b.now)
 }
 
 // reqHeap orders requests by time, the earlier sent first at a tie.

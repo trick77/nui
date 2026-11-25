@@ -167,6 +167,10 @@ func uiRequests(site, rng, tz, cmp string, get func(endpoint string, params map[
 		for _, ep := range []string{"noteworthy", "classes", "status", "clients", "domain", "log"} {
 			reqs = append(reqs, []string{ep})
 		}
+		// The watch's cards ask in the whole audience only (api.ts).
+		if aud == "all" {
+			reqs = append(reqs, []string{"watch"})
+		}
 		for _, dim := range listDims {
 			for _, sort := range []string{"volume", "change"} {
 				reqs = append(reqs, []string{"list", "dim", dim, "sort", sort, "limit", "6"},

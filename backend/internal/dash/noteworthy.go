@@ -99,7 +99,7 @@ func (s *Server) handleNoteworthy(w http.ResponseWriter, r *http.Request, q *que
 	if q.rng == "24h" {
 		fq.p = hoursPeriod(q.p.Now, q.loc)
 	}
-	in, err := s.briefingInput(ctx, &fq)
+	in, un, err := s.briefingInput(ctx, &fq)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -110,9 +110,23 @@ func (s *Server) handleNoteworthy(w http.ResponseWriter, r *http.Request, q *que
 	if s.Model != nil && s.Model.Configured() && len(in.Facts) > 0 {
 		b = s.Model.Briefing(ctx, in)
 	}
-	items, more := noteItems(in.Facts, b, limit)
-	headline := map[string]any{"gen": nil, "text": fmt.Sprintf("%d findings against the %s", len(in.Facts), fq.p.prevL)}
-	if len(in.Facts) == 1 {
+	// Outside the briefing's set, shown all the same: the provisional ones always, those past its bounds when all are
+	// listed (else counted in more).
+	facts := in.Facts
+	if len(un.open) > 0 || (limit < 0 && len(un.over) > 0) {
+		facts = append(slices.Clone(facts), un.open...)
+		if limit < 0 {
+			facts = append(facts, un.over...)
+		}
+		slices.SortStableFunc(facts, factOrder)
+	}
+	items, more := noteItems(facts, b, limit)
+	if limit >= 0 {
+		more += len(un.over)
+	}
+	n := len(in.Facts) + len(un.open) + len(un.over)
+	headline := map[string]any{"gen": nil, "text": fmt.Sprintf("%d findings against the %s", n, fq.p.prevL)}
+	if n == 1 {
 		headline["text"] = "1 finding against the " + fq.p.prevL
 	}
 	asOf := in.AsOf
@@ -181,17 +195,23 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// briefingInput computes the findings and the tile summary of a range against its prior period.
-func (s *Server) briefingInput(ctx context.Context, q *query) (insight.BriefingInput, error) {
+// unbriefed are findings shown and counted that are never in the briefing's set: open, the provisional ones of a
+// day still open (a finding that comes and goes between passes would have the briefing written again each time);
+// over, those past the briefing's bounds (listed with findings=all only).
+type unbriefed struct{ open, over []insight.Fact }
+
+// briefingInput computes the findings and the tile summary of a range against its prior period, and the findings
+// outside the briefing's set.
+func (s *Server) briefingInput(ctx context.Context, q *query) (insight.BriefingInput, unbriefed, error) {
 	in := insight.BriefingInput{SiteID: q.site.ID, Domain: q.site.Domain, Range: q.rng, PrevLabel: q.p.prevL,
 		AsOf: q.p.ClosedEnd()}
 	pl, err := s.planOf(ctx, q)
 	if err != nil {
-		return in, err
+		return in, unbriefed{}, err
 	}
 	cur, prev, gaps, err := s.curPrev(ctx, pl, q, "all")
 	if err != nil {
-		return in, err
+		return in, unbriefed{}, err
 	}
 	// Closed buckets only (as_of says until when), unlike the overview's tiles: the lists' findings are whole days, and
 	// a trend that turned within the day would have the briefing written again.
@@ -208,13 +228,13 @@ func (s *Server) briefingInput(ctx context.Context, q *query) (insight.BriefingI
 		in.Tiles = append(in.Tiles, insight.TileFact{Key: t.Key, Label: t.Label, Value: num(t.Value) + t.Unit,
 			Prev: pv, Change: changeText(t.Change)})
 	}
-	facts, err := s.findings(ctx, q, tiles)
+	facts, un, err := s.findings(ctx, q, tiles)
 	if err != nil {
-		return in, err
+		return in, un, err
 	}
 	in.Facts = facts
 	in.Hash = factsHash(facts)
-	return in, nil
+	return in, un, nil
 }
 
 // factsHash identifies a set of fact ids, in any order: a briefing written for it fits it whatever the figures.
@@ -228,18 +248,20 @@ func factsHash(facts []insight.Fact) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// findings computes Noteworthy's facts. Stable ids: the finding's type and key.
-func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insight.Fact, error) {
+// findings computes Noteworthy's facts, and those outside the briefing's set. Stable ids: the finding's type and key.
+func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insight.Fact, unbriefed, error) {
 	var facts []insight.Fact
-	add := func(f insight.Fact) {
+	var un unbriefed
+	tidy := func(f insight.Fact) insight.Fact {
 		if f.Detail == nil {
 			f.Detail = []string{}
 		}
 		if f.Target.Filter == nil {
 			f.Target.Filter = map[string]string{}
 		}
-		facts = append(facts, f)
+		return f
 	}
+	add := func(f insight.Fact) { facts = append(facts, tidy(f)) }
 	for _, t := range tiles {
 		switch {
 		case t.Key == "visitors" && t.Change != nil && t.Change["pct"] != nil && t.Value >= minVisitorsForTrend:
@@ -286,19 +308,19 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insigh
 			add(insight.Fact{ID: "endpoint:" + k, Kind: "automation", Figure: num(float64(v)), Unit: "calls of",
 				Text: "New endpoint: " + truncate(k, 120), Score: 160 + float64(v), Target: insight.Target{Panel: "endpoints"}})
 		}); err != nil {
-			return nil, err
+			return nil, un, err
 		}
 		if err := s.newKeys(ctx, q, "failures", minNewFailures, func(k string, v int64, _ *keySums) {
 			add(insight.Fact{ID: "failure:" + k, Kind: "problem", Figure: num(float64(v)), Unit: "calls failed with",
 				Text: "New failure: " + k, Score: 950 + float64(v), Target: insight.Target{Panel: "failures"}})
 		}); err != nil {
-			return nil, err
+			return nil, un, err
 		}
 	} else if err := s.newKeys(ctx, q, "referrers", minReferrerVisitors, func(k string, v int64, _ *keySums) {
 		add(insight.Fact{ID: "ref:" + k, Kind: "people", Figure: num(float64(v)), Unit: "visitors from",
 			Text: "New referrer: " + k, Score: 150 + float64(v), Target: insight.Target{Panel: "referrers"}})
 	}); err != nil {
-		return nil, err
+		return nil, un, err
 	}
 	// One browser's extension is no news of the site's, and nothing about it can be looked up (owner).
 	shown := func(k string, g *keySums) bool { return !maskedError(k) || g.d.count() >= minMaskedVisitors }
@@ -306,41 +328,47 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insigh
 		add(insight.Fact{ID: "err:" + k, Kind: "problem", Figure: num(float64(v)), Unit: "times",
 			Text: "New error: " + truncate(k, 120), Score: 1000 + float64(v), Target: insight.Target{Panel: "errors"}})
 	}); err != nil {
-		return nil, err
+		return nil, un, err
 	}
 	if q.site.HasFeed {
 		if err := s.newKeys(ctx, q, "probed", minProbes, func(k string, v int64, _ *keySums) {
 			add(insight.Fact{ID: "probe:" + k, Kind: "automation", Figure: num(float64(v)), Unit: "probes of",
 				Text: "New probed path: " + k, Score: 500 + float64(v), Target: insight.Target{Panel: "probed"}})
 		}); err != nil {
-			return nil, err
+			return nil, un, err
 		}
 		if err := s.spikes(ctx, q, add); err != nil {
-			return nil, err
+			return nil, un, err
 		}
+	}
+	// The watch's: answered probes, new targets, new script hosts. Whole state, not the closed part: the open days'
+	// are provisional, there to be seen within minutes, outside the briefing's set.
+	if err := s.watchFindings(ctx, q, add, func(f insight.Fact) { un.open = append(un.open, tidy(f)) },
+		func(f insight.Fact) { un.over = append(un.over, tidy(f)) }); err != nil {
+		return nil, un, err
 	}
 	// Collector throttling over the closed range.
 	var refused int64
 	if err := s.row(ctx, `SELECT COALESCE(SUM(rate_limited + dropped), 0) FROM ingest_stat
 		WHERE site_id = ? AND hour >= ? AND hour < ?`, q.site.ID, q.p.From().Unix()/3600,
 		q.p.ClosedEnd().Unix()/3600).Scan(&refused); err != nil {
-		return nil, err
+		return nil, un, err
 	}
 	if refused > 0 {
 		add(insight.Fact{ID: "collector:refused", Kind: "problem", Figure: num(float64(refused)), Unit: "events refused",
 			Text: "The collector refused events (rate limit or full queue)", Score: 900 + float64(refused),
 			Target: insight.Target{Panel: "domain"}})
 	}
-	slices.SortStableFunc(facts, func(a, b insight.Fact) int {
-		if c := cmp.Compare(b.Score, a.Score); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.ID, b.ID)
-	})
+	slices.SortStableFunc(facts, factOrder)
 	if facts == nil {
 		facts = []insight.Fact{}
 	}
-	return facts, nil
+	return facts, un, nil
+}
+
+// factOrder is the computed order of facts: the weightiest first, of one weight the latest, then by id.
+func factOrder(a, b insight.Fact) int {
+	return cmp.Or(cmp.Compare(b.Score, a.Score), cmp.Compare(b.At, a.At), cmp.Compare(a.ID, b.ID))
 }
 
 // closedPart is a window's closed part.

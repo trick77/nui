@@ -1,5 +1,5 @@
-// Command server runs Trakk: the collector, the background work (classification, reference data, aggregates,
-// retention, the model) and the dashboard.
+// Command server runs Trakk: the collector, the background work (classification, reference data, aggregates, the
+// watch, retention, the model) and the dashboard.
 package main
 
 import (
@@ -36,6 +36,7 @@ import (
 	"github.com/trick77/trakk/backend/internal/sim/simcli"
 	"github.com/trick77/trakk/backend/internal/sites"
 	"github.com/trick77/trakk/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/watch"
 	"github.com/trick77/trakk/backend/web"
 )
 
@@ -270,6 +271,15 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 		select {
 		case <-refCached:
 			agg.Run(c, st, aggOpts)
+		case <-c.Done():
+		}
+	})
+	// The watch job walks raw into its state per site (every day with raw after an upgrade, then each as it closes)
+	// and judges the open days on every wake. It waits as the aggregate job does.
+	start(func(c context.Context) {
+		select {
+		case <-refCached:
+			watch.Run(c, st, watch.Options{})
 		case <-c.Done():
 		}
 	})

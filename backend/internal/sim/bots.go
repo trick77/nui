@@ -2,8 +2,10 @@ package sim
 
 import (
 	"fmt"
+	"hash/fnv"
 	"math"
 	"net/netip"
+	"slices"
 	"time"
 )
 
@@ -36,6 +38,25 @@ var ProbedPaths = []string{"/.env", "/.git/config", "/wp-login.php", "/admin", "
 	"/.aws/credentials", "/server-status", "/backup.zip", "/.DS_Store"}
 
 var probedAccounts = []string{"admin", "root", "test", "info", "support", "admin@example.com", "demo", "guest"}
+
+// The watch's stories: the dropped file that answers (path-flip) and its user, the dump a scanner gets
+// (scanner-hit), the path that takes POSTs (post-target), the soft 404's sprayer and the paths it answers.
+var (
+	FlipPath       = "/wp-content/uploads/cache.php"
+	ShellAddr      = netip.MustParseAddr("192.0.2.150")
+	DumpPath       = "/backup/site.sql"
+	HitScannerAddr = hostIn(scannerPrefixes[0], 4200)
+	PostPath       = "/xmlrpc.php"
+	PostAddr       = netip.MustParseAddr("192.0.2.160")
+	SprayAddr      = hostIn(scannerPrefixes[1], 4300)
+	// hitPaths are what the hit's scanner is refused at before the dump: the scan wave's and more.
+	hitPaths = append(slices.Clone(ProbedPaths), "/.env.bak", "/wp-config.php.bak", "/db.sql", "/dump.sql",
+		"/backup.sql", "/backup.tar.gz", "/site.zip", "/www.zip", "/old/", "/test.php", "/info.php", "/shell.php",
+		"/.git/HEAD", "/.svn/entries")
+)
+
+// shellUA is the webshell's caller's client.
+const shellUA = "curl/8.7.1"
 
 // BotAddr is the address a bot role sends from to site idx, ok false when the reference data has no such service.
 func (w *World) BotAddr(role string, site int) (netip.Addr, bool) {
@@ -160,6 +181,7 @@ func (w *World) automation(p *dayPlan, s *Site, d int64) {
 			}
 		}
 	}
+	w.watched(s, d, add)
 	// A flood outweighs the rest of the site's day: twice the prober's hour and the people's and bots' requests
 	// together (some 450 fixed and 650 per unit of scale with the referrer wave, 800 and 700 allowed), so each
 	// address flood keeps over a quarter of the day's requests, a spike, with the other two floods and the prober
@@ -235,6 +257,88 @@ func (w *World) automation(p *dayPlan, s *Site, d int64) {
 			p.batches = append(p.batches, b)
 		}
 	}
+}
+
+// watched plans the day's requests of the watch's stories on s. Fixed times and addresses: no draw, the other
+// scenarios' randomness stays what it was.
+func (w *World) watched(s *Site, d int64, add func(record)) {
+	on := func(at time.Time) bool { return dayOf(at) == d }
+	first := s.Feed && s.idx == w.firstFeed()
+	if sc := w.scenario("path-flip"); sc != nil && first {
+		// Three scanners, a day or more apart, refused; then the file answers its caller, a size of its own.
+		for i := range 3 {
+			if at := sc.start(w.Anchor).Add(time.Duration(i) * 7 * time.Hour); on(at) {
+				add(record{t: at, ip: hostIn(scannerPrefixes[i%2], 4100+i), ua: scannerUAs[i], method: "GET",
+					path: FlipPath, status: 404, dur: 1, bytes: 153})
+			}
+		}
+		for k := range 3 {
+			if at := sc.end(w.Anchor).Add(-time.Hour + time.Duration(k)*time.Minute); on(at) {
+				add(record{t: at, ip: ShellAddr, ua: shellUA, method: "GET", path: FlipPath, status: 200, dur: 30,
+					bytes: 48_213})
+			}
+		}
+	}
+	if sc := w.scenario("scanner-hit"); sc != nil && first {
+		// Refused at every path, the dump answered: two dozen requests, the scanner mostly refused that day.
+		at := sc.start(w.Anchor)
+		for j, path := range append(slices.Clone(hitPaths), DumpPath) {
+			t := at.Add(time.Duration(j) * 900 * time.Millisecond)
+			status, bytes := 404, int64(153)
+			if path == DumpPath {
+				status, bytes = 200, 2_431_877
+			}
+			if on(t) {
+				add(record{t: t, ip: HitScannerAddr, ua: scannerUAs[0], method: "GET", path: path, status: status,
+					dur: 2, bytes: bytes})
+			}
+		}
+	}
+	if sc := w.scenario("post-target"); sc != nil && first {
+		for k := range 3 {
+			if at := sc.start(w.Anchor).Add(time.Duration(k) * 40 * time.Second); on(at) {
+				add(record{t: at, ip: PostAddr, ua: shellUA, method: "POST", path: PostPath, status: 200, dur: 90,
+					bytes: 370})
+			}
+		}
+	}
+	if sc := w.scenario("soft-404"); sc != nil && s.Feed && sc.site(w, s) {
+		// Two days before the site turns soft three scanners are refused at the sprayer's first paths; once soft,
+		// the sprayer asks for sixty, all answered (world.plan turns the 404s into the soft page).
+		for i := range 3 {
+			at := sc.start(w.Anchor).Add(-48*time.Hour + time.Duration(i)*time.Hour)
+			for j, path := range sprayPaths()[:10] {
+				if t := at.Add(time.Duration(j) * time.Second); on(t) {
+					add(record{t: t, ip: hostIn(scannerPrefixes[i%2], 4110+i), ua: scannerUAs[i], method: "GET",
+						path: path, status: 404, dur: 1, bytes: 153})
+				}
+			}
+		}
+		at := sc.start(w.Anchor).Add(2 * time.Hour)
+		for j, path := range sprayPaths() {
+			if t := at.Add(time.Duration(j) * 700 * time.Millisecond); on(t) {
+				add(record{t: t, ip: SprayAddr, ua: scannerUAs[1], method: "GET", path: path, status: 404, dur: 1,
+					bytes: 153})
+			}
+		}
+	}
+}
+
+// sprayPaths are the soft 404 sprayer's sixty paths: the hit's list, then numbered ones.
+func sprayPaths() []string {
+	out := slices.Clone(hitPaths)
+	for i := len(out); i < 60; i++ {
+		out = append(out, fmt.Sprintf("/wp-content/plugins/plugin-%c%c/readme.txt", 'a'+i/26, 'a'+i%26))
+	}
+	return out
+}
+
+// softPage is the size of a soft 404's page for a path: it names the path and suggests others, each path's size its
+// own (no shell size: the soft day alone keeps its answers from flipping).
+func softPage(path string) int64 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(path))
+	return 5_100 + int64(h.Sum32()%4_000)
 }
 
 // integrations are the programs calling a server-only API with their accounts: a few runs a day each.

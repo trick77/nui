@@ -70,10 +70,20 @@ func AgeFloor(now time.Time, months int) int64 {
 	return now.AddDate(0, -months, 0).UnixMilli()/dayMS + 1
 }
 
+// The watch state idle since before a time, a chunk of a site's (?1 site, ?2 unix ms, ?3 chunk): templates neither
+// refused nor answered since, script hosts not seen since.
+const (
+	delPathsBefore = `DELETE FROM path_state WHERE site_id = ?1 AND template IN
+		(SELECT template FROM path_state WHERE site_id = ?1 AND MAX(refused_last, ok_last) < ?2 LIMIT ?3)`
+	delHostsBefore = `DELETE FROM script_host WHERE site_id = ?1 AND host IN
+		(SELECT host FROM script_host WHERE site_id = ?1 AND last_seen < ?2 LIMIT ?3)`
+)
+
 // PruneAge deletes what is older than before (BACKEND_RETENTION_MONTHS): events, and the per-address aggregates with
-// the actor classes and the model's usage (they name addresses as the events do). The other aggregates and the
-// collector counters stay. Events go by whole UTC days (the cutoff floored to midnight): an aggregate day is built
-// from all of its raw or none of it. It returns the events and rows deleted.
+// the actor classes and the model's usage (they name addresses as the events do), and the watch state idle since.
+// The other aggregates and the collector counters stay; the size cap never cuts the watch state (it is bounded per
+// site, and a template it forgot would come back as new). Events go by whole UTC days (the cutoff floored to
+// midnight): an aggregate day is built from all of its raw or none of it. It returns the events and rows deleted.
 func (s *Store) PruneAge(ctx context.Context, before time.Time) (int64, error) {
 	cut := before.UnixMilli() / dayMS * dayMS
 	var total int64
@@ -88,17 +98,22 @@ func (s *Store) PruneAge(ctx context.Context, before time.Time) (int64, error) {
 		if err != nil {
 			return total, err
 		}
-		for {
-			n, err := s.execRows(ctx, delAggAddrBefore, st.ID, cut/dayMS, retentionChunk)
-			total += n
-			if err != nil {
-				return total, err
-			}
-			if n < retentionChunk {
-				break
-			}
-			if !run.Sleep(ctx, retentionYield) {
-				return total, ctx.Err()
+		for _, del := range []struct {
+			q   string
+			cut int64
+		}{{delAggAddrBefore, cut / dayMS}, {delPathsBefore, cut}, {delHostsBefore, cut}} {
+			for {
+				n, err := s.execRows(ctx, del.q, st.ID, del.cut, retentionChunk)
+				total += n
+				if err != nil {
+					return total, err
+				}
+				if n < retentionChunk {
+					break
+				}
+				if !run.Sleep(ctx, retentionYield) {
+					return total, ctx.Err()
+				}
 			}
 		}
 	}
@@ -106,6 +121,12 @@ func (s *Store) PruneAge(ctx context.Context, before time.Time) (int64, error) {
 		if _, err := s.DB.ExecContext(ctx, q, cut/dayMS); err != nil {
 			return total, err
 		}
+	}
+	// Findings only: a host row's first_seen is the host's merged first sight, a long-known host's open-day row stays
+	// until the pass replaces it.
+	if _, err := s.DB.ExecContext(ctx, `DELETE FROM watch_open WHERE kind <> 'host' AND first_seen < ?`,
+		cut); err != nil {
+		return total, err
 	}
 	return total, nil
 }

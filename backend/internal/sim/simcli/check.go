@@ -18,6 +18,7 @@ import (
 	"github.com/trick77/trakk/backend/internal/sim"
 	"github.com/trick77/trakk/backend/internal/sites"
 	"github.com/trick77/trakk/backend/internal/store"
+	"github.com/trick77/trakk/backend/internal/watch"
 )
 
 // Dashboard is the dashboard API over st as of a minute after the world's anchor, its reference data the world's.
@@ -98,17 +99,20 @@ func rawOnly(e sim.Expectation) bool {
 	return e.Params["range"] == "24h" && e.Endpoint != "noteworthy"
 }
 
-// buildMu serializes the aggregate builds: tests check one stored history from several goroutines, and a second
-// build of a store finds nothing left to build.
+// buildMu serializes the aggregate builds and the watch's passes: tests check one stored history from several
+// goroutines, and a second build of a store finds nothing left to build.
 var buildMu sync.Mutex
 
 // buildAggregates builds every day of the world's history up to its anchor's (the history ends there), as the job
-// would have once each day was due.
+// would have once each day was due, and runs the watch's pass at the anchor: the days still open judged again, a
+// day the backfill left unmerged merged.
 func buildAggregates(ctx context.Context, st *store.Store, w *sim.World) error {
 	buildMu.Lock()
 	defer buildMu.Unlock()
-	_, err := agg.BuildThrough(ctx, st, w.Anchor, agg.TopK)
-	return err
+	if _, err := agg.BuildThrough(ctx, st, w.Anchor, agg.TopK); err != nil {
+		return err
+	}
+	return watch.Pass(ctx, st, w.Anchor)
 }
 
 // Check builds the aggregates, asks the dashboard for every expectation of the world's scenarios from raw events and
