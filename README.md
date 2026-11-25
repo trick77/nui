@@ -335,6 +335,11 @@ docker compose run --rm trakk -notify-check   # every fault, exit 1 on any; send
 docker compose run --rm trakk -notify-test    # a test message to every channel: sent or failed and why, exit 1 on any failure
 ```
 
+Every start sends each channel that test message too, whatever its `min_severity` and outside `max_per_hour`: a
+channel that cannot deliver shows in the log and the footer at the start, not at the first alert. A channel that
+took a message in the last ten minutes gets none (a restart loop sends one, not one per start); a failed one is
+tested again at the next start. Never with simulated traffic.
+
 ### Dashboard API
 
 `/api/dash/*` is the dashboard's own API (a session required). For links into it: the log's `addr` filter takes an
