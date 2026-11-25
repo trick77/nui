@@ -16,6 +16,7 @@ import type {
   LogFilter,
   Audience,
   Panel as PanelKey,
+  Range,
   Scope,
   SiteInfo,
   Verdict,
@@ -33,11 +34,13 @@ export type Dash = {
   // The class of API clients is shown (showsApiClients).
   apiClients: boolean;
   openLog: (f: LogFilter) => void;
-  // site: another listed domain's panel, shown with that domain's range.
+  // site: another listed domain's panel, shown with that domain's range;
+  // range: the log's, where what is jumped to happened (an older alert).
   goPanel: (
     p: PanelKey,
     filter?: Record<string, string>,
     site?: string,
+    range?: Range,
   ) => void;
   visitor: string | null;
   selectVisitor: (key: string | null) => void;

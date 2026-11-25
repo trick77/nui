@@ -213,8 +213,18 @@ export default function Dashboard({ me }: { me: Me }) {
   );
 
   const goPanel = useCallback(
-    (p: PanelKey, filter: Record<string, string> = {}, at?: string) => {
+    (
+      p: PanelKey,
+      filter: Record<string, string> = {},
+      at?: string,
+      range?: Range,
+    ) => {
       if (!at || at === view.site) {
+        if (p === "log" && range) {
+          go({ ...view, page: "log", log: filter, range });
+          window.scrollTo?.(0, 0);
+          return;
+        }
         if (p === "log") return openLog(filter);
         if (p === "visitors" && filter.key && site)
           setPicked({ site: site.site, key: filter.key });
@@ -228,6 +238,7 @@ export default function Dashboard({ me }: { me: Me }) {
       // and the jump would each start from this view.
       const there = { ...view, site: at, range: storedRange(at) };
       if (p === "log") {
+        if (range) there.range = range;
         go({ ...there, page: "log", log: filter });
         window.scrollTo?.(0, 0);
         return;
