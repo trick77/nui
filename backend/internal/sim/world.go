@@ -194,15 +194,11 @@ func (w *World) plan(d int64) *dayPlan {
 		w.bots(p, s, d)
 		w.automation(p, s, d)
 	}
-	soft := w.scenario("soft-404")
 	for i, s := range w.Sites {
 		recs := p.records[i][:0]
 		for _, r := range p.records[i] {
 			if w.feedDown(s, r.t) {
 				continue
-			}
-			if soft != nil && r.status == 404 && soft.site(w, s) && soft.covers(w.Anchor, r.t) {
-				r.status, r.bytes = 200, softPage(r.path)
 			}
 			recs = append(recs, r)
 		}

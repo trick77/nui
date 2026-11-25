@@ -105,6 +105,8 @@ var Catalogue = []Spec{
 	fact("probe.new", 3),
 	fact("endpoint.new", 5),
 	fact("referrer.new", 2),
+	// A host is new or not: no threshold. The watch's provisional findings count, an alert within the hour.
+	{ID: "script.new", Group: "traffic"},
 	{ID: "spike.addr", Group: "traffic", Params: []string{pMin, pShare, pFactor},
 		Defaults: Params{Min: 100, Share: 25, Factor: 3}},
 	{ID: "spike.net", Group: "traffic", Params: []string{pMin, pShare, pFactor},

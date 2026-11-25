@@ -9,46 +9,49 @@ import (
 	"slices"
 )
 
-// Finding is one finding as the dashboard reads it: a path's (flip, hit, endpoint) or a script host's.
+// Finding is one new script host as the dashboard reads it.
 type Finding struct {
-	Kind string
-	Key  string
-	// At is when it happened: a path's first answer (a hit's: the scanner's), a host's first sight on the day it was
-	// found. The same before and after that day closes. Unix ms.
+	Key string
+	// At is when it happened: the host's first sight on the day it was found, the same before and after that day
+	// closes. Unix ms.
 	At int64
 	// Provisional: a day not closed yet made it; a later pass may drop it.
 	Provisional bool
-	Path        *Path
 	Host        *Host
 }
 
 // Findings are a site's findings that happened from from on (unix ms), the provisional ones of the open days
-// included, newest first. A template or host has one finding: between a closed day's merge and the pass's new
-// provisional ones both are stored a moment, the closed one counts.
+// included, newest first. A host has one finding: between a closed day's merge and the pass's new provisional ones
+// both are stored a moment, the closed one counts.
 func Findings(ctx context.Context, db *sql.DB, site, from int64) ([]Finding, error) {
-	paths, err := readPaths(ctx, db, foundPaths, site)
-	if err != nil {
-		return nil, err
-	}
-	var out []Finding
-	// closed are the keys with a closed finding, whatever its time: "p:" a template's, "s:" a host's.
-	closed := map[string]bool{}
-	for i := range paths {
-		p := &paths[i]
-		closed["p:"+p.Template] = true
-		f := Finding{Kind: p.Found, Key: p.Template, At: foundTime(p, p.Found), Path: p}
-		if f.At >= from {
-			out = append(out, f)
-		}
-	}
+	return findings(ctx, db, site, from, false)
+}
+
+// Made are a site's findings the job made from from on (unix ms), newest first: the closed ones by their found_at,
+// the provisional ones all (every pass makes them anew). The alert rules': a finding is made after it happened (a
+// third network late that day, a place under a day's bound freed on a later one), so a window by when it happened
+// may never hold it.
+func Made(ctx context.Context, db *sql.DB, site, from int64) ([]Finding, error) {
+	return findings(ctx, db, site, from, true)
+}
+
+func findings(ctx context.Context, db *sql.DB, site, from int64, made bool) ([]Finding, error) {
 	hosts, err := readHosts(ctx, db, foundHosts, site, 1)
 	if err != nil {
 		return nil, err
 	}
+	var out []Finding
+	// closed are the hosts with a closed finding, whatever its time.
+	closed := map[string]bool{}
 	for i := range hosts {
-		closed["s:"+hosts[i].Host] = true
-		if hosts[i].FoundFirst >= from {
-			out = append(out, Finding{Kind: "script", Key: hosts[i].Host, At: hosts[i].FoundFirst, Host: &hosts[i]})
+		h := &hosts[i]
+		closed[h.Host] = true
+		when := h.FoundFirst
+		if made {
+			when = h.FoundAt
+		}
+		if when >= from {
+			out = append(out, Finding{Key: h.Host, At: h.FoundFirst, Host: h})
 		}
 	}
 	open, err := readOpen(ctx, db, site)
@@ -56,36 +59,21 @@ func Findings(ctx context.Context, db *sql.DB, site, from int64) ([]Finding, err
 		return nil, err
 	}
 	for _, o := range open {
-		if o.Kind == "host" || closed[openKey(o)] {
+		if o.Kind != "script" || closed[o.Key] {
 			continue
 		}
-		f := Finding{Kind: o.Kind, Key: o.Key, At: o.FirstSeen, Provisional: true}
-		if o.Kind == "script" {
-			f.Host = &Host{}
-			err = json.Unmarshal([]byte(o.Detail), f.Host)
-		} else {
-			f.Path = &Path{}
-			err = json.Unmarshal([]byte(o.Detail), f.Path)
-		}
-		if err != nil {
+		f := Finding{Key: o.Key, At: o.FirstSeen, Provisional: true, Host: &Host{}}
+		if err := json.Unmarshal([]byte(o.Detail), f.Host); err != nil {
 			return nil, err
 		}
-		if f.At >= from {
+		if made || f.At >= from {
 			out = append(out, f)
 		}
 	}
 	slices.SortFunc(out, func(a, b Finding) int {
-		return cmp.Or(cmp.Compare(b.At, a.At), cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Key, b.Key))
+		return cmp.Or(cmp.Compare(b.At, a.At), cmp.Compare(a.Key, b.Key))
 	})
 	return out, nil
-}
-
-// openKey is the key a provisional finding shares with a closed one: its template's or its host's.
-func openKey(o Open) string {
-	if o.Kind == "script" {
-		return "s:" + o.Key
-	}
-	return "p:" + o.Key
 }
 
 func readOpen(ctx context.Context, db *sql.DB, site int64) ([]Open, error) {
@@ -148,9 +136,8 @@ func Hosts(ctx context.Context, db *sql.DB, site, from int64) ([]Host, error) {
 // SiteState is a site's walk state, ok false before the job first walked it.
 func SiteState(ctx context.Context, db *sql.DB, site int64) (Site, bool, error) {
 	var s Site
-	err := db.QueryRowContext(ctx, `SELECT site_id, from_day, done_day, ready_at, routed_day, soft_day, shell_bytes,
-		scripts_from, cut FROM watch_site WHERE site_id = ?`, site).Scan(&s.SiteID, &s.FromDay, &s.DoneDay, &s.ReadyAt,
-		&s.RoutedDay, &s.SoftDay, &s.ShellBytes, &s.ScriptsFrom, &s.Cut)
+	err := db.QueryRowContext(ctx, `SELECT site_id, from_day, done_day, ready_at, scripts_from, cut FROM watch_site
+		WHERE site_id = ?`, site).Scan(&s.SiteID, &s.FromDay, &s.DoneDay, &s.ReadyAt, &s.ScriptsFrom, &s.Cut)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s, false, nil
 	}

@@ -550,7 +550,7 @@ func TestUpgrade_0002(t *testing.T) {
 	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event`).Scan(&events); err != nil || events != 50 {
 		t.Errorf("events after upgrade = %d, %v", events, err)
 	}
-	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 8 {
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 9 {
 		t.Errorf("migrations = %d, %v", migrated, err)
 	}
 	// The site from before the upgrade has no order, and takes one under its id.
@@ -668,6 +668,86 @@ func TestUpgrade_0004(t *testing.T) {
 	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE type = 'index' AND name = 'actor_class_day'`).
 		Scan(&index); err != nil || index != 1 {
 		t.Errorf("actor_class_day: %d, %v", index, err)
+	}
+}
+
+// TestUpgrade_0009 opens a database with the watch's path state (0007): its tables start empty in the script hosts'
+// shape, path_state and its client addresses gone.
+func TestUpgrade_0009(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.db")
+	old := fstest.MapFS{}
+	files, err := fs.Glob(migrations(), "000[1-8]_*.sql")
+	if err != nil || len(files) != 8 {
+		t.Fatalf("migrations %v, %v", files, err)
+	}
+	for _, f := range files {
+		data, err := fs.ReadFile(migrations(), f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old[f] = &fstest.MapFile{Data: data}
+	}
+	db, err := sql.Open("sqlite3", dsn(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := migrate.Up(t.Context(), db, old, migrate.Options{Dialect: migrate.SQLite}); err != nil {
+		t.Fatal(err)
+	}
+	id := seedOld(t, db)
+	for _, q := range []string{
+		`INSERT INTO watch_site (site_id, from_day, done_day, routed_day, cut) VALUES (?, 1, 2, 2, 7)`,
+		`INSERT INTO path_state (site_id, template, hit_first, hit_addr, found) VALUES (?, 'GET /x.php', 1, '192.0.2.1', 'hit')`,
+		`INSERT INTO script_host (site_id, host, first_seen, last_seen, found_at) VALUES (?, 'cdn.example.org', 1, 2, 3)`,
+		`INSERT INTO watch_open (site_id, kind, key, first_seen) VALUES (?, 'flip', 'GET /x.php', 1)`,
+	} {
+		if _, err := db.Exec(q, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = db.Close()
+
+	st, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	var n int
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'path_state%'`).Scan(&n); err != nil ||
+		n != 0 {
+		t.Errorf("path_state: %d, %v", n, err)
+	}
+	for _, tbl := range []string{"watch_site", "script_host", "watch_open"} {
+		//nolint:gosec // the test's own table names
+		if err := st.DB.QueryRow(`SELECT COUNT(*) FROM ` + tbl).Scan(&n); err != nil || n != 0 {
+			t.Errorf("%s: %d rows, %v", tbl, n, err)
+		}
+	}
+	var cols []string
+	rows, err := st.DB.Query(`SELECT name FROM pragma_table_info('watch_site') ORDER BY cid`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var c string
+		_ = rows.Scan(&c)
+		cols = append(cols, c)
+	}
+	_ = rows.Close()
+	if fmt.Sprint(cols) != "[site_id from_day done_day ready_at scripts_from cut]" {
+		t.Errorf("watch_site %v", cols)
+	}
+	if _, err := st.DB.Exec(`INSERT INTO watch_open (site_id, kind, key, first_seen) VALUES (?, 'flip', 'x', 1)`,
+		id); err == nil {
+		t.Error("an open path finding was taken")
+	}
+	if _, err := st.DB.Exec(`INSERT INTO watch_open (site_id, kind, key, first_seen) VALUES (?, 'script', 'x', 1)`,
+		id); err != nil {
+		t.Errorf("an open script finding: %v", err)
+	}
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE type = 'index' AND name = 'script_host_found'`).
+		Scan(&n); err != nil || n != 1 {
+		t.Errorf("script_host_found: %d, %v", n, err)
 	}
 }
 

@@ -35,7 +35,8 @@ export type Dash = {
   apiClients: boolean;
   openLog: (f: LogFilter) => void;
   // site: another listed domain's panel, shown with that domain's range;
-  // range: the log's, where what is jumped to happened (an older alert).
+  // range: the log's or the dashboard's, where what is jumped to happened
+  // (an older alert).
   goPanel: (
     p: PanelKey,
     filter?: Record<string, string>,

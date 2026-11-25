@@ -303,7 +303,7 @@ func TestServer(t *testing.T) {
 	// drop, whose baseline waits for days to compare with that one day of history lacks.
 	var passed, drop int
 	if err := st.DB.QueryRow(`SELECT COUNT(DISTINCT rule), COUNT(DISTINCT CASE WHEN rule = 'requests-drop' THEN rule END)
-		FROM alert_rule`).Scan(&passed, &drop); err != nil || passed != 22 || drop != 0 {
+		FROM alert_rule`).Scan(&passed, &drop); err != nil || passed != 23 || drop != 0 {
 		t.Errorf("rules passed: %d (the drop %d), %v", passed, drop, err)
 	}
 	reg, _ := sites.New(rows)

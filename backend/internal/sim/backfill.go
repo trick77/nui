@@ -268,7 +268,8 @@ func (b *backfill) window(w *World, from, to time.Time, retries *reqHeap) error 
 	return b.ctx.Err()
 }
 
-// stepAt runs the step at the end of an hour: what the hour sent written, its counters flushed.
+// stepAt runs the step at the end of an hour: what the hour sent written, its counters flushed, the watch's pass
+// run (a live server's wakes every five minutes: its findings of the day so far are there when the alerts read them).
 func (b *backfill) stepAt(end time.Time) error {
 	if b.step == nil || (b.stepIf != nil && !b.stepIf(end)) {
 		return nil
@@ -276,6 +277,9 @@ func (b *backfill) stepAt(end time.Time) error {
 	b.drain()
 	b.now = end
 	if err := b.col.Counters.Flush(b.ctx, b.st); err != nil {
+		return err
+	}
+	if err := watch.Pass(b.ctx, b.st, end); err != nil {
 		return err
 	}
 	return b.step(b.ctx, end)

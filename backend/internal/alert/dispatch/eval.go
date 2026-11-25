@@ -55,7 +55,8 @@ const (
 	maxLooks = 10
 )
 
-// factPart is the part of the findings each fact trigger is in: a gap there is no judgement.
+// factPart is the part of the findings each fact trigger is in: a gap there is no judgement. script.new is in none:
+// the watch's state is no aggregate a gap leaves out.
 var factPart = map[string]string{"error.new": "errors", "failure.new": "failures", "probe.new": "probed",
 	"endpoint.new": "endpoints", "referrer.new": "referrers", "spike.addr": "spikes", "spike.net": "spikes",
 	"trend.visitors": "tiles", "trend.calls": "tiles", "trend.failed": "tiles", "trend.auto_share": "tiles"}
@@ -121,12 +122,11 @@ func loosen(th *dash.Thresholds, r alert.Rule) {
 	}
 }
 
-// factPrefix is each fact trigger's fact id prefix; the rest of the id is the key. A fact of no trigger's prefix
-// (the watch's flip:, hit: and script:) no rule matches.
+// factPrefix is each fact trigger's fact id prefix; the rest of the id is the key.
 var factPrefix = map[string]string{"error.new": "err:", "failure.new": "failure:", "probe.new": "probe:",
-	"endpoint.new": "endpoint:", "referrer.new": "ref:", "spike.addr": "spike:addr:", "spike.net": "spike:net:",
-	"trend.visitors": "trend:visitors:", "trend.calls": "trend:calls:", "trend.failed": "trend:failed:",
-	"trend.auto_share": "trend:auto_share:"}
+	"endpoint.new": "endpoint:", "referrer.new": "ref:", "script.new": "script:", "spike.addr": "spike:addr:",
+	"spike.net": "spike:net:", "trend.visitors": "trend:visitors:", "trend.calls": "trend:calls:",
+	"trend.failed": "trend:failed:", "trend.auto_share": "trend:auto_share:"}
 
 // Occurrences is what rule r matches on site now.
 func (v *Eval) Occurrences(ctx context.Context, now time.Time, r alert.Rule, site *sites.Site, facts bool) (
@@ -136,10 +136,6 @@ func (v *Eval) Occurrences(ctx context.Context, now time.Time, r alert.Rule, sit
 	case "traffic":
 		if !facts {
 			return nil, false, nil
-		}
-		// A new endpoint is an API's: a website's endpoint: facts are the watch's new targets answered, no rule's.
-		if r.Spec.ID == "endpoint.new" && site.Kind != "api" {
-			return nil, true, nil
 		}
 		sf, err := v.findings(ctx, now, site)
 		if err != nil {
@@ -235,7 +231,8 @@ func (v *Eval) findings(ctx context.Context, now time.Time, site *sites.Site) (s
 
 // factUnits are the units an alert names a fact's figure by.
 var factUnits = map[string]string{"times": "times", "probes of": "probes", "visitors from": "visitors",
-	"calls of": "calls", "calls failed with": "failed calls", "requests from": "requests"}
+	"calls of": "calls", "calls failed with": "failed calls", "requests from": "requests",
+	"addresses loaded": "addresses"}
 
 // factOccurrences are the facts rule r matches by its own thresholds.
 func factOccurrences(r alert.Rule, fs []insight.Fact) []alert.Occurrence {
@@ -262,6 +259,8 @@ func factOccurrences(r alert.Rule, fs []insight.Fact) []alert.Occurrence {
 		case "error.new":
 			// 1, the default, is every error found: one an event without a visitor id counts none for.
 			match = f.Value >= p.Min && (p.Visitors <= 1 || f.Visitors >= p.Visitors)
+		case "script.new":
+			match = true
 		default:
 			match = f.Value >= p.Min
 		}

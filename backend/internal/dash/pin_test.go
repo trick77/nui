@@ -41,7 +41,7 @@ func factsDigest(t *testing.T, r *rig, model *fakeModel, sites ...string) (strin
 
 // The alert rules' thresholds never touch the dashboard: Noteworthy's facts, as the model is given them, and their
 // hash (the briefing cache's key) stay byte for byte what they were before the thresholds became a parameter. The
-// digests were recorded on the code before it.
+// digests were recorded on the code before it, the watch's once its findings were the script hosts alone.
 func TestFactsPinned(t *testing.T) {
 	got, n := factsDigest(t, sharedRig(t, nil), &fakeModel{}, feedSite, plainSite)
 	if want := "20c072a0b3518354790c91665762805b2cd020955dae333f8bded56b0c5da546"; got != want || n != 5 {
@@ -78,10 +78,10 @@ func TestFactsPinned(t *testing.T) {
 	if want := "6b8fe77b0c09e51aa3cf019570a69d2c140d5a48fb12bc97cf74bc560c1d42e6"; got != want || n != 1 {
 		t.Errorf("masked: %d inputs, digest %s, want 1, %s", n, got, want)
 	}
-	// The watch's: a flipped path and a new script host.
+	// The watch's: a new script host.
 	wr, _ := watchRig(t)
 	got, n = factsDigest(t, wr, &fakeModel{}, feedSite, plainSite)
-	if want := "f17ad3c789bd30ddc8c837a069d8fcce67fef424574f34ce73e7a744057fc7ad"; got != want || n != 3 {
-		t.Errorf("watch: %d inputs, digest %s, want 3, %s", n, got, want)
+	if want := "6f96910bd316c21650ccbd3477447dcaf48f545496df61ff7e9a8668bc8e6d4a"; got != want || n != 2 {
+		t.Errorf("watch: %d inputs, digest %s, want 2, %s", n, got, want)
 	}
 }

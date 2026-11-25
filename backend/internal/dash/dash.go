@@ -104,6 +104,8 @@ type query struct {
 	unknown map[string]bool
 	// maxNew is the most new keys of a list the findings take, 0 for Noteworthy's maxNewKeys.
 	maxNew int
+	// alerts: the findings are the alert rules' (Findings).
+	alerts bool
 }
 
 // unknownPart marks a part of the findings a gap left unjudged.

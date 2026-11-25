@@ -11,6 +11,7 @@
   "rules": [
     { "name": "new-errors", "on": "error.new", "min": 5, "visitors": 2, "origins": ["own", "unknown", "withheld"] },
     { "name": "new-probes", "on": "probe.new", "severity": "low" },
+    { "name": "new-script-hosts", "on": "script.new", "severity": "high", "channels": ["ops", "mail"] },
     { "name": "addr-flood", "on": "spike.addr", "min": 500, "share": 25, "factor": 3, "sites": ["lens.example.com"] },
     { "name": "feed-down", "on": "source.silent", "source": "server", "after": "30m", "severity": "high", "channels": ["ops", "mail"] },
     { "name": "refused", "on": "collector.refused", "min": 100, "window": "15m" },

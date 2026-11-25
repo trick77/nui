@@ -28,7 +28,6 @@ under `/api`, dashboard under `/dashboard`. `backend/`: Go on ship's kit, embeds
   restarting while the collector writes (ipverse-core's lesson; a month's actor GROUP BY took 0.8 s on 24 M events,
   a day 0.02 s). A 12-month page took ~60 s raw at that size.
 - Script hosts ride `engagement`'s props: a new kind is an action to the aggregates and a 400 to an older `/api/in`.
-- Watch state: closed days only (a scanner's first nine requests read as a visitor's and hide its hit for good).
 - Feed: one event's content never refuses the batch, its fields are the product's public clients' (one crafted
   method would blind the feed). Clip, drop and count; `/api/in` stays strict.
 - `account` outranks the bot list (owner): the list held our own host as Amazonbot (a scraper read its own address

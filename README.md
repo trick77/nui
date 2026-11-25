@@ -90,8 +90,8 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
 `backend/`, the knobs as above and flags over them (`-h`):
 
 - `scenarios` lists the scenarios, their windows and what the dashboard shows for each; `check` plays each on its
-  own and checks exactly that. The watch's (`path-flip`, `scanner-hit`, `post-target`, `script-inject`, `soft-404`)
-  need nine days of history: its learning window is a week.
+  own and checks exactly that. The watch's (`script-inject`) needs nine days of history: its learning window is a
+  week.
 - `backfill -data ./data [-wipe]` writes a history, `sites.json` and the world's reference data (`ref/`) into an
   empty or absent data directory, or one it wrote before (marked by `sim.json`; a second history is refused,
   `-wipe` empties the directory first). Anything else is refused untouched, and so is every run with `PUBLIC_FQDN`
@@ -254,15 +254,14 @@ day's raw is deleted only once its figures are built from it. Each address's dai
 model's usage are kept `BACKEND_RETENTION_MONTHS` (25). `BACKEND_MAX_DB_MB` caps the whole
 ([`.env.example`](.env.example)).
 
-The watch (a path refused for days that suddenly answers, a scanner answered where nobody was before, a new target,
-a new host the pages load scripts from, once addresses of three networks reported it on one day: a visitor id is the
-browser's word, an IPv4 /24 or an IPv6 /48 one network) judges each day against a small state per site, walked from
-raw a closed day at a time and kept past it: a template or host goes `BACKEND_RETENTION_MONTHS` after its last
-request, never by the size cap (at most 20,000 templates and 500 hosts a site, a host few networks report the first
-to make room). A day makes at most ten findings of a kind, the hosts most networks report first; the rest are found
-on a later day, at their own time. After an upgrade it walks every day with raw first
-and finds nothing in them; a site's first week finds nothing either, everything is new then. Today's findings are
-provisional: judged on the day so far, they may go again, and the briefing waits until their day closes.
+The watch (a new host the pages load scripts from, once addresses of three networks reported it on one day: a
+visitor id is the browser's word, an IPv4 /24 or an IPv6 /48 one network) judges each day against a small state per
+site, walked from raw a closed day at a time and kept past it: a host goes `BACKEND_RETENTION_MONTHS` after its last
+report, never by the size cap (at most 500 hosts a site, a host few networks report the first to make room). A day
+makes at most ten findings, the hosts most networks report first; the rest are found on a later day, at their own
+time. After an upgrade it walks every day with raw first and finds nothing in them; the first week of a site's
+script reports finds nothing either, every host is new then. Today's findings are provisional: judged on the day so
+far, they may go again, and the briefing waits until their day closes.
 
 A release that first deletes raw by days deletes nothing for 7 days after its first start, a restart included; the
 footer says from when. Then raw from the day holding the months' cutoff back goes at once, the rest down to the raw
@@ -296,7 +295,8 @@ jobs failing, a figure leaving its usual level. The dashboard lists them (`GET /
 | `on` | Parameters (default) |
 |---|---|
 | `error.new` | `min` occurrences (1), `visitors` (1; a server error: addresses), `origins` of a script error, one of its places enough: `own`, `other`, `named`, `unknown`, `withheld`, `extension` (all but `extension`; a server error always counts) |
-| `failure.new`, `probe.new`, `endpoint.new`, `referrer.new` | `min` (3, 3, 5, 2) |
+| `failure.new`, `probe.new`, `endpoint.new` (an API's), `referrer.new` | `min` (3, 3, 5, 2) |
+| `script.new` | none; a skimmer shows this way: `"severity": "high"` recommended |
 | `spike.addr`, `spike.net` | `min` requests (100, 200), `share` % of all (25, 40), `factor` over the 24 h before (3) |
 | `trend.visitors`, `trend.calls`, `trend.failed`, `trend.auto_share` | `min` (20 visitors, 100 calls, 100 calls in both periods; none for `auto_share`), `change` (20 %, 20 %, 5 pp, 5 pp), `direction` (`up`, `down`, `both`) |
 | `source.silent` | `after` (required), `source` (`browser`, `server`; both) |
@@ -307,8 +307,12 @@ jobs failing, a figure leaving its usual level. The dashboard lists them (`GET /
 | `level.errors` (% of the visitors who had a script error) | `window` (required, at most `24h`), `min` (required; above 0, at most 100), `factor`, `baseline` (as above, `days`), `visitors` affected at least (3), `origins` as in `error.new` (all but `extension`) |
 
 The traffic triggers are Noteworthy's findings over the last 24 hours against the 24 before, checked when an hour
-closes; the others every five minutes. Each key is reported when it enters the set (a new error, a spiking
-address) and closed in silence when it leaves; a state is reported when it opens and when it clears. A new script
+closes; the others every five minutes. `script.new` takes the hosts the watch found in those 24 hours, however long
+before it first saw them (a third network late in the day, a day past its ten), and its provisional findings too: a
+new script host is reported within the hour, not once its day closed (a host one later pass drops is reported all
+the same). Each
+key is reported when it enters the set (a new error, a spiking address) and closed in silence when it leaves; a
+state is reported when it opens and when it clears. A new script
 error's message says its type and place and the share of visitors it hit, and links to its rows in the log (a
 hidden "Script error." counts only from 3 visitors, as in Noteworthy). A key back
 within `cooldown` of leaving stays quiet. A rule's first pass, a changed threshold under the same name and a pass
@@ -346,8 +350,7 @@ URL too: `-notify-test` always sends. A failed one is tested again at the next s
 `/api/dash/*` is the dashboard's own API (a session required). For links into it: the log's `addr` filter takes an
 address or an IPv6 /64 (any other prefix is a 400), its `asn` filter an AS number, its `name` filter
 an event's exact name (a script error's message). Noteworthy shows five findings and counts the rest; `findings=all`
-lists every one. `watch` answers the watch's findings of a range (flipped paths, scanners' hits, new targets; a site
-with a feed) and the hosts its pages loaded scripts from, the new ones marked.
+lists every one. `watch` answers the hosts a site's pages loaded scripts from in a range, the new ones marked.
 
 ## License
 
