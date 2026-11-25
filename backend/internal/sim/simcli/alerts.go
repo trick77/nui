@@ -46,9 +46,9 @@ const NotifyFile = `{
   ]
 }`
 
-// stepDays are the days before the anchor a backfill steps the alert engine through: a scenario's start among them
-// (deploy-error's, the earliest, 5 days before), a baseline pass before it. Every hour of a whole history would
-// take minutes.
+// stepDays are the days before the anchor server -sim's backfill steps the alert engine through: the alerts page has
+// the scenarios' alerts (deploy-error's start, the earliest, 5 days before), a baseline pass before. Every hour of a
+// whole history would take minutes.
 const stepDays = 6
 
 // Alerting is the alert engine a simulated history is played through: the world's notify file (NotifyFile), every
@@ -90,13 +90,26 @@ func Known(reg *sites.Registry) alert.Known {
 	return k
 }
 
-// backfillAlerting is a backfill's options with the alert engine stepping through its last stepDays.
+// backfillAlerting is a backfill's options with the alert engine stepping through the hours at takes (by their
+// end); at nil: no engine.
 func backfillAlerting(ctx context.Context, st *store.Store, w *sim.World, rec *dispatch.Recorder,
-	o sim.BackfillOptions) (sim.BackfillOptions, error) {
+	o sim.BackfillOptions, at func(time.Time) bool) (sim.BackfillOptions, error) {
+	if at == nil {
+		return o, nil
+	}
 	a, err := NewAlerting(ctx, st, w, rec)
 	if err != nil {
 		return o, err
 	}
-	o.Step, o.StepFrom = a.Engine.Step, w.Anchor.AddDate(0, 0, -stepDays)
+	o.Step, o.StepAt = a.Engine.Step, at
 	return o, nil
+}
+
+// lastDays takes the hours of the last stepDays before w's anchor the alerts page needs: every hour around the
+// scenarios whose expectations read alerts (sim check's), every sim.AlertEvery hours else, every rule passing.
+func lastDays(w *sim.World) func(time.Time) bool {
+	from, near := w.Anchor.AddDate(0, 0, -stepDays), w.AlertHours()
+	return func(end time.Time) bool {
+		return !end.Before(from) && (end.Unix()/3600%sim.AlertEvery == 0 || (near != nil && near(end)))
+	}
 }

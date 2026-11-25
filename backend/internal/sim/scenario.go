@@ -159,6 +159,49 @@ func (w *World) Expectations() []Expectation {
 	return out
 }
 
+// Around a scenario whose expectations read alerts, the alert engine steps from alertLead before its start (that
+// step a baseline the scenario is not part of yet) to alertTail after its end (a condition clears with the window
+// after it): every hour near the start and the end, every AlertEvery hours between. A fact the scenario makes later
+// than its first hours (a few visitors at scale 0.3) still meets a facts pass while it is new.
+const (
+	alertLead = h
+	alertTail = 2 * h
+	// AlertEvery is the hours between two steps away from a scenario's edges: short of the engine's six idle hours,
+	// which make a rule's next pass a baseline again.
+	AlertEvery = 5
+)
+
+// AlertHours reports the hours, by their end, a backfill steps the alert engine through for the expectations that
+// read alerts: around each such scenario, every hour for one that is always on. Nil when no expectation reads
+// alerts: no step at all. A history that steps every hour of days takes minutes, under -race more than CI's ten a
+// package.
+func (w *World) AlertHours() func(end time.Time) bool {
+	type span struct{ start, end time.Time }
+	var spans []span
+	for _, sc := range w.Scenarios {
+		if sc.expect == nil || !slices.ContainsFunc(sc.expect(w, sc), func(e Expectation) bool {
+			return e.Endpoint == "alerts"
+		}) {
+			continue
+		}
+		if sc.always() {
+			return func(time.Time) bool { return true }
+		}
+		spans = append(spans, span{sc.start(w.Anchor), sc.end(w.Anchor)})
+	}
+	if spans == nil {
+		return nil
+	}
+	return func(t time.Time) bool {
+		return slices.ContainsFunc(spans, func(s span) bool {
+			if t.Before(s.start.Add(-alertLead)) || t.After(s.end.Add(alertTail)) {
+				return false
+			}
+			return !t.After(s.start.Add(alertTail)) || !t.Before(s.end.Add(-h)) || t.Unix()/3600%AlertEvery == 0
+		})
+	}
+}
+
 func params(site, rng string, kv ...string) map[string]string {
 	m := map[string]string{"site": site, "range": rng, "tz": "UTC"}
 	for i := 0; i+1 < len(kv); i += 2 {

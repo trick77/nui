@@ -123,9 +123,9 @@ type backfill struct {
 	cls   *classify.Classifier
 	stats Stats
 	log   *slog.Logger
-	// step and stepFrom: BackfillOptions.Step and StepFrom.
-	step     func(context.Context, time.Time) error
-	stepFrom time.Time
+	// step and stepIf: BackfillOptions.Step and StepAt.
+	step   func(context.Context, time.Time) error
+	stepIf func(time.Time) bool
 }
 
 func (b *backfill) clock() time.Time { return b.now }
@@ -151,10 +151,11 @@ type BackfillOptions struct {
 	ClassifyLast int
 	// Log reports each day's progress; nil is quiet.
 	Log *slog.Logger
-	// Step, when set, runs at the end of every simulated hour from StepFrom on, the hour's events written and the
-	// counters flushed: the alert engine's step on the virtual clock, where no ticker ever fires.
-	Step     func(ctx context.Context, now time.Time) error
-	StepFrom time.Time
+	// Step, when set, runs at the end of every simulated hour StepAt takes (by its end; nil: every hour), the hour's
+	// events written and the counters flushed: the alert engine's step on the virtual clock, where no ticker ever
+	// fires.
+	Step   func(ctx context.Context, now time.Time) error
+	StepAt func(end time.Time) bool
 }
 
 // Backfill writes the world's last o.Days days before its anchor into st through the real collector: the
@@ -164,7 +165,7 @@ type BackfillOptions struct {
 func Backfill(ctx context.Context, st *store.Store, w *World, o BackfillOptions) (_ Stats, err error) {
 	start := time.Now()
 	b := &backfill{ctx: ctx, st: st, log: o.Log, stats: Stats{Refused: map[int]int{}}, step: o.Step,
-		stepFrom: o.StepFrom}
+		stepIf: o.StepAt}
 	if b.log == nil {
 		b.log = quietLog()
 	}
@@ -269,7 +270,7 @@ func (b *backfill) window(w *World, from, to time.Time, retries *reqHeap) error 
 
 // stepAt runs the step at the end of an hour: what the hour sent written, its counters flushed.
 func (b *backfill) stepAt(end time.Time) error {
-	if b.step == nil || end.Before(b.stepFrom) {
+	if b.step == nil || (b.stepIf != nil && !b.stepIf(end)) {
 		return nil
 	}
 	b.drain()
