@@ -186,7 +186,14 @@ export function TopList({
           tab={t}
           cols={cols}
           label={label}
-          onRow={onRow}
+          // What a row opens is behind the dialog, or on another page.
+          onRow={
+            onRow &&
+            ((r) => {
+              setAll(false);
+              onRow(r);
+            })
+          }
           initialSort={sort}
           onClose={() => setAll(false)}
         />

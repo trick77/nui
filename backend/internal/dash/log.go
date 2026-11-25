@@ -38,6 +38,9 @@ type logRow struct {
 	// Account and DurMS are a server request's, the account "" without one.
 	Account string `json:"account"`
 	DurMS   *int64 `json:"dur_ms"`
+	// Error is where a script error happened, Page the path it happened on; null and "" for any other event.
+	Error *errorWhere `json:"error"`
+	Page  string      `json:"page"`
 }
 
 // handleLog is the raw event log, newest first, keyset-paginated on (ts, id): the time index walks it without a
@@ -164,7 +167,7 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 			pageCond += " AND (ts < ? OR (ts = ? AND id < ?))"
 			pageArgs = append(pageArgs, cur.ts, cur.ts, cur.id)
 		}
-		more, err := s.logRows(ctx, table, pageCond, pageArgs, logPage+1-len(out))
+		more, err := s.logRows(ctx, q.site.Domain, table, pageCond, pageArgs, logPage+1-len(out))
 		if err != nil {
 			s.fail(w, r, err)
 			return
@@ -211,9 +214,9 @@ type cursorRow struct {
 }
 
 // logRows reads up to limit log rows matching cond from table (event, pinned to an index or not), newest first.
-func (s *Server) logRows(ctx context.Context, table, cond string, args []any, limit int) ([]cursorRow, error) {
+func (s *Server) logRows(ctx context.Context, domain, table, cond string, args []any, limit int) ([]cursorRow, error) {
 	rows, err := s.query(ctx, `SELECT id, ts, ip, cls, source, kind, name, template, status, ua, account, dur_ms, op,
-		err, `+vitalValue+`
+		err, path, `+vitalValue+`, `+errorPlace+`
 		FROM `+table+` WHERE `+cond+` ORDER BY ts DESC, id DESC LIMIT `+strconv.Itoa(limit), args...)
 	if err != nil {
 		return nil, err
@@ -224,11 +227,11 @@ func (s *Server) logRows(ctx context.Context, table, cond string, args []any, li
 		var id, ts int64
 		var ip, source, kind, name, tmpl, ua string
 		var cls, status int
-		var value sql.NullFloat64
-		var account, op, failure string
+		var value, line, col sql.NullFloat64
+		var account, op, failure, path, src string
 		var dur int64
 		if err := rows.Scan(&id, &ts, &ip, &cls, &source, &kind, &name, &tmpl, &status, &ua, &account, &dur, &op,
-			&failure, &value); err != nil {
+			&failure, &path, &value, &src, &line, &col); err != nil {
 			return nil, err
 		}
 		what, k := describe(source, kind, name, agg.Endpoint(tmpl, op), status)
@@ -240,6 +243,9 @@ func (s *Server) logRows(ctx context.Context, table, cond string, args []any, li
 			if failure != "" {
 				row.What += ", " + failure
 			}
+		} else if kind == "js_error" {
+			at := locate(domain, name, src, line, col)
+			row.Error, row.Page = &at, path
 		}
 		out = append(out, cursorRow{row: row, at: cursor{ts, id}})
 	}

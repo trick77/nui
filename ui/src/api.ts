@@ -322,6 +322,58 @@ export type LogRow = {
   // A server request's: the account it acted as ("" for none), its duration.
   account: string;
   dur_ms: number | null;
+  // A script error's: where it happened (null for any other event), on
+  // which page.
+  error: ErrorWhere | null;
+  page: string;
+};
+
+export type ErrorOrigin =
+  "withheld" | "extension" | "own" | "other" | "unknown";
+
+export type ErrorWhere = {
+  origin: ErrorOrigin;
+  // Another host's name (other).
+  host: string;
+  // file:line:col, "" when the browser reported none.
+  place: string;
+};
+
+export type ErrorCount = {
+  key: string;
+  // Of places only.
+  where?: ErrorWhere;
+  count: number;
+  visitors: number;
+};
+
+export type ErrorBreakdown = { rows: ErrorCount[]; more: number };
+
+// One script error, by its message.
+export type ErrorDetail = {
+  count: number;
+  visitors: number;
+  sessions: number;
+  // Visitors with a page view in the same span, and the share of them that
+  // got the error.
+  viewers: number;
+  share: number | null;
+  first: string | null;
+  last: string | null;
+  places: ErrorBreakdown;
+  pages: ErrorBreakdown;
+  clients: ErrorBreakdown;
+  classes: ErrorBreakdown;
+  recent: {
+    t: string;
+    addr: string;
+    key: string;
+    class: ClassKey;
+    client: string;
+    page: string;
+    where: ErrorWhere;
+  }[];
+  detail_since: string | null;
 };
 
 export type Log = {
@@ -557,6 +609,8 @@ export const api = {
     signal?: AbortSignal,
     from?: number,
   ) => dash<Log>("log", s, { ...f, cursor, from }, signal),
+  error: (s: Scope, key: string, signal?: AbortSignal) =>
+    dash<ErrorDetail>("error", s, { key }, signal),
   domain: (s: Scope, signal?: AbortSignal) =>
     dash<Domain>("domain", s, {}, signal),
 };

@@ -68,7 +68,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h, ok := map[string]func(http.ResponseWriter, *http.Request, *query){
 		"overview": s.handleOverview, "noteworthy": s.handleNoteworthy, "classes": s.handleClasses,
 		"list": s.handleList, "status": s.handleStatus, "clients": s.handleClients, "visitors": s.handleVisitors,
-		"visitor": s.handleVisitor, "log": s.handleLog, "domain": s.handleDomain,
+		"visitor": s.handleVisitor, "log": s.handleLog, "domain": s.handleDomain, "error": s.handleError,
 	}[name]
 	if !ok {
 		apix.Error(w, http.StatusNotFound, "no such endpoint")
