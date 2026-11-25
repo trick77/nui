@@ -255,6 +255,11 @@ func alerts(site string) map[string]string { return map[string]string{"site": si
 // hasAlert checks an alerts answer for an alert of kind on key in state whose last message was sent (the
 // simulator's recording channel takes every one).
 func hasAlert(kind, key, state string) func(map[string]any) error {
+	return alertWith(kind, key, state, nil)
+}
+
+// alertWith is hasAlert, then check on the alert.
+func alertWith(kind, key, state string, check func(map[string]any) error) func(map[string]any) error {
 	return func(body map[string]any) error {
 		var seen []string
 		for _, a := range items(body, "alerts") {
@@ -264,6 +269,9 @@ func hasAlert(kind, key, state string) func(map[string]any) error {
 			}
 			if d, _ := a["delivery"].(map[string]any); d["state"] != "sent" {
 				return fmt.Errorf("%s %q %s delivered %v", kind, key, state, d)
+			}
+			if check != nil {
+				return check(a)
 			}
 			return nil
 		}
@@ -455,8 +463,17 @@ func expectDeploy(w *World, _ *Scenario) []Expectation {
 			}},
 		{Says: "an error the browser hides says so, without a place", Endpoint: "error",
 			Params: params(s, "7d", "key", MaskedError), Check: errorAt("withheld", "")},
-		{Says: "an alert reports the release's script error once, and it was sent", Endpoint: "alerts",
-			Params: alerts(s), Check: hasAlert("error.new", DeployError, "once")},
+		{Says: "an alert reports the release's script error once, its place, and leads to its rows in the log",
+			Endpoint: "alerts", Params: alerts(s), Check: alertWith("error.new", DeployError, "once",
+				func(a map[string]any) error {
+					tg, _ := a["target"].(map[string]any)
+					f, _ := tg["filter"].(map[string]any)
+					if tg["panel"] != "log" || f["kind"] != "js_error" || f["name"] != DeployError ||
+						!strings.Contains(fmt.Sprint(a["detail"]), "/assets/index-C4v1rT2s.js:1:48113") {
+						return fmt.Errorf("target %v, detail %v", tg, a["detail"])
+					}
+					return nil
+				})},
 		{Says: "the status breakdown has 5xx answers", Endpoint: "status", Params: params(s, "7d"),
 			Check: func(b map[string]any) error {
 				for _, r := range items(b, "rows") {

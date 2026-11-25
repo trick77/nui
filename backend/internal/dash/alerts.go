@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/trick77/trakk/backend/internal/alert"
@@ -25,6 +26,33 @@ func (s *Server) Findings(ctx context.Context, site *sites.Site, now time.Time, 
 	q := &query{site: site, rng: "24h", loc: time.UTC, tz: "UTC", aud: "all", cmp: "prev", p: hoursPeriod(now, time.UTC)}
 	in, _, err := s.briefingInputWith(ctx, q, th)
 	return in.Facts, err
+}
+
+// ScriptError is what a new script error's alert says beside its message: where it comes from and whom it hit, over
+// the window Findings read it in. Raw only, a day per statement (errorDetail); never its stack.
+type ScriptError struct {
+	// Origins are its places' origins, the most frequent first; empty when its events are gone.
+	Origins []string
+	// Place is its most frequent place ("own /assets/index.js:1:48"), Type its error type, "" for none.
+	Place, Type string
+	// Visitors it hit, Viewers who saw a page meanwhile, Share the one of the other in percent (nil without viewers).
+	Visitors, Viewers int64
+	Share             *float64
+}
+
+// ScriptErrorOf reads a script error of a site by its message, over the closed hours of the 24 before now.
+func (s *Server) ScriptErrorOf(ctx context.Context, site *sites.Site, key string, now time.Time) (ScriptError, error) {
+	q := &query{site: site, rng: "24h", loc: time.UTC, tz: "UTC", aud: "all", cmp: "prev", p: hoursPeriod(now, time.UTC)}
+	w := closedPart(q.p.win)
+	d, err := s.errorDetail(ctx, q, key, ms(w.From), ms(w.End))
+	if err != nil {
+		return ScriptError{}, err
+	}
+	out := ScriptError{Origins: d.Origins, Type: d.Type, Visitors: d.Visitors, Viewers: d.Viewers, Share: d.Share}
+	if rows := d.Places.Rows; len(rows) > 0 && rows[0].Where != nil {
+		out.Place = strings.TrimSpace(rows[0].Where.Origin + " " + rows[0].Where.Place)
+	}
+	return out, nil
 }
 
 // LastSeen is when each source of a site last delivered, after a restart too (the hourly counters, not this

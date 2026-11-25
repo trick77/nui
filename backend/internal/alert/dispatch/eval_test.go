@@ -201,6 +201,58 @@ func TestEvalWatchFindings(t *testing.T) {
 	}
 }
 
+// error.new: visitors beside min, an extension's error left out by default, the place and share in the detail, the
+// log's own rows as the target; a server error by its endpoint, never filtered by origin.
+func TestEvalErrors(t *testing.T) {
+	r := newEvalRig(t)
+	jsErr := func(msg, src string, visitors ...int) {
+		for _, v := range visitors {
+			r.requests(r.web, 3*time.Hour, 1, "192.0.2.9", func(e *store.Event) {
+				e.Source, e.Kind, e.Name, e.UA, e.Visitor = "browser", "js_error", msg, "Mozilla/5.0", fmt.Sprint("v", v)
+				e.Props = `{"p":{"src":"` + src + `","line":1,"col":7,"type":"TypeError","stack":["at x (a.js:1:7)"]}}`
+			})
+			r.requests(r.web, 3*time.Hour, 1, "192.0.2.9", func(e *store.Event) {
+				e.Source, e.Kind, e.UA, e.Visitor = "browser", "page_view", "Mozilla/5.0", fmt.Sprint("v", v)
+			})
+		}
+	}
+	jsErr("TypeError: own *x*", "https://example.com/assets/a.js", 1, 2)
+	jsErr("TypeError: ext", "chrome-extension://abc/content.js", 3, 4, 5)
+	jsErr("TypeError: lone", "https://example.com/assets/a.js", 6)
+	r.requests(r.web, 2*time.Hour, 3, "192.0.2.20", func(e *store.Event) { e.Status, e.Template = 502, "GET /api/x" })
+	v, c := r.eval(`{"name": "def", "on": "error.new"}, {"name": "two", "on": "error.new", "visitors": 2},
+		{"name": "ext", "on": "error.new", "origins": ["extension"]}`, time.Time{}, nil)
+	occ, _ := r.occ(v, c.Rules[0], r.web)
+	byKey := map[string]alert.Occurrence{}
+	for _, o := range occ {
+		byKey[o.Key] = o
+	}
+	if _, ok := byKey["TypeError: ext"]; ok || len(occ) != 3 {
+		t.Fatalf("default origins: %s", keys(occ))
+	}
+	own := byKey["TypeError: own *x*"]
+	if own.Target.Panel != "log" || own.Target.Filter["kind"] != "js_error" || own.Target.Filter["name"] != "TypeError: own *x*" ||
+		!strings.Contains(own.Detail, "TypeError at own /assets/a.js:1:7") || !strings.Contains(own.Detail, "2 visitors") ||
+		!strings.Contains(own.Detail, "% of 6 who saw a page") || strings.Contains(own.Detail, "at x (") ||
+		strings.Contains(own.Text, "*") {
+		t.Errorf("own %+v", own)
+	}
+	srv := byKey["GET /api/x"]
+	if srv.Target.Filter["path"] != "GET /api/x" || srv.Target.Filter["status"] != "5xx" || srv.Detail != "" {
+		t.Errorf("server %+v", srv)
+	}
+	if occ, _ := r.occ(v, c.Rules[1], r.web); keys(occ) != "TypeError: own *x*" && keys(occ) != "TypeError: own *x*,GET /api/x" {
+		t.Errorf("two visitors: %s", keys(occ))
+	}
+	if occ, _ := r.occ(v, c.Rules[2], r.web); keys(occ) != "TypeError: ext,GET /api/x" &&
+		keys(occ) != "GET /api/x,TypeError: ext" {
+		t.Errorf("extension: %s", keys(occ))
+	}
+	if len(v.errors) != 3 {
+		t.Errorf("%d script errors looked at, want each new one once", len(v.errors))
+	}
+}
+
 // The loosest thresholds per site: a rule loosens only the sites it selects.
 func TestLoosen(t *testing.T) {
 	r := newEvalRig(t)

@@ -389,6 +389,26 @@ func TestJobs(t *testing.T) {
 	}
 }
 
+// A new error's message links to its rows in the dashboard's log, its message encoded in the link.
+func TestLogLink(t *testing.T) {
+	r := newRig(t, `{`+ops+`, "rules": [{"name": "errs", "on": "error.new"}]}`)
+	r.step(0)
+	r.src.occ["errs"] = []alert.Occurrence{{Key: "TypeError: a b", Text: "New error: TypeError: a b",
+		Target: &alert.Target{Panel: "log", Filter: map[string]string{"kind": "js_error", "name": "TypeError: a b"}}}}
+	r.step(time.Hour)
+	msgs := r.rec.Messages()
+	want := "https://trakk.example.com/dashboard/log?kind=js_error&name=TypeError%3A+a+b&range=24h&site=example.com"
+	if len(msgs) != 1 || !strings.Contains(msgs[0].Body, want) {
+		t.Fatalf("messages %+v", msgs)
+	}
+	if l := r.e.logLink(&store.Alert{SiteID: r.site, Panel: "errors"}); l != "" {
+		t.Errorf("no log target: %q", l)
+	}
+	if l := r.e.logLink(&store.Alert{SiteID: 0, Panel: "log"}); l != "" {
+		t.Errorf("the instance: %q", l)
+	}
+}
+
 func TestTest(t *testing.T) {
 	c := alert.Parse([]byte(`{"channels": {"a": "ntfy://ntfy.example.com/t", "b": "gotify://g.example.com/t"}}`),
 		alert.Known{})

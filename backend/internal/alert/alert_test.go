@@ -70,6 +70,15 @@ func TestParse_Good(t *testing.T) {
 	if r := byName["quiet"]; len(r.Channels) != 0 || r.P.Drop != 80 || r.P.Baseline != "days" {
 		t.Errorf("quiet %+v", r)
 	}
+	if r := byName["new-errors"]; r.P.Visitors != 1 || !slices.Equal(r.P.Origins, DefaultOrigins) ||
+		slices.Contains(r.P.Origins, OriginExtension) {
+		t.Errorf("error defaults %+v", r.P)
+	}
+	e := Parse([]byte(`{"rules":[{"name":"e","on":"error.new","visitors":3,"origins":["own","extension"]}]}`), known)
+	if len(e.Faults) > 0 || e.Rules[0].P.Visitors != 3 || !slices.Equal(e.Rules[0].P.Origins, []string{"own", "extension"}) ||
+		e.Rules[0].Sig == byName["new-errors"].Sig {
+		t.Errorf("error parameters %v %+v", e.Faults, e.Rules)
+	}
 	// The defaults: Noteworthy's thresholds.
 	d := Parse([]byte(`{"rules":[{"name":"a","on":"spike.net"},{"name":"b","on":"trend.failed"}]}`), known)
 	if d.Rules[0].P.Min != 200 || d.Rules[0].P.Share != 40 || d.Rules[1].P.Min != 100 || d.Rules[1].P.Change != 5 ||
@@ -118,6 +127,12 @@ func TestParse_Faults(t *testing.T) {
 		"source":           {`{"rules": [{"name": "a", "on": "source.silent", "after": "1h", "source": "mail"}]}`, "source is"},
 		"baseline":         {`{"rules": [{"name": "a", "on": "level.p95", "window": "1h", "min": 1, "baseline": "year"}]}`, "baseline"},
 		"jobs":             {`{"rules": [{"name": "a", "on": "job.failed", "jobs": ["backup"]}]}`, `job "backup"`},
+		"visitors":         {`{"rules": [{"name": "a", "on": "error.new", "visitors": 0}]}`, "visitors 0"},
+		"visitors whole":   {`{"rules": [{"name": "a", "on": "error.new", "visitors": 2.5}]}`, "no whole number"},
+		"visitors foreign": {`{"rules": [{"name": "a", "on": "probe.new", "visitors": 2}]}`, "takes no visitors"},
+		"origin":           {`{"rules": [{"name": "a", "on": "error.new", "origins": ["mine"]}]}`, `origin "mine"`},
+		"no origin":        {`{"rules": [{"name": "a", "on": "error.new", "origins": []}]}`, "at least one"},
+		"origins foreign":  {`{"rules": [{"name": "a", "on": "failure.new", "origins": ["own"]}]}`, "takes no origins"},
 	} {
 		c := Parse([]byte(tc.file), known)
 		joined := strings.Join(c.Faults, "\n")

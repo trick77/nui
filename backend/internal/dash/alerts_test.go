@@ -129,6 +129,62 @@ func TestDomainNotify(t *testing.T) {
 	}
 }
 
+// A new script error as its alert says it: origins, place, type and share over the closed hours of the last day,
+// never its stack; each statement within a day, on an index.
+func TestScriptErrorOf(t *testing.T) {
+	r := newRig(t, 0, 0, nil)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	at := r.end.Add(-3 * time.Hour).UnixMilli()
+	var evs []store.Event
+	for i, v := range []string{"v1", "v2", "v1", "v3", "v4"} {
+		e := store.Event{SiteID: site.ID, TS: at + int64(i)*1000, Source: "browser", Kind: "page_view", Visitor: v,
+			IP: "192.0.2.70", IPKey: "192.0.2.70", UA: "Mozilla/5.0", Template: "/", Path: "/"}
+		if i < 3 {
+			e.Kind, e.Name = "js_error", "TypeError: a"
+			e.Props = `{"p":{"src":"https://` + feedSite + `/assets/a.js","line":3,"col":9,"type":"TypeError",
+				"stack":["at f (a.js:3:9)"]}}`
+		}
+		evs = append(evs, e)
+	}
+	if err := r.s.DB.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	seen := map[string][]any{}
+	traceSQL = func(q string, args []any) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen[q] = append([]any(nil), args...)
+	}
+	t.Cleanup(func() { traceSQL = nil })
+	now := r.end.Add(time.Minute)
+	e, err := r.s.ScriptErrorOf(t.Context(), site, "TypeError: a", now)
+	if err != nil || !slices.Equal(e.Origins, []string{"own"}) || e.Place != "own /assets/a.js:3:9" ||
+		e.Type != "TypeError" || e.Visitors != 2 || e.Viewers != 2 || e.Share == nil || *e.Share != 100 {
+		t.Errorf("script error %+v %v", e, err)
+	}
+	if e, err := r.s.ScriptErrorOf(t.Context(), site, "no such error", now); err != nil || len(e.Origins) != 0 ||
+		e.Share != nil {
+		t.Errorf("none: %+v %v", e, err)
+	}
+	traceSQL = nil
+	if len(seen) < 2 {
+		t.Fatalf("%d statements", len(seen))
+	}
+	for q, args := range seen {
+		plan, err := plancheck.Explain(t.Context(), r.s.DB.DB, q, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p := plancheck.Problem(q, plan); p != "" {
+			t.Errorf("%s: %s", p, strings.Join(strings.Fields(q), " "))
+		}
+		if lo, hi := args[1].(int64), args[2].(int64); hi-lo > dayMS {
+			t.Errorf("a statement over %d ms: %s", hi-lo, strings.Join(strings.Fields(q), " "))
+		}
+	}
+}
+
 // The reads the alert rules make: Noteworthy's own facts at the default thresholds, more at looser ones, the levels
 // with their comparison, the collector's counts and the sources' last delivery. Every statement on an index.
 func TestRuleReads(t *testing.T) {

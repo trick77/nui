@@ -27,6 +27,9 @@ type Eval struct {
 	// facts are this pass's findings by site (factsAt the pass).
 	facts   map[int64][]insight.Fact
 	factsAt time.Time
+	// errors are this pass's script errors looked at, by site and message (errorsAt the pass).
+	errors   map[string]dash.ScriptError
+	errorsAt time.Time
 }
 
 // NewEval reads through d, a dashboard server of its own: its clock becomes the step's. started is when the process
@@ -109,7 +112,16 @@ func (v *Eval) Occurrences(ctx context.Context, now time.Time, r alert.Rule, sit
 			return nil, true, nil
 		}
 		fs, err := v.findings(ctx, now, site)
-		return factOccurrences(r, fs), err == nil, err
+		if err != nil {
+			return nil, false, err
+		}
+		occ := factOccurrences(r, fs)
+		if r.Spec.ID == "error.new" {
+			if occ, err = v.scriptErrors(ctx, now, r, site, fs, occ); err != nil {
+				return nil, false, err
+			}
+		}
+		return occ, true, nil
 	case "source":
 		return v.silent(ctx, now, r, site)
 	case "collector":
@@ -197,6 +209,9 @@ func factOccurrences(r alert.Rule, fs []insight.Fact) []alert.Occurrence {
 			match = math.Abs(f.Change) >= p.Change && dir
 		case "trend.visitors", "trend.calls":
 			match = f.Value >= p.Min && math.Abs(f.Change) >= p.Change && dir
+		case "error.new":
+			// 1, the default, is every error found: one an event without a visitor id counts none for.
+			match = f.Value >= p.Min && (p.Visitors <= 1 || f.Visitors >= p.Visitors)
 		default:
 			match = f.Value >= p.Min
 		}
@@ -220,9 +235,89 @@ func factOccurrences(r alert.Rule, fs []insight.Fact) []alert.Occurrence {
 		if strings.HasPrefix(r.Spec.ID, "spike.") {
 			o.Text = alert.Defuse("A spike of requests from "+f.Text, 200)
 		}
+		if r.Spec.ID == "error.new" {
+			o.Target = errorTarget(key, f.Server)
+		}
 		out = append(out, o)
 	}
 	return out
+}
+
+// errorTarget is a new error's row in the log, its every occurrence: a script error by its message (the log's exact
+// filter), a server error by its endpoint among the 5xx answers.
+func errorTarget(key string, server bool) *alert.Target {
+	if server {
+		return &alert.Target{Panel: "log", Filter: map[string]string{"kind": "server", "status": "5xx", "path": key}}
+	}
+	return &alert.Target{Panel: "log", Filter: map[string]string{"kind": "js_error", "name": key}}
+}
+
+// scriptErrors keeps the new script errors of occ that come from one of rule r's origins and says, for each kept, its
+// place, type and the share of visitors it hit: one look at its raw events per key (at most ten new keys a site and
+// pass), the same key looked at once a pass whatever the rules. A server error is kept as it is.
+func (v *Eval) scriptErrors(ctx context.Context, now time.Time, r alert.Rule, site *sites.Site,
+	fs []insight.Fact, occ []alert.Occurrence) ([]alert.Occurrence, error) {
+	server := map[string]bool{}
+	for _, f := range fs {
+		if k, ok := strings.CutPrefix(f.ID, factPrefix["error.new"]); ok {
+			server[k] = f.Server
+		}
+	}
+	var out []alert.Occurrence
+	for _, o := range occ {
+		if server[o.Key] {
+			out = append(out, o)
+			continue
+		}
+		e, err := v.scriptError(ctx, now, site, o.Key)
+		if err != nil {
+			return nil, err
+		}
+		// Its events gone meanwhile: no origin known, nothing to filter by.
+		if len(e.Origins) > 0 && !slices.ContainsFunc(e.Origins, func(x string) bool {
+			return slices.Contains(r.P.Origins, x)
+		}) {
+			continue
+		}
+		o.Detail = alert.Defuse(scriptErrorText(e), 300)
+		out = append(out, o)
+	}
+	return out, nil
+}
+
+// scriptError is a site's script error as read this pass.
+func (v *Eval) scriptError(ctx context.Context, now time.Time, site *sites.Site, key string) (dash.ScriptError, error) {
+	if !now.Equal(v.errorsAt) {
+		v.errors, v.errorsAt = map[string]dash.ScriptError{}, now
+	}
+	k := strconv.FormatInt(site.ID, 10) + "\x00" + key
+	if e, ok := v.errors[k]; ok {
+		return e, nil
+	}
+	e, err := v.d.ScriptErrorOf(ctx, site, key, now)
+	if err == nil {
+		v.errors[k] = e
+	}
+	return e, err
+}
+
+// scriptErrorText is a script error's second line: its type and place, and whom it hit. Foreign text all of it: the
+// caller defuses it.
+func scriptErrorText(e dash.ScriptError) string {
+	var parts []string
+	if what := strings.TrimSpace(e.Type + " at " + e.Place); e.Place != "" {
+		parts = append(parts, strings.TrimPrefix(what, "at "))
+	} else if e.Type != "" {
+		parts = append(parts, e.Type)
+	}
+	switch {
+	case e.Share != nil:
+		parts = append(parts, fmt.Sprintf("%d visitors, %s %% of %d who saw a page", e.Visitors, figure(*e.Share),
+			e.Viewers))
+	case e.Visitors > 0:
+		parts = append(parts, fmt.Sprintf("%d visitors", e.Visitors))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func collectorOccurrence(r alert.Rule, n int64) []alert.Occurrence {

@@ -26,8 +26,10 @@ type Fact struct {
 	// What an alert rule filters by, beside the id (internal: neither the model nor the briefing cache sees them):
 	// Value the figure (a count, a tile's value), Change a trend's percent or points, Share the part of all requests
 	// (0 to 1) and Growth the factor over the comparison (+Inf from none) of a spike, Volume the calls a failed share
-	// is of in the smaller of both periods.
-	Value, Change, Share, Growth, Volume float64 `json:"-"`
+	// is of in the smaller of both periods, Visitors the distinct visitors (addresses on the server) a new error hit.
+	Value, Change, Share, Growth, Volume, Visitors float64 `json:"-"`
+	// Server: a new error the server answered (5xx, its key the endpoint), not the script's.
+	Server bool `json:"-"`
 }
 
 // Target is where a finding's row jumps to.

@@ -290,7 +290,8 @@ jobs failing, a figure leaving its usual level. The dashboard lists them (`GET /
 
 | `on` | Parameters (default) |
 |---|---|
-| `error.new`, `failure.new`, `probe.new`, `endpoint.new`, `referrer.new` | `min` (1, 3, 3, 5, 2) |
+| `error.new` | `min` occurrences (1), `visitors` (1; a server error: addresses), `origins` of a script error, one of its places enough: `own`, `other`, `named`, `unknown`, `withheld`, `extension` (all but `extension`; a server error always counts) |
+| `failure.new`, `probe.new`, `endpoint.new`, `referrer.new` | `min` (3, 3, 5, 2) |
 | `spike.addr`, `spike.net` | `min` requests (100, 200), `share` % of all (25, 40), `factor` over the 24 h before (3) |
 | `trend.visitors`, `trend.calls`, `trend.failed`, `trend.auto_share` | `min` (20 visitors, 100 calls, 100 calls in both periods; none for `auto_share`), `change` (20 %, 20 %, 5 pp, 5 pp), `direction` (`up`, `down`, `both`) |
 | `source.silent` | `after` (required), `source` (`browser`, `server`; both) |
@@ -301,7 +302,9 @@ jobs failing, a figure leaving its usual level. The dashboard lists them (`GET /
 
 The traffic triggers are Noteworthy's findings over the last 24 hours against the 24 before, checked when an hour
 closes; the others every five minutes. Each key is reported when it enters the set (a new error, a spiking
-address) and closed in silence when it leaves; a state is reported when it opens and when it clears. A key back
+address) and closed in silence when it leaves; a state is reported when it opens and when it clears. A new script
+error's message says its type and place and the share of visitors it hit, and links to its rows in the log (a
+hidden "Script error." counts only from 3 visitors, as in Noteworthy). A key back
 within `cooldown` of leaving stays quiet. A rule's first pass, a changed threshold under the same name and a pass
 after six hours without one record what is there without sending it. A level's `factor` and `drop` compare with
 the median of the same window at the same time of day; with fewer than 3 days to compare it judges nothing, and
