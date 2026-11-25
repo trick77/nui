@@ -1413,11 +1413,11 @@ describe("capture", () => {
         "at <anonymous>",
       ],
     });
-    const webkit = {
+    const webkit = Object.assign(new Error(), {
       name: "SecurityError",
       stack:
         "pushState@[native code]\n@https://x.example.com/app.js?v=3:6:53\nnot a@frame",
-    };
+    });
     expect(errorProps(webkit)).toEqual({
       type: "SecurityError",
       stack: ["pushState@[native code]", "@https://x.example.com/app.js:6:53"],
@@ -1425,15 +1425,13 @@ describe("capture", () => {
     // What is no error, and one whose getters throw.
     for (const v of [null, undefined, "x", 3, {}, { stack: 7, name: 1 }])
       expect(errorProps(v)).toEqual({});
-    const trap = {
-      get name() {
-        throw new Error("no");
-      },
-      get stack() {
-        throw new Error("no");
-      },
+    const get = () => {
+      throw new Error("no");
     };
-    expect(errorProps(trap)).toEqual({});
+    for (const v of [{}, new Error()]) {
+      Object.defineProperties(v, { name: { get }, stack: { get } });
+      expect(errorProps(v)).toEqual({});
+    }
     // Bounded, whatever the page throws.
     const deep = {
       stack: ("    at f" + "x".repeat(5000) + " (u:1:1)\n").repeat(50),
@@ -1441,6 +1439,33 @@ describe("capture", () => {
     const s = errorProps(deep).stack as string[];
     expect(s.length).toBeLessThanOrEqual(LIMITS.stackFrames);
     for (const f of s) expect(utf8Len(f)).toBeLessThanOrEqual(160);
+  });
+
+  it("takes a type from an error only, and only a class's name", () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const Foreign = (frame.contentWindow as typeof win).DOMException;
+    frame.remove();
+    expect(Foreign).not.toBe(DOMException);
+    const type = (v: object) =>
+      errorProps(Object.defineProperty(v, "stack", { value: undefined })).type;
+    const proto = Object.create(null, { name: { value: "RangeError" } });
+    for (const [v, want] of [
+      [new TypeError("m"), "TypeError"],
+      [new DOMException("m", "AbortError"), "AbortError"],
+      // Another frame's.
+      [new Foreign("m", "SecurityError"), "SecurityError"],
+      [Object.setPrototypeOf(new Error("m"), proto), "RangeError"],
+      // An ES5 subclass's.
+      [Object.create(Error.prototype, { name: { value: "Old" } }), "Old"],
+      [{ name: "Alice", message: "m" }, undefined],
+      [new File([], "Alice"), undefined],
+      [{ [Symbol.toStringTag]: "Person", name: "Alice" }, undefined],
+      ...["Alice Example", "me@example.com", "a-b", "", "x".repeat(65), 3].map(
+        (name) => [Object.assign(new Error("m"), { name }), undefined],
+      ),
+    ] as [object, string | undefined][])
+      expect(type(v)).toBe(want);
   });
 
   describe("a stack's frames", () => {
@@ -1663,11 +1688,8 @@ describe("capture", () => {
       // Under its name, the name it had when it was made, or none.
       for (const head of ["E: ", "Error: ", ""])
         expect(
-          errorProps(
-            { name: "E", message, stack: head + message + "\n" + frame },
-            own,
-          ),
-        ).toEqual({ type: "E", ...want });
+          errorProps({ message, stack: head + message + "\n" + frame }, own),
+        ).toEqual(want);
       // A message longer than what is read of a stack.
       const long = message.repeat(1000);
       expect(
@@ -1808,7 +1830,10 @@ describe("capture", () => {
     const at = (file: string) =>
       `f@[native code]\ng@https://x.example.com/${file}:7:9`;
     const rej = new Event("unhandledrejection") as Event & { reason: unknown };
-    rej.reason = { name: "AbortError", message: "gone", stack: at("a.js?q=1") };
+    rej.reason = Object.assign(new Error("gone"), {
+      name: "AbortError",
+      stack: at("a.js?q=1"),
+    });
     window.dispatchEvent(rej);
     window.dispatchEvent(
       new ErrorEvent("error", {
@@ -1854,6 +1879,61 @@ describe("capture", () => {
     expect(e.p.stack).toBeUndefined();
   });
 
+  it("reads nothing of an error it would not send", async () => {
+    const t = boot();
+    let read: string[] = [];
+    const error = (message: string) =>
+      Object.defineProperties(
+        new Error(),
+        Object.fromEntries(
+          Object.entries({ name: "E", message, stack: "f@u:1:2" }).map(
+            ([k, v]) => [k, { get: () => (read.push(k), v) }],
+          ),
+        ),
+      );
+    const fire = (m: string) =>
+      window.dispatchEvent(
+        new ErrorEvent("error", { message: m, error: error(m) }),
+      );
+    const reject = (m: string) =>
+      window.dispatchEvent(
+        Object.assign(new Event("unhandledrejection"), { reason: error(m) }),
+      );
+    const reads = (f: () => void) => {
+      read = [];
+      f();
+      return read;
+    };
+    const stacks = (f: () => void) =>
+      reads(f).filter((k) => k === "stack").length;
+    const times = (n: number, f: (m: string) => void) => () => {
+      for (let i = 0; i < n; i++) f("same");
+    };
+    expect(stacks(times(10, fire))).toBe(LIMITS.sameError);
+    expect(stacks(times(10, reject))).toBe(LIMITS.sameError);
+    // Too many kinds. A rejection's message says which it is.
+    for (let i = 0; i < LIMITS.errorKinds; i++) fire("E" + i);
+    expect(t.state().errorKeys).toBe(LIMITS.errorKinds);
+    expect(reads(() => fire("another"))).toEqual([]);
+    expect(reads(() => reject("another"))).toEqual(["message"]);
+    const both = () => {
+      fire("E1");
+      reject("E1");
+    };
+    expect(reads(both)).not.toEqual([]);
+    // Too many events.
+    while (!t.state().dropped) t.event("x");
+    expect(reads(both)).toEqual([]);
+    // Switched off.
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(reads(both)).not.toEqual([]);
+    fetchMock.mockImplementation(() => reply(403));
+    t.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.state().disabled).toBe(true);
+    expect(reads(both)).toEqual([]);
+  });
+
   // WebKit and Chromium hide an error that comes out of the wrapped history
   // call: the window's error event is their stand-in.
   describe("what a wrapped history call throws", () => {
@@ -1862,13 +1942,13 @@ describe("capture", () => {
       window.dispatchEvent(
         new ErrorEvent("error", { message: "Script error.", ...init }),
       );
-    const webkit = (message: string) => ({
-      name: "SecurityError",
-      message,
-      stack:
-        "pushState@[native code]\n@https://collector.example.com/trakk.js:2:9998\n" +
-        "later@https://x.example.com/app.js?token=1:7:53\nnext@https://x.example.com/b.js:1:1",
-    });
+    const webkit = (message: string) =>
+      Object.assign(new Error(message), {
+        name: "SecurityError",
+        stack:
+          "pushState@[native code]\n@https://collector.example.com/trakk.js:2:9998\n" +
+          "later@https://x.example.com/app.js?token=1:7:53\nnext@https://x.example.com/b.js:1:1",
+      });
     const reported = (message: string) => ({
       msg: "SecurityError: " + message,
       type: "SecurityError",
@@ -1947,6 +2027,23 @@ describe("capture", () => {
       ]);
     });
 
+    it("is too old soon, though its timer is held back", async () => {
+      const t = page(webkit("old"));
+      // As in a hidden tab: not fired while the clock moves on.
+      vi.spyOn(globalThis, "setTimeout").mockImplementationOnce(
+        () => 1 as unknown as ReturnType<typeof setTimeout>,
+      );
+      const began = Date.now();
+      for (const age of [0, 50, 51, 900, -1]) {
+        vi.setSystemTime(began);
+        call();
+        vi.setSystemTime(began + age);
+        hidden();
+      }
+      const old = reported("old");
+      expect(await errors(t)).toEqual([old, old, HIDDEN, HIDDEN, HIDDEN]);
+    });
+
     it("is used once, the latest of several", async () => {
       const v = webkit("first");
       const t = page(v);
@@ -1960,7 +2057,7 @@ describe("capture", () => {
 
     it("is not read unless it is reported", () => {
       const read = vi.fn();
-      page(
+      const t = page(
         new Proxy(
           {},
           { get: (_, k) => read(k), has: (_, k) => !read("has", k) },
@@ -1969,6 +2066,26 @@ describe("capture", () => {
       call();
       vi.advanceTimersByTime(0);
       expect(read).not.toHaveBeenCalled();
+      // Nor once there are too many events.
+      while (!t.state().dropped) t.event("x");
+      call();
+      hidden();
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    it("has its stack read no more often than it is reported", async () => {
+      const v = webkit("again");
+      const stack = v.stack;
+      const read = vi.fn(() => stack);
+      const t = page(Object.defineProperty(v, "stack", { get: read }));
+      for (let i = 0; i < 10; i++) {
+        call();
+        hidden();
+      }
+      expect(await errors(t)).toEqual(
+        Array(LIMITS.sameError).fill(reported("again")),
+      );
+      expect(read).toHaveBeenCalledTimes(LIMITS.sameError);
     });
 
     it("leaves a readable error as the event has it, and is used up by it", async () => {
@@ -2002,9 +2119,10 @@ describe("capture", () => {
 
     it("is the caller's where the browser blames this script for it", async () => {
       const t = page(undefined);
+      let n = 0;
       const fire = (filename: string, stack?: string) =>
         hidden({
-          message: "SecurityError: x",
+          message: "SecurityError: " + n++,
           filename,
           lineno: 4,
           colno: 10518,
@@ -2014,21 +2132,27 @@ describe("capture", () => {
       const ours = `pushState@[native code]\n@${SRC}?v=2:4:10480`;
       const theirs = "global code@https://x.example.com/app.js:6:18";
       fire(SRC + "?v=2", ours + "\n" + theirs);
+      // No place rather than this script's: no frame is the page's, or none is
+      // understood, or there is no stack.
       fire(SRC, ours);
+      fire(SRC, ours + "\nf@https://x.example.com/a b.js:5:6\n" + theirs);
+      fire(SRC);
       // Any other file's error is where the event says.
       fire("https://x.example.com/b.js", theirs);
       expect(
         (await errors(t)).map(({ src, line, col }) => [src, line, col]),
       ).toEqual([
         ["https://x.example.com/app.js", 6, 18],
-        [SRC, 4, 10518],
+        ["", 0, 0],
+        ["", 0, 0],
+        ["", 0, 0],
         ["https://x.example.com/b.js", 4, 10518],
       ]);
     });
 
     it("can be any value, its getters throwing too", async () => {
       const trap = Object.defineProperties(
-        {},
+        new Error(),
         Object.fromEntries(
           ["name", "message", "stack"].map((k) => [
             k,
@@ -2050,9 +2174,11 @@ describe("capture", () => {
         [Symbol("s"), { msg: "Symbol(s)" }],
         [Object.create(null), { msg: "Error" }],
         [
-          { name: "E", message: "" },
+          Object.assign(new Error(), { name: "E", stack: undefined }),
           { msg: "E", type: "E" },
         ],
+        // No error: its name is data.
+        [{ name: "Alice", message: "" }, { msg: "Error" }],
         [{ name: 3, message: "m" }, { msg: "m" }],
         [trap, { msg: "Error" }],
       ] as [unknown, object][]) {
@@ -2067,10 +2193,11 @@ describe("capture", () => {
     });
 
     it("has no place where no frame is the page's", async () => {
-      const t = page({
-        ...webkit("x"),
-        stack: "pushState@[native code]\n@" + SRC + ":2:9998",
-      });
+      const t = page(
+        Object.assign(webkit("x"), {
+          stack: "pushState@[native code]\n@" + SRC + ":2:9998",
+        }),
+      );
       call();
       hidden();
       expect(await errors(t)).toEqual([

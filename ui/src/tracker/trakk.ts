@@ -78,6 +78,12 @@ export const LIMITS = {
   // An error's stack: frames, bytes per frame.
   stackFrames: 8,
   frameBytes: 160,
+  // How long a wrapped call's throw may take to the window's error event.
+  // Nothing of the browser's lies between, but the page's finally blocks, its
+  // microtasks (a framework's render) and its own error listeners do: a long
+  // task's 50 ms, not the few an idle page needs. A throw held up longer is
+  // reported as the browser's stand-in, never as another error.
+  errorAgeMs: 50,
 };
 
 // On the product's origin, so namespaced, but never by this product's name
@@ -260,6 +266,25 @@ export function bound(v: unknown, key: string, depth: number): unknown {
   return out;
 }
 
+// A thrown value's type, only where it is an error and its name could be a
+// class's: any other object's name (a file's, a person's) is data. Another
+// frame's error is no instanceof, one built on the prototype alone (an ES5
+// subclass) has no tag. No stack is asked for: reading it makes the browser
+// format it, and this is part of the message a report is counted by.
+const TAG = /^\[object (?:Error|DOMException)\]$/;
+const TYPE = /^[a-z_$][\w$]{0,63}$/i;
+function errorType(v: unknown): string {
+  try {
+    if (v instanceof Error || TAG.test(Object.prototype.toString.call(v))) {
+      const n = (v as Error).name as unknown;
+      if (typeof n === "string" && TYPE.test(n)) return n;
+    }
+  } catch {
+    // no type
+  }
+  return "";
+}
+
 // A thrown value's type and the top of its stack, as far as it has them. It
 // is the page's: any getter may throw. Only lines that are frames: Chromium
 // puts the message first, which would go out twice, unclipped. With own (this
@@ -269,12 +294,9 @@ export function bound(v: unknown, key: string, depth: number): unknown {
 export function errorProps(v: unknown, own?: string): Props {
   const out: Props = {};
   if (!v || typeof v !== "object") return out;
-  const e = v as { name?: unknown; message?: unknown; stack?: unknown };
-  try {
-    if (typeof e.name === "string" && e.name) out.type = clip(e.name, 64);
-  } catch {
-    // no type
-  }
+  const e = v as { message?: unknown; stack?: unknown };
+  const type = errorType(v);
+  if (type) out.type = type;
   try {
     const raw = e.stack;
     if (typeof raw !== "string") return out;
@@ -1373,10 +1395,12 @@ export function start(
   // until its task is over: the value is the page's, and a caught one must
   // not explain a later error. A microtask is too early: listeners and timers
   // run theirs before the exception is reported. One timer is enough however
-  // often a task throws: none fires inside it. The limit: after a caught
-  // throw, another hidden error in that task, or in one already queued ahead
-  // of the timer, takes its text (measured with timers due together).
-  let thrown: [unknown] | undefined;
+  // often a task throws: none fires inside it. A hidden tab's fires up to a
+  // minute late, so what was thrown longer ago than errorAgeMs is ignored
+  // too. The limit: after a caught throw, another hidden error within that
+  // time, in that task or in one that runs ahead of the timer, takes its text
+  // (measured with timers due together).
+  let thrown: [unknown, number] | undefined;
   let thrownTimer: ReturnType<typeof setTimeout> | 0 = 0;
   const keep = (v: unknown) => {
     // First the timer: without one nothing is kept.
@@ -1385,7 +1409,7 @@ export function start(
         thrownTimer = 0;
         thrown = undefined;
       }, 0);
-    thrown = [v];
+    thrown = [v, now()];
   };
   for (const m of ["pushState", "replaceState"] as const) {
     try {
@@ -1509,8 +1533,12 @@ export function start(
   // (the table starts over on a navigation), so a page throwing ever new
   // messages cannot grow the table, and a long single-page visit still
   // reports what breaks on its later pages, within a ceiling per document.
-  const jsError = (msg: string, extra: Props) => {
+  // The message is the page's to make and the rest its stack to read (which
+  // the browser then formats, with the page's prepareStackTrace): neither
+  // once it would not be sent.
+  const jsError = (text: () => string, rest: () => Props) => {
     if (disabled || full(now())) return;
+    const msg = text();
     const key = clip(msg, 200);
     const n = errorsSeen.get(key) || 0;
     if (
@@ -1522,7 +1550,7 @@ export function start(
       return;
     if (!n) docErrors++;
     errorsSeen.set(key, n + 1);
-    const p: Props = { msg, ...extra };
+    const p: Props = { msg, ...rest() };
     // Over the props' limit (a long URL): the stack goes, not the message.
     if (fit(p).dropped) delete p.stack;
     record("js_error", p);
@@ -1541,38 +1569,50 @@ export function start(
         if (u) record("resource_error", { url: u });
         return;
       }
-      const at = {
-        src: ev.filename,
-        line: ev.lineno || 0,
-        col: ev.colno || 0,
-      };
+      const src = ev.filename || "";
       // Any error uses up what a wrapped call threw; only a hidden one may
-      // be it.
-      const hid = thrown;
+      // be it, and only one that follows it at once (a clock set back tells
+      // nothing).
+      let hid = thrown;
       thrown = undefined;
-      if (!hid || at.src || at.line || !/^script error\.?$/i.test(ev.message)) {
-        // Out of a wrapped call the event names this script (WebKit, for a
-        // script's top-level code): the place is its caller's.
-        const ours = (at.src || "").replace(/[?#][^]*$/, "") === ownFile;
-        jsError(ev.message || "Error", {
-          ...at,
-          ...errorProps(ev.error, ours ? ownFile : undefined),
-        });
-        return;
-      }
-      const p = errorProps(hid[0], ownFile);
-      let msg = "";
-      guard(() => (msg = said(hid[0])));
-      // As the browsers word it.
-      msg = [p.type, msg].filter(Boolean).join(": ") || "Error";
-      jsError(msg, { ...at, ...p });
+      const age = hid ? now() - hid[1] : -1;
+      if (
+        age < 0 ||
+        age > LIMITS.errorAgeMs ||
+        src ||
+        ev.lineno ||
+        !/^script error\.?$/i.test(ev.message)
+      )
+        hid = undefined;
+      // Out of a wrapped call the event names this script (WebKit, for a
+      // script's top-level code): the place is its caller's, or not known.
+      const ours = hid || src.replace(/[?#][^]*$/, "") === ownFile;
+      jsError(
+        () => {
+          if (!hid) return ev.message || "Error";
+          const v = hid[0];
+          let msg = "";
+          guard(() => (msg = said(v)));
+          // As the browsers word it.
+          return [errorType(v), msg].filter(Boolean).join(": ") || "Error";
+        },
+        () => ({
+          src: ours ? "" : src,
+          line: (!ours && ev.lineno) || 0,
+          col: (!ours && ev.colno) || 0,
+          ...errorProps(hid ? hid[0] : ev.error, ours ? ownFile : undefined),
+        }),
+      );
     },
     true,
   );
   on(win, "unhandledrejection", (e) => {
     const r = (e as PromiseRejectionEvent).reason as unknown;
     if (thrown && thrown[0] === r) thrown = undefined;
-    jsError("Unhandled rejection: " + said(r), errorProps(r, ownFile));
+    jsError(
+      () => "Unhandled rejection: " + said(r),
+      () => errorProps(r, ownFile),
+    );
   });
 
   // Web vitals, from the browser's own observers where it has them.
