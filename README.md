@@ -253,8 +253,9 @@ Trakk creates its database in), at most 30 s per retention round, without lockin
 ### Dashboard API
 
 `/api/dash/*` is the dashboard's own API (a session required). For links into it: the log's `addr` filter takes an
-address or an IPv6 /64 (any other prefix is a 400), its `asn` filter an AS number. Noteworthy shows five findings
-and counts the rest; `findings=all` lists every one.
+address or an IPv6 /64 (any other prefix is a 400), its `asn` filter an AS number, its `name` filter
+an event's exact name (a script error's message). Noteworthy shows five findings and counts the rest; `findings=all`
+lists every one.
 
 ## License
 

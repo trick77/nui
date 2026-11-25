@@ -152,7 +152,7 @@ func TestLargeTable(t *testing.T) {
 		{"classes", long()}, {"status", long()}, {"clients", long()}, {"visitors", long()},
 		{"visitors", long("sort", "refused", "class", "unknown")}, {"visitor", long("key", "203.0.113.5")},
 		{"log", long()}, {"log", long("addr", "203.0.113.5", "status", "4xx")}, {"log", long("path", "/.env")},
-		{"log", long("kind", "request", "asn", "15169")},
+		{"log", long("kind", "request", "asn", "15169")}, {"log", long("kind", "js_error", "name", "Script error.")},
 		{"log", long("endpoint", "POST /mcp whois")}, {"log", long("failure", "HTTP 429", "calls", "1")},
 		{"domain", long()}, {"error", long("key", "Script error.")},
 	}

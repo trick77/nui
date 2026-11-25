@@ -138,7 +138,7 @@ export function ErrorDetail({
         <button
           type="button"
           className="link ml-auto"
-          onClick={() => openLog({ kind: "js_error", path: name })}
+          onClick={() => openLog({ kind: "js_error", name })}
         >
           Every occurrence in the log →
         </button>
@@ -166,10 +166,6 @@ export function ErrorDetail({
 
 function Body({ d, since }: { d: Detail; since: string | null }) {
   const { goPanel } = useDash();
-  // Each origin the places have, the most frequent first.
-  const origins = [
-    ...new Set(d.places.rows.map((r) => r.where?.origin ?? "unknown")),
-  ];
   return (
     <>
       <p className="mt-1.5 mb-0 text-[13px] text-ink-dim">
@@ -190,7 +186,7 @@ function Body({ d, since }: { d: Detail; since: string | null }) {
         ])}
       </p>
       <dl className="mt-3 mb-0 grid gap-2 text-[13px]">
-        {origins.map((o) => (
+        {d.origins.map((o) => (
           <div key={o}>
             <dt className="font-medium">{ORIGIN[o][0]}</dt>
             <dd className="m-0 text-ink-dim">{ORIGIN[o][1]}</dd>

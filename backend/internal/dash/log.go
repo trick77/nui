@@ -71,15 +71,15 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 		}
 		where, args = append(where, "asn = ?"), append(args, n)
 	}
-	// A substring of the template, the raw path or the event name (an error's message is its name): the UI opens
-	// the log from an error row with the error's label.
+	// A substring of the template, the raw path or the event name: the UI opens the log from a server error's row
+	// and from a custom event's with its label.
 	if p := v.Get("path"); p != "" {
 		where = append(where, "(instr(template, ?) > 0 OR instr(path, ?) > 0 OR instr(name, ?) > 0)")
 		args = append(args, p, p, p)
 	}
-	// Exact: an account, an operation, a call's endpoint (a row of the endpoints list), a failure's reason (of the
-	// failures list).
-	for _, f := range []struct{ param, cond string }{{"account", "account = ?"}, {"op", "op = ?"},
+	// Exact: an event's name (a script error's message), an account, an operation, a call's endpoint (a row of the
+	// endpoints list), a failure's reason (of the failures list).
+	for _, f := range []struct{ param, cond string }{{"name", "name = ?"}, {"account", "account = ?"}, {"op", "op = ?"},
 		{"endpoint", callWhere + " AND " + endpointSQL + " = ?"},
 		{"failure", callWhere + " AND " + failedSQL + " AND " + failureSQL + " = ?"}} {
 		if x := v.Get(f.param); x != "" {

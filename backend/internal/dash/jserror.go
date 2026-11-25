@@ -160,6 +160,20 @@ func (t errorTally) top() errorBreakdown {
 	return errorBreakdown{Rows: out[:n], More: len(out) - n}
 }
 
+// origins is every origin a tally of places has, the most frequent first.
+func (t errorTally) origins() []string {
+	n := map[string]int64{}
+	for _, c := range t {
+		n[c.Where.Origin] += c.Count
+	}
+	out := make([]string, 0, len(n))
+	for o := range n {
+		out = append(out, o)
+	}
+	slices.SortFunc(out, func(a, b string) int { return cmp.Or(cmp.Compare(n[b], n[a]), cmp.Compare(a, b)) })
+	return out
+}
+
 // errorSeen is one occurrence.
 type errorSeen struct {
 	T      any        `json:"t"`
@@ -180,6 +194,7 @@ type errorDetail struct {
 	Share    *float64       `json:"share"`   // visitors of viewers in percent, null without viewers
 	First    any            `json:"first"`
 	Last     any            `json:"last"`
+	Origins  []string       `json:"origins"` // of every place, the most frequent first
 	Places   errorBreakdown `json:"places"`
 	Pages    errorBreakdown `json:"pages"`
 	Clients  errorBreakdown `json:"clients"`
@@ -306,6 +321,7 @@ func (s *Server) errorDetail(ctx context.Context, q *query, key string, from, to
 		share := round1(min(100, float64(d.Visitors)/float64(d.Viewers)*100))
 		d.Share = &share
 	}
+	d.Origins = places.origins()
 	d.Places, d.Pages, d.Clients, d.Classes = places.top(), pages.top(), clients.top(), classes.top()
 	return d, nil
 }

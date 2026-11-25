@@ -1387,6 +1387,8 @@ function log(q: URLSearchParams, feed: boolean, script: boolean): Log | null {
   const status = q.get("status");
   if (status) rows = rows.filter((r) => r.what.includes(`→ ${status[0]}`));
   // Exact filters.
+  const name = q.get("name");
+  if (name) rows = rows.filter((r) => r.what === `${r.kind} ${name}`);
   const account = q.get("account");
   if (account) rows = rows.filter((r) => r.account === account);
   const endpoint = q.get("endpoint");
@@ -1440,11 +1442,13 @@ function errorDetail(name: string, range: string): ErrorDetail {
     share: 1.1,
     first: new Date(NOW.getTime() - 30 * 3600_000).toISOString(),
     last: new Date(NOW.getTime() - 600_000).toISOString(),
+    // Another host's is in the two places cut.
+    origins: withheld ? ["withheld"] : ["own", "other", "extension"],
     places: withheld
       ? of({ key: "withheld ", where: none, count: 84, visitors: 14 })
       : {
           rows: [
-            { key: "own a", where: at, count: 80, visitors: 13 },
+            { key: "own a", where: at, count: 74, visitors: 12 },
             {
               key: "extension",
               where: {

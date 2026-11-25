@@ -3,6 +3,7 @@ package dash
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,6 +185,115 @@ func TestMaskedErrorFinding(t *testing.T) {
 	insert("Script error.", "c", 1)
 	if f := found(); !f["err:Script error."] {
 		t.Errorf("three visitors: %v", f)
+	}
+}
+
+// jsError is one occurrence of a script error.
+func jsError(ts int64, name, visitor string) store.Event {
+	return store.Event{TS: ts, Source: "browser", Kind: "js_error", Name: name, Visitor: visitor, IP: "192.0.2.70",
+		IPKey: "192.0.2.70", UA: "Mozilla/5.0", Template: "/", Path: "/", Cls: store.ClsHuman}
+}
+
+// errorFindings are the script errors Noteworthy names over 30 days.
+func errorFindings(t *testing.T, r *rig, src Source) map[string]bool {
+	t.Helper()
+	code, b := r.getFrom(t, src, "noteworthy", p(feedSite, "range", "30d", "tz", "UTC", "findings", "all"))
+	if code != 200 {
+		t.Fatalf("%v: %d %v", src, code, b)
+	}
+	out := map[string]bool{}
+	for _, x := range b["items"].([]any) {
+		if k, ok := strings.CutPrefix(x.(map[string]any)["id"].(string), "err:"); ok {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// A hidden error too few visitors got to be a finding then is new once enough get it, from raw and from the sketches.
+func TestMaskedErrorFinding_Before(t *testing.T) {
+	r, insert := exactRig(t)
+	const now = "2026-11-15T10:00:00Z"
+	prev := []string{"2026-10-08T10:00:00Z", "2026-10-09T10:00:00Z", "2026-10-10T10:00:00Z"}
+	// Four names the browser's stand-in has, and a readable one, each three visitors' now.
+	for _, name := range []string{"Script error.", "Script error", "SCRIPT ERROR", "script error.", "TypeError: x"} {
+		for i := range 3 {
+			insert(jsError(at(now), name, fmt.Sprint("v", i)))
+		}
+	}
+	for i := range prev { // one a day
+		insert(jsError(at(prev[i]), "Script error.", "v0"), // one visitor every day
+			jsError(at(prev[i]), "SCRIPT ERROR", fmt.Sprint("v", i%2)), // two
+			jsError(at(prev[i]), "Script error", fmt.Sprint("v", i)))   // three: it was a finding then
+	}
+	insert(jsError(at(prev[0]), "TypeError: x", "v0"))
+	r.build(t)
+	want := map[string]bool{"Script error.": true, "SCRIPT ERROR": true, "script error.": true}
+	for _, src := range []Source{SourceRaw, SourceAgg} {
+		if got := errorFindings(t, r, src); fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("%s: %v, want %v", srcName[src], got, want)
+		}
+	}
+}
+
+// A hidden error that may sit in a prior day's Other is no finding: its visitors then are not known.
+func TestMaskedErrorFinding_PriorOther(t *testing.T) {
+	r, insert := exactRig(t)
+	for i := range 3 {
+		insert(jsError(at("2026-11-15T10:00:00Z"), "Script error.", fmt.Sprint("v", i)),
+			jsError(at("2026-10-10T10:00:00Z"), "A louder one", fmt.Sprint("v", i)))
+	}
+	insert(jsError(at("2026-10-10T10:00:00Z"), "Script error.", "v0"))
+	r.buildK(t, 1)
+	for src, want := range map[Source]bool{SourceRaw: true, SourceAgg: false} {
+		if got := errorFindings(t, r, src); got["Script error."] != want {
+			t.Errorf("%s: %v, want it listed: %v", srcName[src], got, want)
+		}
+	}
+}
+
+// A hidden error that is no finding takes no readable one's place among the ten.
+func TestMaskedErrorFinding_Place(t *testing.T) {
+	r, insert := exactRig(t)
+	ts := at("2026-11-15T10:00:00Z")
+	for i := range 20 {
+		insert(jsError(ts, "Script error.", fmt.Sprint("v", i%2)))
+	}
+	for i := range 10 {
+		insert(jsError(ts, fmt.Sprint("TypeError: ", i), "v0"))
+	}
+	if got := errorFindings(t, r, SourceRaw); len(got) != 10 || !got["TypeError: 9"] || got["Script error."] {
+		t.Errorf("%d: %v", len(got), got)
+	}
+}
+
+// Every origin the occurrences have, the most frequent first, whatever the places' rows leave out.
+func TestErrorOrigins(t *testing.T) {
+	r, insert := exactRig(t)
+	ts := at("2026-11-20T10:00:00Z")
+	ev := func(src string, n int) {
+		for range n {
+			e := jsError(ts, "TypeError: x", "v0")
+			e.Props = fmt.Sprintf(`{"p":{"src":%q,"line":1,"col":1}}`, src)
+			insert(e)
+		}
+	}
+	for i := range errorRows + 1 {
+		ev(fmt.Sprintf("https://lens.example.com/%d.js", i), 2)
+	}
+	ev("chrome-extension://abc/c.js", 1)
+	// The most frequent place is not the most frequent origin's.
+	ev("https://cdn.example.net/w.js", 5)
+	ev("", 1)
+	_, b := r.get(t, "error", p(feedSite, "key", "TypeError: x"))
+	if pl := b["places"].(map[string]any); len(pl["rows"].([]any)) != errorRows || pl["more"] != 4.0 {
+		t.Errorf("places %v", pl)
+	}
+	if got := fmt.Sprint(b["origins"]); got != "[own other extension unknown]" {
+		t.Errorf("origins %s", got)
+	}
+	if _, b := r.get(t, "error", p(feedSite, "key", "nothing")); fmt.Sprint(b["origins"]) != "[]" {
+		t.Errorf("no occurrence: origins %v", b["origins"])
 	}
 }
 

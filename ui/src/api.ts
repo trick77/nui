@@ -360,6 +360,8 @@ export type ErrorDetail = {
   share: number | null;
   first: string | null;
   last: string | null;
+  // Of every place, the cut ones too, the most frequent first.
+  origins: ErrorOrigin[];
   places: ErrorBreakdown;
   pages: ErrorBreakdown;
   clients: ErrorBreakdown;
@@ -628,8 +630,9 @@ export type LogFilter = {
   status?: string;
   // "1": the calls among the events (an account's row counts those).
   calls?: string;
-  // Exact, set by a click on a row: an endpoint, an account, an operation,
-  // a reason to fail.
+  // Exact, set by a click: an event's name (a script error's message), an
+  // endpoint, an account, an operation, a reason to fail.
+  name?: string;
   endpoint?: string;
   account?: string;
   op?: string;
