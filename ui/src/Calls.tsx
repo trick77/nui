@@ -63,11 +63,31 @@ function EndpointsPanel() {
   );
 }
 
-// The endpoints of a website's server, beside its pages.
+function FailuresPanel() {
+  const { openLog } = useDash();
+  const delta = useChange();
+  return (
+    <TopList
+      id="failures-panel"
+      title="Failures"
+      sources={["server"]}
+      tabs={[{ key: "failures", label: "Failures", dim: "failures" }]}
+      cols={[keyed("Reason"), { ...calls, head: "Count" }, addresses, ...delta]}
+      onRow={(r) => openLog({ failure: r.key })}
+      empty="No call failed in this range."
+    />
+  );
+}
+
+// A website's server, beside its pages: its endpoints and why their calls
+// fail (a sign-in answered 200 is told by its reason alone).
 export function Endpoints() {
   return (
     <AllClasses>
       <EndpointsPanel />
+      <div className="mt-3">
+        <FailuresPanel />
+      </div>
     </AllClasses>
   );
 }
@@ -88,20 +108,7 @@ function ApiPanels() {
           onRow={(r) => openLog({ account: r.key, calls: "1" })}
           empty="No call of an account in this range."
         />
-        <TopList
-          id="failures-panel"
-          title="Failures"
-          sources={["server"]}
-          tabs={[{ key: "failures", label: "Failures", dim: "failures" }]}
-          cols={[
-            keyed("Reason"),
-            { ...calls, head: "Count" },
-            addresses,
-            ...delta,
-          ]}
-          onRow={(r) => openLog({ failure: r.key })}
-          empty="No call failed in this range."
-        />
+        <FailuresPanel />
       </div>
       <div className="mt-3">
         <TopList
