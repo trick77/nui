@@ -189,6 +189,21 @@ func hasFinding(id string) func(map[string]any) error {
 	}
 }
 
+// errorAt finds a script error's only place.
+func errorAt(origin, place string) func(map[string]any) error {
+	return func(body map[string]any) error {
+		places, _ := body["places"].(map[string]any)
+		rows := items(places, "rows")
+		if len(rows) != 1 {
+			return fmt.Errorf("%d places of %v occurrences", len(rows), body["count"])
+		}
+		if w, _ := rows[0]["where"].(map[string]any); w["origin"] != origin || w["place"] != place {
+			return fmt.Errorf("place %v", w)
+		}
+		return nil
+	}
+}
+
 // rowWith checks a list for a row whose key is key, then check on it.
 func rowWith(key string, check func(map[string]any) error) func(map[string]any) error {
 	return func(body map[string]any) error {
@@ -355,6 +370,10 @@ func expectDeploy(w *World, _ *Scenario) []Expectation {
 	return []Expectation{
 		{Says: "Noteworthy lists the release's script error as new", Endpoint: "noteworthy", Params: findings(s, "7d"),
 			Check: hasFinding("err:" + DeployError)},
+		{Says: "the release's error is the site's own, with file and line", Endpoint: "error",
+			Params: params(s, "7d", "key", DeployError), Check: errorAt("own", "/assets/index-C4v1rT2s.js:1:48113")},
+		{Says: "an error the browser hides says so, without a place", Endpoint: "error",
+			Params: params(s, "7d", "key", MaskedError), Check: errorAt("withheld", "")},
 		{Says: "the status breakdown has 5xx answers", Endpoint: "status", Params: params(s, "7d"),
 			Check: func(b map[string]any) error {
 				for _, r := range items(b, "rows") {

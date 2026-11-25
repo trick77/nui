@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useState } from "react";
 import { api, type Log, type LogFilter, type LogRow } from "./api";
+import { ErrorLine } from "./ErrorDetail";
 import { joinSep, num, rawSince, when } from "./format";
 import { useApi, useMore } from "./hooks";
 import { scopeKey } from "./lists";
@@ -318,6 +319,7 @@ export function LogPage({
                     <td className="min-w-[200px] font-mono text-[12.5px] wrap-anywhere">
                       {r.what}
                       <VitalHint kind={r.kind} what={r.what} />
+                      {r.error && <ErrorLine where={r.error} page={r.page} />}
                     </td>
                     <td className="text-[12px] whitespace-nowrap text-muted">
                       {r.client}

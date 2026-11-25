@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { api, type Classes, type ListRow, type Status } from "./api";
 import { StackChart, Strip, type StripPart } from "./charts";
+import { ErrorDetail } from "./ErrorDetail";
 import { SEP, joinSep, num, pct } from "./format";
 import { type Loaded, useApi } from "./hooks";
 import { TopList, scopeKey } from "./lists";
@@ -108,38 +110,58 @@ export function ErrorsPanel() {
 }
 
 function Errors() {
-  const { feed, openLog } = useDash();
+  const { feed, openLog, scope } = useDash();
+  // The script error opened, of the domain it was opened on.
+  const [picked, setPicked] = useState<{ site: string; name: string } | null>(
+    null,
+  );
+  const name = picked?.site === scope.site ? picked.name : null;
   return (
-    <TopList
-      id="errors-panel"
-      title="Errors"
-      sources={["browser", "server"]}
-      head={feed ? undefined : <span>JavaScript errors</span>}
-      tabs={[{ key: "errors", label: "Errors", dim: "errors" }]}
-      cols={[
-        {
-          head: "Error",
-          cell: (r) => (
-            <>
-              {r.label}
-              {r.change && "new" in r.change && (
-                <span className="pill ml-1.5 !border-ochre/45 !text-ochre">
-                  new
-                </span>
-              )}
-            </>
-          ),
-        },
-        {
-          head: "Where",
-          cell: (r) => <span className="text-[12px] text-muted">{r.sub}</span>,
-        },
-        { head: "Count", num: true, cell: (r) => num(r.value) },
-        { head: "Visitors", num: true, cell: (r) => num(r.second) },
-      ]}
-      onRow={(r) => openLog({ path: r.label })}
-      empty="No errors in this range."
-    />
+    // One grid cell for both, the list as tall as its neighbour.
+    <div className="flex min-w-0 flex-col">
+      <TopList
+        className="grow"
+        id="errors-panel"
+        title="Errors"
+        sources={["browser", "server"]}
+        head={feed ? undefined : <span>JavaScript errors</span>}
+        tabs={[{ key: "errors", label: "Errors", dim: "errors" }]}
+        cols={[
+          {
+            head: "Error",
+            cell: (r) => (
+              <>
+                {r.label}
+                {r.change && "new" in r.change && (
+                  <span className="pill ml-1.5 !border-ochre/45 !text-ochre">
+                    new
+                  </span>
+                )}
+              </>
+            ),
+          },
+          {
+            head: "Where",
+            cell: (r) => (
+              <span className="text-[12px] text-muted">{r.sub}</span>
+            ),
+          },
+          { head: "Count", num: true, cell: (r) => num(r.value) },
+          { head: "Visitors", num: true, cell: (r) => num(r.second) },
+        ]}
+        // A server error's row is a request: its events say the rest.
+        onRow={(r) =>
+          r.sub === "js"
+            ? setPicked({ site: scope.site, name: r.key })
+            : openLog({ path: r.label })
+        }
+        empty="No errors in this range."
+      />
+      {name != null && (
+        // Afresh per error: never one's figures under another's name.
+        <ErrorDetail key={name} name={name} onClose={() => setPicked(null)} />
+      )}
+    </div>
   );
 }
 

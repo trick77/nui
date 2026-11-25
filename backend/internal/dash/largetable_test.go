@@ -73,7 +73,8 @@ func TestReadsBesideWriter(t *testing.T) {
 	stop := writeBeside(t, r, site.ID)
 	for _, rng := range []string{"24h", "30d"} {
 		for _, c := range [][]string{{"overview"}, {"noteworthy"}, {"classes"}, {"status"}, {"clients"}, {"visitors"},
-			{"visitor", "key", "192.0.2.200"}, {"log"}, {"domain"}, {"list", "dim", "pages"}} {
+			{"visitor", "key", "192.0.2.200"}, {"log"}, {"domain"}, {"error", "key", "Script error."},
+			{"list", "dim", "pages"}} {
 			code, body := r.getFrom(t, SourceAuto, c[0], p(feedSite, append([]string{"range", rng}, c[1:]...)...))
 			if code != 200 {
 				t.Errorf("%s %v: %d %v", rng, c, code, body)
@@ -153,7 +154,7 @@ func TestLargeTable(t *testing.T) {
 		{"log", long()}, {"log", long("addr", "203.0.113.5", "status", "4xx")}, {"log", long("path", "/.env")},
 		{"log", long("kind", "request", "asn", "15169")},
 		{"log", long("endpoint", "POST /mcp whois")}, {"log", long("failure", "HTTP 429", "calls", "1")},
-		{"domain", long()},
+		{"domain", long()}, {"error", long("key", "Script error.")},
 	}
 	for dim := range dims {
 		calls = append(calls, call{"list", long("dim", dim)})

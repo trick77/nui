@@ -11,6 +11,10 @@ import type {
   Clients,
   Dim,
   Domain,
+  ErrorBreakdown,
+  ErrorCount,
+  ErrorDetail,
+  ErrorWhere,
   List,
   ListRow,
   Log,
@@ -1308,6 +1312,8 @@ const LOG_CLIENTS: [string, ClassKey, string, string, LogRow["source"]][] = [
     "browser",
   ],
 ];
+// Now and then that visitor gets a script error instead.
+const LOG_ERROR = ["js_error", "js_error Script error."];
 // A browser as browser and OS joined by SEP, a tool by its product token.
 const CLIENT_NAME: Record<string, string> = {
   "192.0.2.120": "UptimeRobot/2.0",
@@ -1332,7 +1338,9 @@ const LOG_ROWS = 250;
 
 function log(q: URLSearchParams, feed: boolean, script: boolean): Log | null {
   let rows: LogRow[] = Array.from({ length: LOG_ROWS }, (_, i) => {
-    const [addr, cls, kind, what, source] = LOG_CLIENTS[i % LOG_CLIENTS.length];
+    const [addr, cls, k, w, source] = LOG_CLIENTS[i % LOG_CLIENTS.length];
+    const [kind, what] =
+      i % (10 * LOG_CLIENTS.length) === 10 ? LOG_ERROR : [k, w];
     return {
       t: new Date(NOW.getTime() - i * 47_000).toISOString(),
       addr,
@@ -1343,6 +1351,11 @@ function log(q: URLSearchParams, feed: boolean, script: boolean): Log | null {
       source,
       account: i % (2 * LOG_CLIENTS.length) === 1 ? "a91k2m4p" : "",
       dur_ms: source === "server" ? 3 + (i % 90) : null,
+      error:
+        kind === "js_error"
+          ? { origin: "withheld", host: "", place: "" }
+          : null,
+      page: kind === "js_error" ? "/AS13335" : "",
     };
   });
   if (!feed) rows = rows.filter((r) => r.source === "browser");
@@ -1405,6 +1418,68 @@ function log(q: URLSearchParams, feed: boolean, script: boolean): Log | null {
         : "",
     from: Date.parse(FROM[q.get("range") || "7d"]),
     detail_since: detailSince(q.get("range")),
+  };
+}
+
+// One script error: a page's own by its place, "Script error." without one.
+function errorDetail(name: string, range: string): ErrorDetail {
+  const withheld = name === "Script error.";
+  const none: ErrorWhere = { origin: "withheld", host: "", place: "" };
+  const own = (place: string): ErrorWhere => ({
+    origin: "own",
+    host: "",
+    place,
+  });
+  const of = (...rows: ErrorCount[]): ErrorBreakdown => ({ rows, more: 0 });
+  const at = withheld ? none : own("/assets/index-C4v1rT2s.js:1:48113");
+  return {
+    count: 84,
+    visitors: 14,
+    sessions: 16,
+    viewers: 1310,
+    share: 1.1,
+    first: new Date(NOW.getTime() - 30 * 3600_000).toISOString(),
+    last: new Date(NOW.getTime() - 600_000).toISOString(),
+    places: withheld
+      ? of({ key: "withheld ", where: none, count: 84, visitors: 14 })
+      : {
+          rows: [
+            { key: "own a", where: at, count: 80, visitors: 13 },
+            {
+              key: "extension",
+              where: {
+                origin: "extension",
+                host: "",
+                place: "chrome-extension://abc/content.js:4:1",
+              },
+              count: 4,
+              visitors: 1,
+            },
+          ],
+          more: 2,
+        },
+    pages: of(
+      { key: "/AS:n", count: 70, visitors: 12 },
+      { key: "/:ipv4", count: 14, visitors: 3 },
+    ),
+    clients: of({
+      key: joinSep(["Firefox", "iOS"]),
+      count: 84,
+      visitors: 14,
+    }),
+    classes: of({ key: "human", count: 84, visitors: 14 }),
+    recent: [
+      {
+        t: new Date(NOW.getTime() - 600_000).toISOString(),
+        addr: "203.0.113.42",
+        key: "203.0.113.42",
+        class: "human",
+        client: joinSep(["Firefox", "iOS"]),
+        page: "/AS13335",
+        where: at,
+      },
+    ],
+    detail_since: detailSince(range),
   };
 }
 
@@ -1596,6 +1671,10 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
         const l = log(q, feed, script);
         return l ? json(l) : json({ detail: "bad log filter or cursor" }, 400);
       }
+      case "/api/dash/error":
+        return q.get("key")
+          ? json(errorDetail(q.get("key")!, range))
+          : json({ detail: "key is a script error's message" }, 400);
       case "/api/dash/domain": {
         const d = domain(site, feed, script);
         if (opt.noModel) d.rules.llm.configured = false;

@@ -1460,6 +1460,82 @@ describe("while an answer is on its way", () => {
   });
 });
 
+describe("script errors", () => {
+  it("opens a script error's detail, a server error's log", async () => {
+    start("/dashboard/?site=lens.example.com");
+    const errors = await screen.findByRole("region", { name: "Errors" });
+    fireEvent.click(await within(errors).findByText(/^TypeError/));
+    const d = await screen.findByRole("region", { name: "Error" });
+    expect(lastCall("/api/dash/error").get("key")).toBe(
+      'TypeError: cannot read "prefixes"',
+    );
+    // Every class, as the list above it counts.
+    expect(lastCall("/api/dash/error").get("aud")).toBe("all");
+    expect(
+      await within(d).findByText("/assets/index-C4v1rT2s.js:1:48113"),
+    ).toBeInTheDocument();
+    expect(within(d).getByText("The site's code")).toBeInTheDocument();
+    expect(within(d).getByText("Not the site's code")).toBeInTheDocument();
+    expect(within(d).queryByText("Details withheld")).toBeNull();
+    expect(within(d).getByText(/1.1 % of 1.310/)).toBeInTheDocument();
+    expect(within(d).getByText("2 more")).toBeInTheDocument();
+    // A visitor's trail says what came before.
+    fireEvent.click(within(d).getByRole("button", { name: "203.0.113.42" }));
+    await screen.findByRole("region", { name: "Visitor" });
+    expect(lastCall("/api/dash/visitor").get("key")).toBe("203.0.113.42");
+    fireEvent.click(within(d).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("region", { name: "Error" })).toBeNull();
+    fireEvent.click(within(errors).getByText("GET /api/v1/search"));
+    expect(window.location.pathname).toBe("/dashboard/log");
+  });
+
+  it("leads from the detail to its events", async () => {
+    start("/dashboard/?site=console.example.com");
+    const errors = await screen.findByRole("region", { name: "Errors" });
+    fireEvent.click(await within(errors).findByText(/^Unhandled rejection/));
+    const d = await screen.findByRole("region", { name: "Error" });
+    fireEvent.click(
+      await within(d).findByRole("button", {
+        name: "Every occurrence in the log →",
+      }),
+    );
+    const q = new URLSearchParams(window.location.search);
+    expect(q.get("kind")).toBe("js_error");
+    expect(q.get("path")).toBe("Unhandled rejection: AbortError");
+  });
+
+  it("opens the detail from the full list, which closes", async () => {
+    start("/dashboard/?site=lens.example.com");
+    const fx = fixtureFetch();
+    // More errors than the panel lists.
+    setFetcher(async (u, i) => {
+      const r = await fx(u, i);
+      if (!u.startsWith("/api/dash/list?") || !u.includes("dim=errors"))
+        return r;
+      return new Response(JSON.stringify({ ...(await r.json()), total: 9 }));
+    });
+    const errors = await screen.findByRole("region", { name: "Errors" });
+    fireEvent.click(
+      await within(errors).findByRole("button", { name: "Show all 9 →" }),
+    );
+    const all = await screen.findByRole("dialog", { name: "Errors" });
+    fireEvent.click(await within(all).findByText(/^Unhandled rejection/));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      await screen.findByRole("region", { name: "Error" }),
+    ).toHaveTextContent("Unhandled rejection: AbortError");
+  });
+
+  it("says in the log where an error came from", async () => {
+    start("/dashboard/log?site=lens.example.com&kind=js_error");
+    const log = await screen.findByRole("region", { name: "Log" });
+    const line = (
+      await within(log).findAllByText(/^Details withheld.*on \/AS13335$/)
+    )[0];
+    expect(line).toHaveAttribute("title", expect.stringContaining("hides"));
+  });
+});
+
 describe("dashboard on a domain without a server feed", () => {
   it("drops everything only the feed can know", async () => {
     start("/dashboard/?site=console.example.com");

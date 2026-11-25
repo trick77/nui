@@ -391,12 +391,14 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 			add(i, at(), "form", "", map[string]any{"phase": "start", "id": "subscribe", "name": "", "action": "/subscribe"})
 		}
 		if r.chance(errorProb) {
-			add(i, at(), "js_error", "", map[string]any{"msg": "ResizeObserver loop completed with undelivered notifications",
-				"src": "https://" + s.Domain + "/assets/index.js", "line": 1, "col": 18211})
+			add(i, at(), "js_error", "", strayError(per.prof, s.Domain))
 		}
 		if s.paths.lookup && pg.path != "/" && w.in("deploy-error", pg.at) && r.chance(0.5) {
 			add(i, pg.at.Add(700*time.Millisecond), "js_error", "", map[string]any{"msg": DeployError,
 				"src": "https://" + s.Domain + "/assets/index-C4v1rT2s.js", "line": 1, "col": 48113})
+			if iOS(per.prof) { // and an error the browser hides
+				add(i, pg.at.Add(750*time.Millisecond), "js_error", "", strayError(per.prof, s.Domain))
+			}
 		}
 	}
 	last := pages[len(pages)-1]
@@ -469,6 +471,25 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 
 // DeployError is the script error the deploy-error scenario's release throws on lookup pages.
 const DeployError = "TypeError: Cannot read properties of undefined (reading 'asn')"
+
+// MaskedError is what WebKit reports of a script it treats as another site's.
+const MaskedError = "Script error."
+
+func iOS(pr *uaProfile) bool { return strings.Contains(pr.ua, "like Mac OS X") }
+
+// strayError is an error that now and then happens to a browser: hidden on iOS, an extension's in one Chrome, the
+// site's own elsewhere. By the profile alone: no draw of its own shifts the randomness.
+func strayError(pr *uaProfile, domain string) map[string]any {
+	switch {
+	case iOS(pr):
+		return map[string]any{"msg": MaskedError, "src": "", "line": 0, "col": 0}
+	case pr.brand == "Google Chrome" && pr.platform == "macOS":
+		return map[string]any{"msg": "TypeError: Cannot read properties of null (reading 'dataset')",
+			"src": "chrome-extension://pbjafmgnlkcdokdmlodoiaekhdhpjiac/content.js", "line": 4, "col": 112}
+	}
+	return map[string]any{"msg": "ResizeObserver loop completed with undelivered notifications",
+		"src": "https://" + domain + "/assets/index.js", "line": 1, "col": 18211}
+}
 
 // engagement is the props of a page's engagement: time visible, scroll depth, input counts. A mouse travels to
 // what it presses, dozens of moves a press; on a touch screen presses are no mouse's. scripted: no input at all.
