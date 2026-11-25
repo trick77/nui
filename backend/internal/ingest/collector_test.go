@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/trick77/trakk/backend/internal/alert"
 	"github.com/trick77/trakk/backend/internal/sites"
 	"github.com/trick77/trakk/backend/internal/store"
 )
@@ -1119,7 +1120,13 @@ func TestWriter_FailureCorrectsItsHour(t *testing.T) {
 	}
 	r.advance(time.Hour)
 	b := <-w.ch
+	board := alert.NewBoard(nil)
+	w.Report = board
 	w.write(t.Context(), b.evs, []int64{b.hour, b.hour})
+	if cs := board.Conditions(); len(cs) != 1 || cs[0].Key != alert.JobWriter || !cs[0].Open ||
+		!strings.Contains(cs[0].Text, "disk I/O error") {
+		t.Errorf("reported %+v", cs)
+	}
 	if err := r.c.Counters.Flush(t.Context(), r.st); err != nil {
 		t.Fatal(err)
 	}

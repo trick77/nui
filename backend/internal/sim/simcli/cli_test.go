@@ -279,7 +279,8 @@ func TestServer(t *testing.T) {
 	}
 	cfg = app.Config{}
 	if err := s.Configure(&cfg); err != nil || !cfg.AuthDisabled || !cfg.RefDataDisabled || cfg.Addr != "127.0.0.1:9099" ||
-		cfg.DataDir != s.Dir || cfg.ConfDir != s.Dir || cfg.TrustedHops != 1 || !sim.Owned(s.Dir) {
+		cfg.DataDir != s.Dir || cfg.ConfDir != s.Dir || cfg.TrustedHops != 1 || !sim.Owned(s.Dir) ||
+		cfg.NotifyFile != filepath.Join(s.Dir, "notify.json") {
 		t.Fatalf("config %+v, %v", cfg, err)
 	}
 	st, err := store.Open(t.Context(), filepath.Join(cfg.DataDir, store.FileName))
@@ -297,6 +298,11 @@ func TestServer(t *testing.T) {
 	}
 	if err := s.Backfill(t.Context(), st); err != nil {
 		t.Fatal(err)
+	}
+	// The alert engine stepped through the history: every rule of the world's notify file passed.
+	var passed int
+	if err := st.DB.QueryRow(`SELECT COUNT(DISTINCT rule) FROM alert_rule`).Scan(&passed); err != nil || passed != 22 {
+		t.Errorf("rules passed: %d, %v", passed, err)
 	}
 	reg, _ := sites.New(rows)
 	counters := ingest.NewCounters(nil)

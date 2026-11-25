@@ -24,6 +24,16 @@ type live struct {
 	Automated int64 `json:"automated"`
 }
 
+// Collected are the collector's counts of a site (0: the requests without one) over whole hours, the hour not
+// flushed yet included.
+//
+// Table: ingest_stat
+type Collected struct {
+	// Refused are the events refused (the rate) and the requests refused whole (rejected); Dropped the events lost
+	// after they were taken (a full queue, a failed write); UnknownDomain the requests naming no configured site.
+	Refused, Dropped, UnknownDomain int64
+}
+
 // dayState is one agg_day row as the dashboard needs it.
 //
 // Table: agg_day

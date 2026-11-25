@@ -385,7 +385,13 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 		calls, budget := s.Model.Usage(ctx, q.site.ID)
 		rules["llm"] = map[string]any{"calls_today": calls, "budget": budget, "configured": s.Model.Configured()}
 	}
+	notify, err := s.notifyBlock(ctx)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	apix.JSON(w, http.StatusOK, map[string]any{
+		"notify":   notify,
 		"counters": c,
 		"sources":  sources,
 		"storage": map[string]any{"events": events, "bytes": used, "retention_months": s.RetentionMonths,

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/trick77/trakk/backend/internal/alert/dispatch"
 	"github.com/trick77/trakk/backend/internal/sim"
 	"github.com/trick77/trakk/backend/internal/sites"
 	"github.com/trick77/trakk/backend/internal/store"
@@ -305,7 +306,11 @@ func scratchHistory(ctx context.Context, k sim.Knobs, log *slog.Logger) (*store.
 	if _, err := w.SyncSites(ctx, st); err != nil {
 		return fail(err)
 	}
-	s, err := sim.Backfill(ctx, st, w, sim.BackfillOptions{Days: k.Days, Classify: k.Classify})
+	o, err := backfillAlerting(ctx, st, w, &dispatch.Recorder{}, sim.BackfillOptions{Days: k.Days, Classify: k.Classify})
+	if err != nil {
+		return fail(err)
+	}
+	s, err := sim.Backfill(ctx, st, w, o)
 	if err != nil {
 		return fail(err)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/trick77/ship/kit/logging"
 	"github.com/trick77/ship/kit/run"
 
+	"github.com/trick77/trakk/backend/internal/alert"
 	"github.com/trick77/trakk/backend/internal/store"
 )
 
@@ -40,6 +41,9 @@ type Options struct {
 	Months int
 	Now    func() time.Time
 	Log    *slog.Logger
+	// Report takes each wake's outcome (job.failed, agg): a failure opens it, the next wake that gets through
+	// clears it.
+	Report alert.Reporter
 }
 
 // ageFloor is the oldest day the job builds at now: the day after the one holding the age cutoff, 0 without one.
@@ -92,6 +96,7 @@ func Run(ctx context.Context, st *store.Store, o Options) {
 		start, now := time.Now(), o.Now()
 		j.floor = ageFloor(now, o.Months)
 		built, err := j.passes(ctx, lastDue(now), maxPasses)
+		alert.Fail(o.Report, alert.JobAgg, err)
 		switch {
 		case err != nil && ctx.Err() == nil:
 			o.Log.Warn("Aggregates failed, retried at the next wake", "built", built, logging.Err(err))

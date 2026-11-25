@@ -31,6 +31,7 @@ const (
 	spikeShare          = 0.25
 	minNetworkRequests  = 200
 	networkShare        = 0.4
+	spikeGrowth         = 3.0
 	minProbes           = 3
 	minReferrerVisitors = 2
 	minMaskedVisitors   = 3 // of a script error the browser hides
@@ -39,7 +40,42 @@ const (
 	failedSwingPP       = 5.0
 	minNewEndpointCalls = 5
 	minNewFailures      = 3
+	minNewErrors        = 1
 )
+
+// Thresholds are what makes a change a finding. Noteworthy always takes DefaultThresholds: the set of fact ids,
+// and with it factsHash and the briefing written for it, never moves with an alert rule's. The alert rules ask with
+// the loosest of theirs and filter each fact by its own (Fact's Value, Change, Share, Growth, Volume).
+type Thresholds struct {
+	// TrendVisitors is the visitors a trend needs, TrendVisitorsPct its change in percent.
+	TrendVisitors, TrendVisitorsPct float64
+	// TrendCalls is the calls a trend needs, TrendCallsPct its change in percent.
+	TrendCalls, TrendCallsPct float64
+	// FailedCalls is the calls both periods need for a failed share's trend, FailedPP its change in points.
+	FailedCalls, FailedPP float64
+	// AutoSharePP is the change of the unknown automated share, in points.
+	AutoSharePP float64
+	// The least a new key of each list needs.
+	NewErrors, NewFailures, NewProbes, NewEndpoints, NewReferrers int64
+	// SpikeAddr and SpikeNet are an address's and a network's spike.
+	SpikeAddr, SpikeNet Spike
+}
+
+// Spike is a spike's thresholds: its requests, its part of all (0 to 1) and its growth over the comparison.
+type Spike struct {
+	Min    int64
+	Share  float64
+	Growth float64
+}
+
+// DefaultThresholds are Noteworthy's.
+func DefaultThresholds() Thresholds {
+	return Thresholds{TrendVisitors: minVisitorsForTrend, TrendVisitorsPct: trendPct, TrendCalls: minCallsForTrend,
+		TrendCallsPct: trendPct, FailedCalls: minCallsForTrend, FailedPP: failedSwingPP, AutoSharePP: autoShareSwingPP,
+		NewErrors: minNewErrors, NewFailures: minNewFailures, NewProbes: minProbes, NewEndpoints: minNewEndpointCalls,
+		NewReferrers: minReferrerVisitors, SpikeAddr: Spike{minSpikeRequests, spikeShare, spikeGrowth},
+		SpikeNet: Spike{minNetworkRequests, networkShare, spikeGrowth}}
+}
 
 type noteItem struct {
 	ID     string         `json:"id"`
@@ -203,6 +239,12 @@ type unbriefed struct{ open, over []insight.Fact }
 // briefingInput computes the findings and the tile summary of a range against its prior period, and the findings
 // outside the briefing's set.
 func (s *Server) briefingInput(ctx context.Context, q *query) (insight.BriefingInput, unbriefed, error) {
+	return s.briefingInputWith(ctx, q, DefaultThresholds())
+}
+
+// briefingInputWith is briefingInput with the findings' thresholds th.
+func (s *Server) briefingInputWith(ctx context.Context, q *query, th Thresholds) (insight.BriefingInput, unbriefed,
+	error) {
 	in := insight.BriefingInput{SiteID: q.site.ID, Domain: q.site.Domain, Range: q.rng, PrevLabel: q.p.prevL,
 		AsOf: q.p.ClosedEnd()}
 	pl, err := s.planOf(ctx, q)
@@ -228,7 +270,7 @@ func (s *Server) briefingInput(ctx context.Context, q *query) (insight.BriefingI
 		in.Tiles = append(in.Tiles, insight.TileFact{Key: t.Key, Label: t.Label, Value: num(t.Value) + t.Unit,
 			Prev: pv, Change: changeText(t.Change)})
 	}
-	facts, un, err := s.findings(ctx, q, tiles)
+	facts, un, err := s.findings(ctx, q, tiles, th)
 	if err != nil {
 		return in, un, err
 	}
@@ -248,8 +290,10 @@ func factsHash(facts []insight.Fact) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// findings computes Noteworthy's facts, and those outside the briefing's set. Stable ids: the finding's type and key.
-func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insight.Fact, unbriefed, error) {
+// findings computes Noteworthy's facts at the thresholds th, and those outside the briefing's set. Stable ids: the
+// finding's type and key.
+func (s *Server) findings(ctx context.Context, q *query, tiles []tile, th Thresholds) ([]insight.Fact, unbriefed,
+	error) {
 	var facts []insight.Fact
 	var un unbriefed
 	tidy := func(f insight.Fact) insight.Fact {
@@ -264,34 +308,35 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insigh
 	add := func(f insight.Fact) { facts = append(facts, tidy(f)) }
 	for _, t := range tiles {
 		switch {
-		case t.Key == "visitors" && t.Change != nil && t.Change["pct"] != nil && t.Value >= minVisitorsForTrend:
+		case t.Key == "visitors" && t.Change != nil && t.Change["pct"] != nil && t.Value >= th.TrendVisitors:
 			p := t.Change["pct"].(float64)
-			if math.Abs(p) >= trendPct {
+			if math.Abs(p) >= th.TrendVisitorsPct {
 				// The direction is part of the id: a line written for a rise never sits beside a fall.
 				add(insight.Fact{ID: "trend:visitors:" + upDown(p), Kind: "people", Figure: signed(p) + " %", Unit: "visitors",
 					Text:  fmt.Sprintf("Visitors %s against the %s (%s, was %s)", upDown(p), q.p.prevL, num(t.Value), num(*t.Prev)),
 					Score: 100 + math.Abs(p), Target: insight.Target{Panel: "log",
-						Filter: map[string]string{"kind": "page_view"}}})
+						Filter: map[string]string{"kind": "page_view"}}, Value: t.Value, Change: p})
 			}
 		case t.Key == "auto_share" && t.Change != nil && t.Change["pp"] != nil:
 			pp := t.Change["pp"].(float64)
-			if math.Abs(pp) >= autoShareSwingPP {
+			if math.Abs(pp) >= th.AutoSharePP {
 				add(insight.Fact{ID: "trend:auto_share:" + upDown(pp), Kind: "automation", Figure: num(t.Value) + " %",
 					Unit: "unknown automated", Text: fmt.Sprintf("Unknown automated share %s by %s pp", upDown(pp),
 						num(math.Abs(pp))), Score: 400 + math.Abs(pp), Target: insight.Target{Panel: "log",
-						Filter: map[string]string{"class": "unknown"}}})
+						Filter: map[string]string{"class": "unknown"}}, Value: t.Value, Change: pp})
 			}
-		case t.Key == "calls" && t.Change != nil && t.Change["pct"] != nil && t.Value >= minCallsForTrend:
-			if p := t.Change["pct"].(float64); math.Abs(p) >= trendPct {
+		case t.Key == "calls" && t.Change != nil && t.Change["pct"] != nil && t.Value >= th.TrendCalls:
+			if p := t.Change["pct"].(float64); math.Abs(p) >= th.TrendCallsPct {
 				add(insight.Fact{ID: "trend:calls:" + upDown(p), Kind: "automation", Figure: signed(p) + " %", Unit: "calls",
 					Text:  fmt.Sprintf("Calls %s against the %s (%s, was %s)", upDown(p), q.p.prevL, num(t.Value), num(*t.Prev)),
-					Score: 100 + math.Abs(p), Target: insight.Target{Panel: "endpoints"}})
+					Score: 100 + math.Abs(p), Target: insight.Target{Panel: "endpoints"}, Value: t.Value, Change: p})
 			}
-		case t.Key == "failed" && t.Change != nil && t.Change["pp"] != nil && enoughCalls(tiles):
-			if pp := t.Change["pp"].(float64); math.Abs(pp) >= failedSwingPP {
+		case t.Key == "failed" && t.Change != nil && t.Change["pp"] != nil && callsOf(tiles) >= th.FailedCalls:
+			if pp := t.Change["pp"].(float64); math.Abs(pp) >= th.FailedPP {
 				f := insight.Fact{ID: "trend:failed:" + upDown(pp), Kind: "problem", Figure: num(t.Value) + " %",
 					Unit: "of calls failed", Text: fmt.Sprintf("Failed share %s by %s pp", upDown(pp), num(math.Abs(pp))),
-					Score: 700 + pp, Target: insight.Target{Panel: "failures"}}
+					Score: 700 + pp, Target: insight.Target{Panel: "failures"}, Value: t.Value, Change: pp,
+					Volume: callsOf(tiles)}
 				if pp < 0 { // good news, not a problem
 					f.Kind, f.Score = "automation", 100-pp
 				}
@@ -301,43 +346,49 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insigh
 	}
 	// The lists' findings: the closed part of the daily span against the comparison's.
 	if q.api() {
-		if err := s.newKeys(ctx, q, "endpoints", minNewEndpointCalls, func(k string, v int64, g *keySums) {
+		if err := s.newKeys(ctx, q, "endpoints", th.NewEndpoints, func(k string, v int64, g *keySums) {
 			if g.b == g.a && g.sub == "" { // nothing but failures of no known operation: somebody tries a path
 				return
 			}
 			add(insight.Fact{ID: "endpoint:" + k, Kind: "automation", Figure: num(float64(v)), Unit: "calls of",
-				Text: "New endpoint: " + truncate(k, 120), Score: 160 + float64(v), Target: insight.Target{Panel: "endpoints"}})
+				Text: "New endpoint: " + truncate(k, 120), Score: 160 + float64(v), Target: insight.Target{Panel: "endpoints"},
+				Value: float64(v)})
 		}); err != nil {
 			return nil, un, err
 		}
-		if err := s.newKeys(ctx, q, "failures", minNewFailures, func(k string, v int64, _ *keySums) {
+		if err := s.newKeys(ctx, q, "failures", th.NewFailures, func(k string, v int64, _ *keySums) {
 			add(insight.Fact{ID: "failure:" + k, Kind: "problem", Figure: num(float64(v)), Unit: "calls failed with",
-				Text: "New failure: " + k, Score: 950 + float64(v), Target: insight.Target{Panel: "failures"}})
+				Text: "New failure: " + k, Score: 950 + float64(v), Target: insight.Target{Panel: "failures"},
+				Value: float64(v)})
 		}); err != nil {
 			return nil, un, err
 		}
-	} else if err := s.newKeys(ctx, q, "referrers", minReferrerVisitors, func(k string, v int64, _ *keySums) {
+	} else if err := s.newKeys(ctx, q, "referrers", th.NewReferrers, func(k string, v int64, _ *keySums) {
 		add(insight.Fact{ID: "ref:" + k, Kind: "people", Figure: num(float64(v)), Unit: "visitors from",
-			Text: "New referrer: " + k, Score: 150 + float64(v), Target: insight.Target{Panel: "referrers"}})
+			Text: "New referrer: " + k, Score: 150 + float64(v), Target: insight.Target{Panel: "referrers"},
+			Value: float64(v)})
 	}); err != nil {
 		return nil, un, err
 	}
-	// One browser's extension is no news of the site's, and nothing about it can be looked up (owner).
+	// One browser's extension is no news of the site's, and nothing about it can be looked up (owner). At any
+	// thresholds: a rule's never admits a hidden error from fewer visitors.
 	shown := func(k string, g *keySums) bool { return !maskedError(k) || g.d.count() >= minMaskedVisitors }
-	if err := s.newKeysOf(ctx, q, "errors", 1, shown, func(k string, v int64, _ *keySums) {
+	if err := s.newKeysOf(ctx, q, "errors", th.NewErrors, shown, func(k string, v int64, _ *keySums) {
 		add(insight.Fact{ID: "err:" + k, Kind: "problem", Figure: num(float64(v)), Unit: "times",
-			Text: "New error: " + truncate(k, 120), Score: 1000 + float64(v), Target: insight.Target{Panel: "errors"}})
+			Text: "New error: " + truncate(k, 120), Score: 1000 + float64(v), Target: insight.Target{Panel: "errors"},
+			Value: float64(v)})
 	}); err != nil {
 		return nil, un, err
 	}
 	if q.site.HasFeed {
-		if err := s.newKeys(ctx, q, "probed", minProbes, func(k string, v int64, _ *keySums) {
+		if err := s.newKeys(ctx, q, "probed", th.NewProbes, func(k string, v int64, _ *keySums) {
 			add(insight.Fact{ID: "probe:" + k, Kind: "automation", Figure: num(float64(v)), Unit: "probes of",
-				Text: "New probed path: " + k, Score: 500 + float64(v), Target: insight.Target{Panel: "probed"}})
+				Text: "New probed path: " + k, Score: 500 + float64(v), Target: insight.Target{Panel: "probed"},
+				Value: float64(v)})
 		}); err != nil {
 			return nil, un, err
 		}
-		if err := s.spikes(ctx, q, add); err != nil {
+		if err := s.spikes(ctx, q, th, add); err != nil {
 			return nil, un, err
 		}
 	}
@@ -374,14 +425,15 @@ func factOrder(a, b insight.Fact) int {
 // closedPart is a window's closed part.
 func closedPart(w window) window { return closedWin(w.From, w.Closed) }
 
-// enoughCalls: both periods have the calls a share of them needs to say anything.
-func enoughCalls(tiles []tile) bool {
+// callsOf is the calls of the smaller of both periods, what a share of them needs enough of to say anything; -1
+// without a comparison or a calls tile.
+func callsOf(tiles []tile) float64 {
 	for _, t := range tiles {
-		if t.Key == "calls" {
-			return t.Value >= minCallsForTrend && t.Prev != nil && *t.Prev >= minCallsForTrend
+		if t.Key == "calls" && t.Prev != nil {
+			return min(t.Value, *t.Prev)
 		}
 	}
-	return false
+	return -1
 }
 
 // newKeys reports the keys of a list dimension that have at least min in the closed part and nothing in the
@@ -441,7 +493,7 @@ func (s *Server) newKeysOf(ctx context.Context, q *query, dim string, minValue i
 // spikes finds one address or one network taking a large and grown share of the requests. A network's requests
 // are its networks list's server rows (b); one collapsed into a day's Other row counts as nothing that day, and one
 // that may sit in a prior day's Other is no spike: its growth is not known.
-func (s *Server) spikes(ctx context.Context, q *query, add func(insight.Fact)) error {
+func (s *Server) spikes(ctx context.Context, q *query, th Thresholds, add func(insight.Fact)) error {
 	pl, err := s.planOf(ctx, q)
 	if err != nil {
 		return err
@@ -469,18 +521,17 @@ func (s *Server) spikes(ctx context.Context, q *query, add func(insight.Fact)) e
 		return out, &otherSums{}, err
 	}
 	for _, sp := range []struct {
-		id          string
-		sums        func(w window, short bool, keys map[string]bool) (map[string]int64, *otherSums, error)
-		minRequests int64
-		share       float64
-	}{{"spike:addr:", addrs, minSpikeRequests, spikeShare}, {"spike:net:", nets, minNetworkRequests, networkShare}} {
+		id   string
+		sums func(w window, short bool, keys map[string]bool) (map[string]int64, *otherSums, error)
+		th   Spike
+	}{{"spike:addr:", addrs, th.SpikeAddr}, {"spike:net:", nets, th.SpikeNet}} {
 		cur, _, err := sp.sums(closedPart(q.p.win), !q.p.agg, nil)
 		if err != nil {
 			return err
 		}
 		spiking := map[string]bool{}
 		for k, n := range cur {
-			if k != "" && k != "0" && n >= sp.minRequests && float64(n) >= sp.share*float64(total) {
+			if k != "" && k != "0" && n >= sp.th.Min && float64(n) >= sp.th.Share*float64(total) {
 				spiking[k] = true
 			}
 		}
@@ -496,8 +547,12 @@ func (s *Server) spikes(ctx context.Context, q *query, add func(insight.Fact)) e
 		}
 		for k := range spiking {
 			n, was := cur[k], prev[k]
-			if was*3 > n || prevOther.hides(k) {
+			if float64(was)*sp.th.Growth > float64(n) || prevOther.hides(k) {
 				continue
+			}
+			growth := math.Inf(1)
+			if was > 0 {
+				growth = float64(n) / float64(was)
 			}
 			label := k
 			target := insight.Target{Panel: "visitors", Filter: map[string]string{"key": k}}
@@ -513,7 +568,8 @@ func (s *Server) spikes(ctx context.Context, q *query, add func(insight.Fact)) e
 			add(insight.Fact{ID: sp.id + k, Kind: "automation", Figure: num(float64(n)), Unit: "requests from",
 				Text:   label,
 				Detail: []string{fmt.Sprintf("%s %% of all requests, %s in the %s", num(round1(pct(float64(n), float64(total)))), num(float64(was)), q.p.prevL)},
-				Score:  600 + float64(n)/float64(max(total, 1))*100, Target: target})
+				Score:  600 + float64(n)/float64(max(total, 1))*100, Target: target,
+				Value: float64(n), Share: float64(n) / float64(max(total, 1)), Growth: growth})
 		}
 	}
 	return nil
