@@ -1,7 +1,7 @@
 // The page's state lives in the URL, so a reload or a link reproduces the
 // view: /dashboard/?site=…&range=7d&aud=bots&cmp=yoy, the log at
-// /dashboard/log?site=…&addr=…. The audience is also remembered per
-// browser.
+// /dashboard/log?site=…&addr=…. What the URL leaves out is the browser's
+// last: the audience, the domain, and each domain's range.
 
 import type { Audience, Compare, LogFilter, Range } from "./api";
 import { SEP } from "./format";
@@ -25,32 +25,65 @@ export const LOG_KEYS = [
 
 export type Page = "dash" | "log";
 
+// A view as the URL says it: site and range null where it does not.
 export type View = {
   page: Page;
   site: string | null;
-  range: Range;
+  range: Range | null;
   aud: Audience;
   cmp: Compare;
   log: LogFilter;
 };
 
-const AUD_KEY = "app.aud";
+// A view of a listed domain, nothing left open.
+export type Shown = View & { site: string; range: Range };
 
-export function storedAudience(): Audience {
+const AUD_KEY = "app.aud";
+const SITE_KEY = "app.site";
+// A key per domain, not one map: two tabs never overwrite each other's.
+const rangeKey = (site: string) => `app.range.${site}`;
+
+// What storage does not take, kept until the page is left: a domain switched
+// away from and back to has its range with storage blocked too.
+const unstored = new Map<string, string>();
+
+function stored(key: string): string | null {
+  const own = unstored.get(key);
+  if (own != null) return own;
   try {
-    const v = localStorage.getItem(AUD_KEY) as Audience | null;
-    return v && AUDIENCES.includes(v) ? v : "all";
+    return localStorage.getItem(key);
   } catch {
-    return "all";
+    return null;
   }
 }
 
-export function storeAudience(a: Audience) {
+function store(key: string, v: string) {
   try {
-    localStorage.setItem(AUD_KEY, a);
+    localStorage.setItem(key, v);
+    unstored.delete(key);
   } catch {
-    // storage blocked: the URL still carries it
+    unstored.set(key, v);
   }
+}
+
+export function storedAudience(): Audience {
+  const v = stored(AUD_KEY) as Audience;
+  return AUDIENCES.includes(v) ? v : "all";
+}
+
+export function storeAudience(a: Audience) {
+  store(AUD_KEY, a);
+}
+
+export function storedRange(site: string): Range {
+  const v = stored(rangeKey(site)) as Range;
+  return RANGES.includes(v) ? v : "7d";
+}
+
+// What is shown is what the next visit starts with, a deep link included.
+export function storeShown(site: string, range: Range) {
+  store(SITE_KEY, site);
+  store(rangeKey(site), range);
 }
 
 // The app's mount: /dashboard/ in production, / under the dev server.
@@ -72,11 +105,24 @@ export function parseView(pathname: string, search: string): View {
   return {
     page: /\/log\/?$/.test(pathname) ? "log" : "dash",
     site: q.get("site") || null,
-    range: RANGES.includes(range) ? range : "7d",
+    range: RANGES.includes(range) ? range : null,
     aud: AUDIENCES.includes(aud) ? aud : storedAudience(),
     cmp: COMPARES.includes(cmp) ? cmp : "prev",
     log,
   };
+}
+
+// The view with what the URL left open filled in: a domain it does not name
+// or that is not listed is the last one shown here, else the first; a range
+// it does not name is that domain's last. A view without a gap comes back as
+// it is, the same object. Null: no domain is listed.
+export function resolveView(v: View, sites: readonly string[]): Shown | null {
+  const listed = (s: string | null) => s != null && sites.includes(s);
+  if (listed(v.site) && v.range) return v as Shown;
+  const last = stored(SITE_KEY);
+  const site = listed(v.site) ? v.site : listed(last) ? last : sites[0];
+  if (!site) return null;
+  return { ...v, site, range: v.range ?? storedRange(site) };
 }
 
 export const PRODUCT = "Trakk";
@@ -96,10 +142,11 @@ export function tabTitle(site: string | null, v: View): string {
 
 export function viewHref(base: string, v: View): string {
   const q = new URLSearchParams();
+  // Site and range are always written, the audience on the dashboard, the
+  // defaults too: left out, a reload or a link would take the browser's last.
   if (v.site) q.set("site", v.site);
-  if (v.range !== "7d") q.set("range", v.range);
+  if (v.range) q.set("range", v.range);
   if (v.page === "dash") {
-    // Always written: left out, a reload would take another tab's choice.
     q.set("aud", v.aud);
     if (v.cmp !== "prev") q.set("cmp", v.cmp);
   } else {

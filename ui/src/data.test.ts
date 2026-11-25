@@ -24,8 +24,11 @@ import {
 import {
   basePath,
   parseView,
+  resolveView,
   storeAudience,
+  storeShown,
   storedAudience,
+  storedRange,
   tabTitle,
   viewHref,
 } from "./state";
@@ -160,7 +163,7 @@ describe("state", () => {
     expect(parseView("/dashboard/", "")).toEqual({
       page: "dash",
       site: null,
-      range: "7d",
+      range: null,
       aud: "all",
       cmp: "prev",
       log: {},
@@ -178,9 +181,89 @@ describe("state", () => {
       log: { addr: "192.0.2.1", kind: "request" },
     });
     expect(parseView("/", "?range=1y&aud=x&cmp=z")).toMatchObject({
-      range: "7d",
+      range: null,
       aud: "all",
       cmp: "prev",
+    });
+  });
+
+  describe("fills in what the URL leaves open", () => {
+    const sites = ["a.example.com", "b.example.com", "c.example.com"];
+    const at = (search: string, list = sites) => {
+      const v = resolveView(parseView("/dashboard/", search), list);
+      return v && [v.site, v.range];
+    };
+
+    it("without anything remembered", () => {
+      expect(at("")).toEqual(["a.example.com", "7d"]);
+      expect(at("?site=b.example.com")).toEqual(["b.example.com", "7d"]);
+      expect(at("?range=30d")).toEqual(["a.example.com", "30d"]);
+      expect(at("", [])).toBe(null);
+      expect(at("?site=a.example.com&range=30d", [])).toBe(null);
+    });
+
+    it("with the last domain and each domain's range", () => {
+      storeShown("a.example.com", "90d");
+      storeShown("b.example.com", "24h");
+      expect(at("")).toEqual(["b.example.com", "24h"]);
+      expect(at("?site=a.example.com")).toEqual(["a.example.com", "90d"]);
+      expect(at("?site=c.example.com")).toEqual(["c.example.com", "7d"]);
+      expect(at("?range=12mo")).toEqual(["b.example.com", "12mo"]);
+      expect(at("?site=a.example.com&range=12mo")).toEqual([
+        "a.example.com",
+        "12mo",
+      ]);
+      // A range that is none, a domain that is not listed: as if left out.
+      expect(at("?range=1y")).toEqual(["b.example.com", "24h"]);
+      expect(at("?site=x.example.com")).toEqual(["b.example.com", "24h"]);
+      expect(at("?site=x.example.com&range=30d")).toEqual([
+        "b.example.com",
+        "30d",
+      ]);
+    });
+
+    it("with the first domain once the last is gone", () => {
+      storeShown("gone.example.com", "24h");
+      expect(at("")).toEqual(["a.example.com", "7d"]);
+    });
+
+    it("keeping a view without a gap as it is", () => {
+      const v = parseView("/", "?site=c.example.com&range=30d");
+      storeShown("a.example.com", "90d");
+      expect(resolveView(v, sites)).toBe(v);
+    });
+
+    it("with storage blocked or broken", () => {
+      localStorage.setItem("app.range.a.example.com", "forever");
+      expect(storedRange("a.example.com")).toBe("7d");
+      const blocked = () => {
+        throw new Error("blocked");
+      };
+      const get = vi
+        .spyOn(Storage.prototype, "getItem")
+        .mockImplementation(blocked);
+      const set = vi
+        .spyOn(Storage.prototype, "setItem")
+        .mockImplementation(blocked);
+      try {
+        expect(at("")).toEqual(["a.example.com", "7d"]);
+        expect(storedAudience()).toBe("all");
+        // What storage does not take lasts until the page is left.
+        storeShown("b.example.com", "24h");
+        storeAudience("bots");
+        expect(at("")).toEqual(["b.example.com", "24h"]);
+        expect(at("?site=a.example.com")).toEqual(["a.example.com", "7d"]);
+        expect(storedAudience()).toBe("bots");
+      } finally {
+        get.mockRestore();
+        set.mockRestore();
+      }
+      // Back, it takes over.
+      storeShown("b.example.com", "30d");
+      storeAudience("humans");
+      expect(localStorage.getItem("app.range.b.example.com")).toBe("30d");
+      expect(at("")).toEqual(["b.example.com", "30d"]);
+      expect(storedAudience()).toBe("humans");
     });
   });
 
@@ -191,9 +274,13 @@ describe("state", () => {
     expect(parseView("/", "?aud=bots").aud).toBe("bots");
   });
 
-  it("writes the URL back, defaults left out", () => {
+  it("writes the URL back, the default range and audience too", () => {
     const v = parseView("/dashboard/", "");
+    // Before the domains are known there is none to name.
     expect(viewHref("/dashboard/", v)).toBe("/dashboard/?aud=all");
+    expect(
+      viewHref("/dashboard/", { ...v, site: "a.example.com", range: "7d" }),
+    ).toBe("/dashboard/?site=a.example.com&range=7d&aud=all");
     expect(
       viewHref("/dashboard/", {
         ...v,
@@ -208,10 +295,14 @@ describe("state", () => {
       viewHref("/dashboard/", {
         ...v,
         page: "log",
+        site: "a.example.com",
+        range: "7d",
         aud: "bots",
         log: { addr: "2001:db8::/64", path: "/AS:n" },
       }),
-    ).toBe("/dashboard/log?addr=2001%3Adb8%3A%3A%2F64&path=%2FAS%3An");
+    ).toBe(
+      "/dashboard/log?site=a.example.com&range=7d&addr=2001%3Adb8%3A%3A%2F64&path=%2FAS%3An",
+    );
   });
 
   it("names the domain and the log's address in the tab title", () => {
