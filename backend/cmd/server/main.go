@@ -258,7 +258,8 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	reads := &dash.Server{DB: st, Sites: reg, Ref: ref, Counters: counters, RetentionMonths: cfg.RetentionMonths,
 		RawDays: cfg.RawRetentionDays}
 	alerts := dispatch.New(dispatch.Options{Store: st, Sites: reg, Config: notify, Senders: senders, Board: board,
-		Source: dispatch.NewEval(reads, notify.Rules, time.Now(), model), PublicFQDN: cfg.PublicFQDN})
+		Source: dispatch.NewEval(reads, notify.Rules, time.Now(), model), PublicFQDN: cfg.PublicFQDN,
+		Hello: realChannels(cfg, mode)})
 	ds := &dash.Server{DB: st, Sites: reg, Ref: ref, Counters: counters, Model: model,
 		RetentionMonths: cfg.RetentionMonths, RawDays: cfg.RawRetentionDays, Build: version.String(), Notify: alerts}
 

@@ -49,7 +49,9 @@ type Options struct {
 	Source Source
 	// PublicFQDN is the host a message's link names: the dashboard's own, never another.
 	PublicFQDN string
-	Log        *slog.Logger
+	// Hello sends every channel a test message when Run starts. Never set over simulated traffic.
+	Hello bool
+	Log   *slog.Logger
 }
 
 // Source is what the site rules read: the dashboard's computed facts and figures.
@@ -99,8 +101,9 @@ func New(o Options) *Engine {
 	return e
 }
 
-// Run steps every minute until ctx ends; the first step at once.
+// Run steps every minute until ctx ends; the first step at once, after the start's test message.
 func (e *Engine) Run(ctx context.Context) {
+	e.hello(ctx, time.Now())
 	for wait := time.Duration(0); run.Sleep(ctx, wait); wait = Every {
 		if err := e.Step(ctx, time.Now()); err != nil && ctx.Err() == nil {
 			e.log.Warn("Alerts step failed, retried at the next", logging.Err(err))

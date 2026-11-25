@@ -70,13 +70,19 @@ func notifyCmd(ctx context.Context, cfg app.Config, test bool, out io.Writer) in
 // on a directory the simulator wrote). Said once in the log.
 func sendersFor(cfg app.Config, mode runMode, c alert.Config, wired map[string]dispatch.Sender,
 	rec *dispatch.Recorder) map[string]dispatch.Sender {
-	if mode == normalRun && !sim.Owned(cfg.DataDir) {
+	if realChannels(cfg, mode) {
 		return wired
 	}
 	if len(c.Channels) > 0 {
 		slog.Info("Simulated traffic: alerts are recorded, no channel is sent to")
 	}
 	return rec.Senders(c)
+}
+
+// realChannels reports whether this run sends to the real channels: a normal run on data the simulator did not
+// write. Only such a run sends the start's test message.
+func realChannels(cfg app.Config, mode runMode) bool {
+	return mode == normalRun && !sim.Owned(cfg.DataDir)
 }
 
 // ruleState says whether a rule runs and where it sends.

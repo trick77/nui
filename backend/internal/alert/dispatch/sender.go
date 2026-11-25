@@ -106,8 +106,8 @@ func Test(ctx context.Context, c alert.Config, senders map[string]Sender, out io
 			_, _ = fmt.Fprintf(out, "%s (%s): not sent, this build has no sender for it\n", ch.Name, ch.Service)
 			continue
 		}
-		f := Failure(s.Deliver(ctx, "[low] Trakk test message", "A test message from Trakk's -notify-test: the "+
-			ch.Name+" channel works.", alert.Low))
+		title, body := testMessage(ch.Name, "sent by -notify-test")
+		f := Failure(s.Deliver(ctx, title, body, alert.Low))
 		if f != "" {
 			failed = true
 			_, _ = fmt.Fprintf(out, "%s (%s): failed: %s\n", ch.Name, ch.Service, f)
