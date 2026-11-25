@@ -19,12 +19,18 @@ import (
 type fakeSource struct {
 	occ      map[string][]alert.Occurrence
 	instance map[string][]alert.Occurrence
+	// fail fails that many fact passes.
+	fail int
 }
 
 func (f *fakeSource) Occurrences(_ context.Context, _ time.Time, r alert.Rule, _ *sites.Site, facts bool) (
 	[]alert.Occurrence, bool, error) {
 	if !r.Spec.Condition && !facts {
 		return nil, false, nil
+	}
+	if !r.Spec.Condition && f.fail > 0 {
+		f.fail--
+		return nil, false, errors.New("database is locked")
 	}
 	return f.occ[r.Name], true, nil
 }
@@ -370,7 +376,7 @@ func TestJobs(t *testing.T) {
 	msgs := r.rec.Messages()
 	if len(msgs) != 1 || !strings.Contains(msgs[0].Body, "Trakk: The aggregate build failed") ||
 		!strings.Contains(msgs[0].Body, "disk I/O error") || !strings.Contains(msgs[0].Body, "size cap") ||
-		!strings.HasSuffix(msgs[0].Body, "https://trakk.example.com/dashboard/alerts") {
+		!strings.HasSuffix(msgs[0].Body, "https://trakk.example.com/dashboard/alerts?all=1") { // not one site's: all
 		t.Fatalf("messages %+v", msgs)
 	}
 	// A restart: the board forgets, the row holds.

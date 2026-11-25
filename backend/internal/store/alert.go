@@ -41,7 +41,7 @@ const (
 	selectAlert = `SELECT ` + alertCols + ` FROM alert `
 	qInSet      = selectAlert + `WHERE rule = ? AND site_id = ? AND left_at IS NULL`
 	qLastAlert  = selectAlert + `WHERE rule = ? AND site_id = ? AND key = ? ORDER BY id DESC LIMIT 1`
-	qDue        = selectAlert + `WHERE due != '' ORDER BY due_at LIMIT ?`
+	qDue        = selectAlert + `WHERE due != '' AND (due_at, id) > (?, ?) ORDER BY due_at, id LIMIT ?`
 	shownAlert  = `state NOT IN ('` + AlertBaseline + `', '` + AlertPending + `')`
 	qPageSite   = selectAlert + `WHERE site_id = ? AND id < ? AND ` + shownAlert + ` ORDER BY id DESC LIMIT ?`
 	qPageAll    = selectAlert + `WHERE id < ? AND ` + shownAlert + ` ORDER BY id DESC LIMIT ?`
@@ -122,9 +122,10 @@ func (s *Store) LastAlert(ctx context.Context, rule string, site int64, key stri
 	return as[0], true, nil
 }
 
-// DueAlerts are the rows with a message waiting, oldest first, at most limit.
-func (s *Store) DueAlerts(ctx context.Context, limit int) ([]Alert, error) {
-	return s.alerts(ctx, qDue, limit)
+// DueAlerts are the rows with a message waiting, oldest first, after the row (dueAt, id) (0, 0: from the oldest), at
+// most limit: a page of the outbox.
+func (s *Store) DueAlerts(ctx context.Context, dueAt, id int64, limit int) ([]Alert, error) {
+	return s.alerts(ctx, qDue, dueAt, id, limit)
 }
 
 // AlertPage is a page of the history, newest first: every site's and the instance's (site nil) or one site's, the
@@ -148,6 +149,24 @@ func (s *Store) AlertRuleOf(ctx context.Context, rule string, site int64) (Alert
 		return r, false, nil
 	}
 	return r, err == nil, err
+}
+
+// AlertRules are every rule's last pass on every site: what may still have rows in its set.
+func (s *Store) AlertRules(ctx context.Context) ([]AlertRule, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT rule, site_id, sig, checked_at FROM alert_rule`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []AlertRule
+	for rows.Next() {
+		var r AlertRule
+		if err := rows.Scan(&r.Rule, &r.SiteID, &r.Sig, &r.CheckedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // SetAlertRule records a rule's pass.

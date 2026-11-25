@@ -51,7 +51,7 @@ func TestAlertRows(t *testing.T) {
 	if _, ok, _ := st.LastAlert(ctx, "new-errors", 2, "TypeError: x"); ok {
 		t.Error("another site's row")
 	}
-	due, err := st.DueAlerts(ctx, 10)
+	due, err := st.DueAlerts(ctx, 0, 0, 10)
 	if err != nil || len(due) != 1 || due[0].ID != a.ID {
 		t.Errorf("due %+v %v", due, err)
 	}
@@ -111,7 +111,7 @@ func TestAlertPlans(t *testing.T) {
 	}{
 		"in set":    {qInSet, []any{"r", 1}},
 		"last":      {qLastAlert, []any{"r", 1, "k"}},
-		"due":       {qDue, []any{10}},
+		"due":       {qDue, []any{1000, 5, 10}},
 		"page site": {qPageSite, []any{1, 100, 10}},
 		"page all":  {qPageAll, []any{100, 10}},
 		"prune":     {qPrune, []any{1, 10}},

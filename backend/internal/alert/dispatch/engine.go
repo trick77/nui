@@ -70,6 +70,9 @@ type Engine struct {
 	// factHour is the unix hour of the last facts pass, condAt the last conditions pass.
 	factHour int64
 	condAt   time.Time
+	// factTries counts this hour's failed facts passes; retired: the rows of rules gone are closed.
+	factTries int
+	retired   bool
 	// sent is each channel's sends in the last hour (its cap), retry each failed row's next try.
 	sent  map[string][]time.Time
 	retry map[int64]time.Time
@@ -108,19 +111,89 @@ func (e *Engine) Run(ctx context.Context) {
 // Step is one pass at now: the condition rules every five minutes, the fact rules once an hour closed (after a
 // downtime the latest closed hour once, never the hours missed), then the outbox.
 func (e *Engine) Step(ctx context.Context, now time.Time) error {
+	var errs []error
+	if !e.retired {
+		err := e.retire(ctx, now)
+		e.retired = err == nil
+		errs = append(errs, err)
+	}
 	hour := now.Unix() / 3600
 	facts := hour != e.factHour
 	conds := facts || e.condAt.IsZero() || now.Sub(e.condAt) >= condEvery
-	var errs []error
 	if conds {
-		errs = append(errs, e.evaluate(ctx, now, facts))
+		err := e.evaluate(ctx, now, facts)
+		errs = append(errs, err)
 		e.condAt = now
-		if facts {
-			e.factHour = hour
+		// A facts pass that failed is tried again at the next step, a few times an hour: not every minute for good.
+		if facts && (err == nil || e.factTries+1 >= factTries) {
+			e.factHour, e.factTries = hour, 0
+		} else if facts {
+			e.factTries++
 		}
 	}
 	errs = append(errs, e.dispatch(ctx, now))
 	return errors.Join(errs...)
+}
+
+// factTries is how often a failed facts pass is run in its hour before the next hour's.
+const factTries = 3
+
+// retire closes, in silence, the rows still in their set of a rule or site no longer evaluated: a rule renamed,
+// removed or switched off, a site gone from the rule's selectors or the sites file. Nothing would ever close them,
+// nor prune them; nothing is sent about a rule that is gone. The configuration changes only with a restart: once,
+// at the first step.
+func (e *Engine) retire(ctx context.Context, now time.Time) error {
+	live := map[store.AlertRule]bool{}
+	for _, r := range e.o.Config.Rules {
+		if !r.Enabled {
+			continue
+		}
+		if r.Spec.Instance {
+			live[store.AlertRule{Rule: r.Name}] = true
+			continue
+		}
+		for _, s := range e.sitesOf(r) {
+			live[store.AlertRule{Rule: r.Name, SiteID: s.ID}] = true
+		}
+	}
+	passes, err := e.o.Store.AlertRules(ctx)
+	if err != nil {
+		return err
+	}
+	nowMS := now.UnixMilli()
+	for _, p := range passes {
+		if live[store.AlertRule{Rule: p.Rule, SiteID: p.SiteID}] {
+			continue
+		}
+		rows, err := e.o.Store.InSet(ctx, p.Rule, p.SiteID)
+		if err != nil {
+			return err
+		}
+		for i := range rows {
+			a := &rows[i]
+			if a.State == store.AlertPending {
+				if err := e.o.Store.DeleteAlert(ctx, a.ID); err != nil {
+					return err
+				}
+				continue
+			}
+			if a.State == store.AlertOpen {
+				a.State = store.AlertCleared
+			}
+			if a.Due != "" { // withdrawn: unsent, it is no failure either
+				a.Due, a.DueAt = "", nil
+				if len(a.Delivered) == 0 {
+					a.Channels, a.Failed = nil, nil
+				}
+			}
+			a.LeftAt = &nowMS
+			delete(e.retry, a.ID)
+			if err := e.o.Store.UpdateAlert(ctx, a); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // evaluate runs every enabled rule on its sites (the instance: site 0): the condition rules, and with facts the
@@ -291,8 +364,24 @@ func (e *Engine) stay(ctx context.Context, now time.Time, r alert.Rule, a *store
 	case a.State == store.AlertOpen && r.Repeat > 0 && a.Told == "open" && a.Due == "" && a.NotifiedAt != nil &&
 		nowMS-*a.NotifiedAt >= r.Repeat.Milliseconds():
 		e.due(a, r, "remind", now)
+	case e.unheard(a, r, now):
+		e.due(a, r, "open", now)
 	}
 	return e.o.Store.UpdateAlert(ctx, a)
+}
+
+// unheard reports whether an open condition is one its recipients do not know is open, with nothing on its way:
+// its opening never got through (given up after a downtime, or withdrawn when it cleared before it was sent and
+// came back within the cooldown), or it came back after a clearing they heard and has held for the cooldown since. Its
+// opening is sent again, or it would stay unreported for as long as it lasts.
+func (e *Engine) unheard(a *store.Alert, r alert.Rule, now time.Time) bool {
+	if a.State != store.AlertOpen || a.Told == "open" || a.Due != "" || !e.sending {
+		return false
+	}
+	if a.Told == "clear" && a.NotifiedAt != nil && now.UnixMilli()-*a.NotifiedAt < r.Cooldown.Milliseconds() {
+		return false // a flap within the cooldown stays one message
+	}
+	return len(e.wanted(r)) > 0
 }
 
 // enter records a key new in the set.
@@ -311,6 +400,13 @@ func (e *Engine) enter(ctx context.Context, now time.Time, r alert.Rule, site in
 			prev.LeftAt, prev.LastAt = nil, nowMS
 			if prev.State == store.AlertCleared {
 				prev.State = store.AlertOpen
+				if prev.Due == "clear" { // its clearing not sent yet: withdrawn, the recipients still know it open
+					prev.Due, prev.DueAt, prev.Channels = "", nil, nil
+					delete(e.retry, prev.ID)
+				}
+				if e.unheard(&prev, r, now) {
+					e.due(&prev, r, "open", now)
+				}
 			}
 			return st.UpdateAlert(ctx, &prev)
 		}
@@ -378,15 +474,7 @@ func fill(a *store.Alert, occ alert.Occurrence) {
 // due makes a message about a row wait for its channels: those of the rule that take its severity and can be sent
 // to. None (nothing sent at all, or none fits) leaves it unsent, its delivery none.
 func (e *Engine) due(a *store.Alert, r alert.Rule, what string, now time.Time) {
-	var chans []string
-	if e.sending {
-		for _, n := range r.Channels {
-			ch, ok := e.o.Config.Channel(n)
-			if ok && e.o.Senders[n] != nil && r.Severity >= ch.MinSeverity && !slices.Contains(chans, n) {
-				chans = append(chans, n)
-			}
-		}
-	}
+	chans := e.wanted(r)
 	a.Channels, a.Delivered, a.Failed, a.Attempts = chans, nil, nil, 0
 	a.Due, a.DueAt = "", nil
 	delete(e.retry, a.ID) // a new message waits for no earlier one's backoff
@@ -394,6 +482,21 @@ func (e *Engine) due(a *store.Alert, r alert.Rule, what string, now time.Time) {
 		at := now.UnixMilli()
 		a.Due, a.DueAt = what, &at
 	}
+}
+
+// wanted are the channels a rule's messages go to: those it names that take its severity and can be sent to.
+func (e *Engine) wanted(r alert.Rule) []string {
+	var chans []string
+	if !e.sending {
+		return nil
+	}
+	for _, n := range r.Channels {
+		ch, ok := e.o.Config.Channel(n)
+		if ok && e.o.Senders[n] != nil && r.Severity >= ch.MinSeverity && !slices.Contains(chans, n) {
+			chans = append(chans, n)
+		}
+	}
+	return chans
 }
 
 // Status is the notifications' state for the dashboard's footer.
