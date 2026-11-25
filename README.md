@@ -33,10 +33,10 @@ Both screenshots show simulated traffic, without a model.
 
 Ready-made integrations, script and server feed in one:
 
-- **[WordPress](https://github.com/trick77/trakk-wordpress)**: install the ZIP of its
-  [latest release](https://github.com/trick77/trakk-wordpress/releases/latest), enter your Trakk host under Settings.
+- **WordPress**: [trakk-wordpress](https://github.com/trick77/trakk-wordpress#setup). Its setup starts here, with the
+  domain and a feed key in [`sites.json`](#sites).
 
-Anything else: [INTEGRATION.md](INTEGRATION.md).
+To build one for anything else: [INTEGRATION.md](INTEGRATION.md).
 
 ## Development
 
