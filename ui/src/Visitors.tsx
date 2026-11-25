@@ -19,11 +19,11 @@ import {
   pct,
   rawSince,
   seconds,
-  signal,
   when,
 } from "./format";
 import { useApi, useDebounced, useMore } from "./hooks";
 import { scopeKey } from "./lists";
+import { evidenceText, signalGroups, signalTexts } from "./signals";
 import {
   CardHead,
   ClassPill,
@@ -214,7 +214,7 @@ export function Visitors({ aud }: { aud: Audience }) {
                         <div
                           className={`text-[12px] text-muted ${hangDoes ? "pl-4" : ""}`}
                         >
-                          {joinSep(v.signals.map(signal))}
+                          {joinSep(signalTexts(v.signals))}
                         </div>
                       )}
                     </td>
@@ -442,7 +442,23 @@ function VisitorDetail({
                 />
               </dd>
               <dt className="text-muted">Signals</dt>
-              <dd className="m-0">{joinSep(v.signals.map(signal)) || "–"}</dd>
+              <dd className="m-0 grid gap-1">
+                {v.signals.length === 0
+                  ? "–"
+                  : signalGroups(v.signals).map((g) => (
+                      <div key={g.heading}>
+                        <div className="text-[12px] text-muted">
+                          {g.heading}
+                        </div>
+                        {g.texts.map((t, i) => (
+                          // Its wrapped lines indented, apart from the next.
+                          <div key={i} className="-indent-3 pl-3">
+                            {t}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+              </dd>
               {feed && v.requests != null && (
                 <>
                   <dt className="text-muted">Requests</dt>
@@ -471,7 +487,7 @@ function VisitorDetail({
                 {v.reading.evidence.length > 0 && (
                   <ul className="mt-2 mb-0 grid list-disc gap-[3px] pl-4 text-[13px] text-ink-dim marker:text-faint">
                     {v.reading.evidence.slice(0, 3).map((e, i) => (
-                      <li key={i}>{e}</li>
+                      <li key={i}>{evidenceText(e)}</li>
                     ))}
                   </ul>
                 )}

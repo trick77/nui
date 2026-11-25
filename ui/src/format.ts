@@ -31,9 +31,9 @@ export function networkKind(kind: string): string {
   return kind === "isp" ? "ISP" : upperFirst(kind);
 }
 
-// A signal as shown: No user agent, Hosting network. A first word with a dot
-// in it is a name from code (navigator.webdriver) and stays. The backend's
-// wording stays too, stored days and cached readings hold it.
+// A signal in the backend's wording (signals.ts has the others): Signed-in API
+// client. A first word with a dot in it is a provider's name (example.org
+// address range) and stays.
 export function signal(s: string): string {
   return /^\S*\./.test(s) ? s : upperFirst(s);
 }

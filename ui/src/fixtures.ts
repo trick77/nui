@@ -1268,7 +1268,8 @@ function visitor(key: string, feed: boolean, cursor: string): Visitor | null {
               ? [
                   "Looks up addresses in sequence, 0.8 s apart",
                   "Every request refused with 401",
-                  "Never loaded the page it started from",
+                  // A signal both scrapers have: the backend cites no other.
+                  "Signal: hosting network",
                 ]
               : ["Came from GitHub, searched once", "Read one AS page to 90 %"],
             related: scrape ? ["198.51.100.201"] : [],

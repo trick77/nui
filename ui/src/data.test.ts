@@ -21,6 +21,7 @@ import {
   value,
   when,
 } from "./format";
+import { evidenceText, signalGroups, signalTexts } from "./signals";
 import {
   basePath,
   parseView,
@@ -86,22 +87,20 @@ describe("format", () => {
     ).toEqual(["ISP", "Hosting", "Business", "Education", "Government", ""]);
   });
 
-  it("starts a signal with a capital, a name from code as it is", () => {
+  it("starts a signal with a capital, a dotted name as it is", () => {
     expect(
       [
-        "no user agent",
-        "hosting network",
-        "API only, no page loaded",
-        "client curl/8.4.0",
-        "navigator.webdriver set",
+        "signed-in API client",
+        "client is PetalBot",
+        "Googlebot address range",
+        "example.org address range",
         "",
       ].map(signal),
     ).toEqual([
-      "No user agent",
-      "Hosting network",
-      "API only, no page loaded",
-      "Client curl/8.4.0",
-      "navigator.webdriver set",
+      "Signed-in API client",
+      "Client is PetalBot",
+      "Googlebot address range",
+      "example.org address range",
       "",
     ]);
   });
@@ -155,6 +154,165 @@ describe("format", () => {
     expect(when(null)).toBe("–");
     expect(countryName("CH")).toBe("Switzerland");
     expect(countryName("")).toBe("–");
+  });
+});
+
+describe("signals", () => {
+  const HUMAN = "Human signals";
+  const BOT = "Bot signals";
+  const OTHER = "Other";
+  const grouped = (signals: string[]) =>
+    signalGroups(signals).map((g) => [g.heading, ...g.texts]);
+
+  it.each([
+    ["signed in", HUMAN, "Signed in"],
+    ["script beacon", HUMAN, "Uses a real browser"],
+    [
+      "script beacon from another address",
+      HUMAN,
+      "Uses a real browser, from another address",
+    ],
+    ["engaged", HUMAN, "Active on the page"],
+    ["assets loaded", HUMAN, "Loads images and styles"],
+    ["no sign of a browser", BOT, "No real browser"],
+    ["no page loaded", BOT, "Never opened a page"],
+    ["machine pace", BOT, "Machine pace"],
+    ["client curl/8.4.0", BOT, "Program: curl/8.4.0"],
+    ["client isbot/1.0", BOT, "Program: isbot/1.0"],
+    ["no user agent", BOT, "Does not identify itself"],
+    ["missing browser headers", BOT, "Missing browser headers"],
+    ["navigator.webdriver set", BOT, "Remote-controlled browser"],
+    ["claims Googlebot, address is not Googlebot's", BOT, "Poses as Googlebot"],
+    ["claims Googlebot, no rDNS name", BOT, "Claims Googlebot, no rDNS name"],
+    [
+      "claims Googlebot, rDNS check pending",
+      BOT,
+      "Claims Googlebot, rDNS check pending",
+    ],
+    ["no script beacon", BOT, "Runs no scripts"],
+    ["no assets", BOT, "Loads no images or styles"],
+    ["mostly refused", BOT, "Mostly refused"],
+    ["API only, no page loaded", BOT, "API calls only"],
+    ["rapid requests", BOT, "Rapid requests"],
+    ["hosting network", BOT, "From a data center"],
+    [
+      "automation indicators: window, behaviour",
+      BOT,
+      "Signs of automation: window, behaviour",
+    ],
+    [
+      "automation indicators: window, behaviour, hosting network",
+      BOT,
+      "Signs of automation: window, behaviour, from a data center",
+    ],
+    // A provider: a bot's or an uptime probe's.
+    ["client is PetalBot", OTHER, "Client is PetalBot"],
+    ["UptimeRobot address range", OTHER, "UptimeRobot address range"],
+    [
+      "Samplebot address range, rDNS not verified",
+      OTHER,
+      "Samplebot address range, rDNS not verified",
+    ],
+    ["Googlebot, rDNS confirmed", OTHER, "Googlebot, rDNS confirmed"],
+    ["more clients", OTHER, "More clients"],
+    ["signed-in API client", OTHER, "Signed-in API client"],
+    [
+      "also known bot: Samplebot/1.4, 3 of 9 events (Samplebot address range, no rDNS name)",
+      OTHER,
+      "Also known bot: Samplebot/1.4, 3 of 9 events (Samplebot address range, no rDNS name)",
+    ],
+    // The reason it quotes in its own text.
+    [
+      "also unknown automated: zgrab/0.x, 3 of 9 events (client zgrab/0.x)",
+      OTHER,
+      "Also unknown automated: zgrab/0.x, 3 of 9 events (Program: zgrab/0.x)",
+    ],
+    [
+      "also API client: agent/1.0, 1 of 9 events (signed-in API client)",
+      OTHER,
+      "Also API client: agent/1.0, 1 of 9 events (Signed-in API client)",
+    ],
+    [
+      "also unknown automated: HeadlessChrome/142, 4 of 9 events (automation indicators: window, hosting network)",
+      OTHER,
+      "Also unknown automated: HeadlessChrome/142, 4 of 9 events (Signs of automation: window, from a data center)",
+    ],
+    // Not known here.
+    ["something new", OTHER, "Something new"],
+    ["constructor", OTHER, "Constructor"],
+  ])("says what %s means", (s, heading, text) => {
+    expect(grouped([s])).toEqual([[heading, text]]);
+  });
+
+  it("groups them in order", () => {
+    expect(
+      grouped([
+        "something new",
+        "rapid requests",
+        "client curl/8.4.0",
+        "script beacon",
+        "engaged",
+      ]),
+    ).toEqual([
+      [HUMAN, "Uses a real browser", "Active on the page"],
+      [BOT, "Rapid requests", "Program: curl/8.4.0"],
+      [OTHER, "Something new"],
+    ]);
+    expect(grouped([])).toEqual([]);
+  });
+
+  it("keeps the backend's order in one line, a reason that decided first", () => {
+    expect(
+      signalTexts([
+        "client curl/8.4.0",
+        "signed in",
+        "no assets",
+        "something new",
+        "assets loaded",
+      ]),
+    ).toEqual([
+      "Program: curl/8.4.0",
+      "Signed in",
+      "Something new",
+      "Loads images and styles",
+    ]);
+  });
+
+  it("hides a missing beacon and missing assets once signed in", () => {
+    expect(
+      grouped([
+        "signed in",
+        "no script beacon",
+        "no assets",
+        "hosting network",
+      ]),
+    ).toEqual([
+      [HUMAN, "Signed in"],
+      [BOT, "From a data center"],
+    ]);
+    // An API client's account is none of a person's.
+    expect(grouped(["signed-in API client", "no script beacon"])).toEqual([
+      [BOT, "Runs no scripts"],
+      [OTHER, "Signed-in API client"],
+    ]);
+  });
+
+  it("words a reading's evidence alike", () => {
+    expect(
+      [
+        "Signal: navigator.webdriver set",
+        "Signal: no assets",
+        "Signal: client is PetalBot",
+        "Signal: also unknown automated: curl/8.4.0, 3 of 9 events (client curl/8.4.0)",
+        "12 requests, 3 % refused",
+      ].map(evidenceText),
+    ).toEqual([
+      "Remote-controlled browser",
+      "Loads no images or styles",
+      "Client is PetalBot",
+      "Also unknown automated: curl/8.4.0, 3 of 9 events (Program: curl/8.4.0)",
+      "12 requests, 3 % refused",
+    ]);
   });
 });
 
