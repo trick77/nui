@@ -437,3 +437,170 @@ func TestTest(t *testing.T) {
 		t.Error("no channel passed")
 	}
 }
+
+// An open condition whose opening never got through is sent again: the channel down while it opened, it cleared
+// before it was sent, came back within the cooldown and stays.
+func TestUnheardOpenSentAgain(t *testing.T) {
+	r := newRig(t, `{`+ops+`, "rules": [{"name": "jobs", "on": "job.failed"}]}`)
+	r.step(0)
+	r.rec.Fail = errors.New("down")
+	alert.Fail(r.board, alert.JobAgg, errors.New("disk I/O error"))
+	r.step(5 * time.Minute) // opens, its send fails
+	alert.Fail(r.board, alert.JobAgg, nil)
+	r.step(5 * time.Minute) // clears before anyone heard: quiet
+	r.rec.Fail = nil
+	alert.Fail(r.board, alert.JobAgg, errors.New("disk I/O error"))
+	r.step(5 * time.Minute) // back within the cooldown, and staying
+	msgs := r.rec.Messages()
+	if len(msgs) != 1 || !strings.Contains(msgs[0].Title, "The aggregate build failed") ||
+		strings.Contains(msgs[0].Title, "Cleared") {
+		t.Fatalf("messages %+v", msgs)
+	}
+	if rows := r.rows("jobs"); len(rows) != 1 || rows[0].State != store.AlertOpen || rows[0].Told != "open" {
+		t.Errorf("rows %+v", rows)
+	}
+}
+
+// An opening given up after six hours is sent again while the condition lasts.
+func TestGivenUpOpenSentAgain(t *testing.T) {
+	r := newRig(t, `{`+ops+`, "rules": [{"name": "jobs", "on": "job.failed"}]}`)
+	r.step(0)
+	r.rec.Fail = errors.New("down")
+	alert.Fail(r.board, alert.JobAgg, errors.New("disk I/O error"))
+	r.step(5 * time.Minute)
+	r.step(7 * time.Hour) // given up
+	if rows := r.rows("jobs"); rows[0].Due != "" || rows[0].Told != "" {
+		t.Fatalf("given up %+v", rows[0])
+	}
+	r.rec.Fail = nil
+	r.step(5 * time.Minute)
+	if msgs := r.rec.Messages(); len(msgs) != 1 {
+		t.Fatalf("messages %+v", msgs)
+	}
+}
+
+// A clearing not sent yet is withdrawn when the condition is back within the cooldown: no "Cleared" while it is
+// open, and its real clearing later is sent.
+func TestReopenWithdrawsClear(t *testing.T) {
+	r := newRig(t, `{`+ops+`, "rules": [{"name": "jobs", "on": "job.failed"}]}`)
+	r.step(0)
+	alert.Fail(r.board, alert.JobAgg, errors.New("disk I/O error"))
+	r.step(5 * time.Minute) // opened, sent
+	r.rec.Fail = errors.New("down")
+	alert.Fail(r.board, alert.JobAgg, nil)
+	r.step(5 * time.Minute) // cleared, its send fails
+	alert.Fail(r.board, alert.JobAgg, errors.New("disk I/O error"))
+	r.step(5 * time.Minute) // back within the cooldown
+	r.rec.Fail = nil
+	r.step(5 * time.Minute)
+	if msgs := r.rec.Messages(); len(msgs) != 1 {
+		t.Fatalf("messages while it is open again %+v", msgs)
+	}
+	if rows := r.rows("jobs"); rows[0].State != store.AlertOpen || rows[0].Due != "" || rows[0].Told != "open" {
+		t.Fatalf("row %+v", rows[0])
+	}
+	alert.Fail(r.board, alert.JobAgg, nil)
+	r.step(5 * time.Minute)
+	if msgs := r.rec.Messages(); len(msgs) != 2 || !strings.Contains(msgs[1].Title, "Cleared") {
+		t.Fatalf("messages %+v", msgs)
+	}
+}
+
+// The rows of a rule gone, switched off or no longer about a site are closed at the start, in silence, and pruned
+// with the rest.
+func TestRetire(t *testing.T) {
+	r := newRig(t, `{`+ops+`, "rules": [{"name": "errs", "on": "error.new"},
+		{"name": "off", "on": "probe.new", "enabled": false}]}`)
+	ctx := t.Context()
+	at := r.now.UnixMilli()
+	for _, rule := range []string{"gone", "off", "errs"} {
+		a := store.Alert{SiteID: r.site, Rule: rule, Kind: "error.new", Key: "k", State: store.AlertOnce, Severity: "normal",
+			Text: "t", FirstAt: at, LastAt: at, Told: "open"}
+		if rule == "gone" {
+			a.State, a.Kind, a.Due, a.DueAt, a.Channels = store.AlertOpen, "source.silent", "remind", &at, []string{"ops"}
+		}
+		if err := r.st.InsertAlert(ctx, &a); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.st.SetAlertRule(ctx, store.AlertRule{Rule: rule, SiteID: r.site, Sig: "s", CheckedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A site no longer configured: its rows of a live rule go too.
+	gone := store.Alert{SiteID: 999, Rule: "errs", Kind: "error.new", Key: "k", State: store.AlertOnce, Severity: "normal",
+		Text: "t", FirstAt: at, LastAt: at}
+	if err := r.st.InsertAlert(ctx, &gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.SetAlertRule(ctx, store.AlertRule{Rule: "errs", SiteID: 999, Sig: "s", CheckedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	r.src.occ["errs"] = occ("k")
+	r.step(time.Minute)
+	for _, rule := range []string{"gone", "off"} {
+		if in, _ := r.st.InSet(ctx, rule, r.site); len(in) != 0 {
+			t.Errorf("%s: still in its set %+v", rule, in)
+		}
+	}
+	if in, _ := r.st.InSet(ctx, "errs", 999); len(in) != 0 {
+		t.Errorf("a site gone: %+v", in)
+	}
+	if in, _ := r.st.InSet(ctx, "errs", r.site); len(in) != 1 {
+		t.Errorf("a live rule's row closed: %+v", in)
+	}
+	if msgs := r.rec.Messages(); len(msgs) != 0 {
+		t.Errorf("messages about rules gone %+v", msgs)
+	}
+	if n, err := r.st.PruneAlerts(ctx, r.now.Add(time.Hour)); err != nil || n != 3 {
+		t.Errorf("pruned %d, %v", n, err)
+	}
+}
+
+// A facts pass that failed is run again at the next step, not an hour later.
+func TestFailedFactsRetried(t *testing.T) {
+	r := newRig(t, `{`+ops+`, "rules": [{"name": "errs", "on": "error.new"}]}`)
+	r.step(0)
+	r.src.occ["errs"], r.src.fail = occ("a"), 1
+	r.now = r.now.Add(time.Hour)
+	if err := r.e.Step(t.Context(), r.now); err == nil {
+		t.Fatal("the failed pass went through")
+	}
+	r.step(time.Minute)
+	if msgs := r.rec.Messages(); len(msgs) != 1 {
+		t.Fatalf("messages %+v", msgs)
+	}
+	// A pass that keeps failing stops being retried within its hour.
+	r.src.occ["errs"], r.src.fail = occ("a", "b"), 10
+	r.now = r.now.Add(time.Hour)
+	for range 5 {
+		_ = r.e.Step(t.Context(), r.now)
+		r.now = r.now.Add(time.Minute)
+	}
+	if r.src.fail != 10-factTries {
+		t.Errorf("%d failed passes in an hour, want %d", 10-r.src.fail, factTries)
+	}
+}
+
+// A rule's baseline waits for what it cannot judge yet: a source silent since before the start, judged once its
+// after has passed, is part of the baseline, not news.
+func TestBaselineWaitsForHeld(t *testing.T) {
+	r := newRig(t, `{`+ops+`, "rules": [{"name": "silent", "on": "source.silent", "after": "30m"}]}`)
+	r.src.occ["silent"] = []alert.Occurrence{{Key: "server", Hold: true, Wait: true}}
+	r.step(0)
+	r.step(5 * time.Minute)
+	r.src.occ["silent"] = []alert.Occurrence{{Key: "server", Text: "No events from the feed for 3 h"}}
+	r.step(30 * time.Minute)
+	r.step(5 * time.Minute)
+	if msgs := r.rec.Messages(); len(msgs) != 0 {
+		t.Fatalf("a source long silent sent as news: %+v", msgs)
+	}
+	if rows := r.rows("silent"); len(rows) != 1 || rows[0].State != store.AlertBaseline {
+		t.Fatalf("rows %+v", rows)
+	}
+	// After the baseline, a source falling silent is news.
+	r.src.occ["silent"] = append(r.src.occ["silent"], alert.Occurrence{Key: "browser", Text: "No events from the script"})
+	r.step(5 * time.Minute)
+	if msgs := r.rec.Messages(); len(msgs) != 1 || !strings.Contains(msgs[0].Title, "script") {
+		t.Fatalf("messages %+v", msgs)
+	}
+}
