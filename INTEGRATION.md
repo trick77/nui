@@ -7,6 +7,9 @@ For whoever adds Trakk to another product, an agent included. A product sends on
 
 The collector's limits are in the [README](README.md#browser-script); this page says what to build.
 
+WordPress: nothing to build, [trakk-wordpress](https://github.com/trick77/trakk-wordpress) sends both. It alone takes
+its values from a settings page instead of the environment ([Settings](#settings)).
+
 ## On the Trakk host (not in the product's repo)
 
 The product's repo cannot do this part. The integrating side hands the operator a `sites.json` entry and, for a

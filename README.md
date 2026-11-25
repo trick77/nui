@@ -167,7 +167,8 @@ The key goes to the product's feed emitter (`Authorization: Bearer <key>` on `PO
 
 ### Browser script
 
-Adding a product, script and feed: [INTEGRATION.md](INTEGRATION.md). On a page, include the script:
+Adding a product, script and feed: [INTEGRATION.md](INTEGRATION.md); a WordPress site:
+[trakk-wordpress](https://github.com/trick77/trakk-wordpress). On a page, include the script:
 
 ```html
 <script src="https://trakk.example.com/trakk.js" defer></script>

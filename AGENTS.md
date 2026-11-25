@@ -4,7 +4,7 @@ Self-hosted, passive web traffic observability, never "web analytics" in copy (u
 under `/api`, dashboard under `/dashboard`. `backend/`: Go on ship's kit, embeds `ui/`.
 
 `INTEGRATION.md` is what other repos' agents read to add Trakk: a change to `/trakk.js`, `/api/in`,
-`/api/feed` or `sites.json` updates it in the same commit.
+`/api/feed` or `sites.json` updates it in the same commit, and trick77/trakk-wordpress, whose CI runs `trakk:latest`.
 
 ## Decisions
 - The app mounts `/dashboard` itself, no Traefik StripPrefix. The server rewrites the shell's `./` refs: kit's CSP
@@ -50,7 +50,7 @@ under `/api`, dashboard under `/dashboard`. `backend/`: Go on ship's kit, embeds
   bound / 2 KiB, or such a batch is a 413.
 
 ## Dev / prod
-- Dev: `make sim` (README); UI without a server: `npm run dev:fixtures` in `ui/`.
+- Dev: `make sim` (README).
 - Gate: `make check` (= ship check; `make hooks` once per clone).
 - Commit subjects + PR titles: Go style `area: what` (`backend: …`, `ui: …`, `deploy: …`, `repo: …`, `sim: …`), gated by ship; release notes list them by area.
 - Fresh clone: `ship hooks` before the first push (check, conform and init install it too); without the pre-push hook a push skips the gate.
