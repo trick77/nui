@@ -929,6 +929,8 @@ func (s *Store) RunRetention(ctx context.Context, o RetentionOptions) {
 			lastAge = now
 			n, err := s.PruneAge(ctx, now.AddDate(0, -o.Months, 0))
 			deleted, errs = deleted+n, append(errs, err)
+			n, err = s.PruneAlerts(ctx, now.AddDate(0, 0, -AlertHistoryDays))
+			deleted, errs = deleted+n, append(errs, err)
 		}
 		// Every check: a site waiting for the job goes on minutes after it built the day, not a day later.
 		start := time.Now()

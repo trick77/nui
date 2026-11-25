@@ -2,7 +2,7 @@
 
 # Database schema
 
-18 tables; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.
+21 tables; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.
 
 ## actor_class
 
@@ -194,6 +194,79 @@ Go types:
 | --- | --- | --- | --- | --- |
 | `key` | TEXT | no |  | 1 |
 | `value` | TEXT | no |  |  |
+
+## alert
+
+Go types:
+
+- `store.Alert` (internal/store): Alert is one alert row: a key a rule matched, its state, its text and its delivery. Times are unix ms.
+
+| Column | Type | Null | Default | PK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | no |  | 1 |
+| `site_id` | INTEGER | no |  |  |
+| `rule` | TEXT | no |  |  |
+| `kind` | TEXT | no |  |  |
+| `key` | TEXT | no | `''` |  |
+| `state` | TEXT | no |  |  |
+| `severity` | TEXT | no |  |  |
+| `figure` | REAL | yes |  |  |
+| `unit` | TEXT | no | `''` |  |
+| `text` | TEXT | no |  |  |
+| `detail` | TEXT | no | `''` |  |
+| `panel` | TEXT | no | `''` |  |
+| `filter` | TEXT | no | `'{}'` |  |
+| `first_at` | INTEGER | no |  |  |
+| `last_at` | INTEGER | no |  |  |
+| `left_at` | INTEGER | yes |  |  |
+| `told` | TEXT | no | `''` |  |
+| `due` | TEXT | no | `''` |  |
+| `due_at` | INTEGER | yes |  |  |
+| `notified_at` | INTEGER | yes |  |  |
+| `attempts` | INTEGER | no | `0` |  |
+| `channels` | TEXT | no | `'[]'` |  |
+| `delivered` | TEXT | no | `'[]'` |  |
+| `failed` | TEXT | no | `'[]'` |  |
+
+Indexes:
+
+- `alert_due` (`due_at`) where `due != ''`
+- `alert_last` (`last_at`)
+- `alert_rule_key` (`rule`, `site_id`, `key`, `id`)
+- `alert_site` (`site_id`, `id`)
+
+Checks:
+
+- `CHECK (state IN ('baseline', 'pending', 'open', 'cleared', 'once'))`
+- `CHECK (severity IN ('low', 'normal', 'high'))`
+- `CHECK (told IN ('', 'open', 'clear'))`
+- `CHECK (due IN ('', 'open', 'clear', 'remind'))`
+
+## alert_channel
+
+Go types:
+
+- `store.AlertChannel` (internal/store): AlertChannel is a channel's last delivery and last failure.
+
+| Column | Type | Null | Default | PK |
+| --- | --- | --- | --- | --- |
+| `name` | TEXT | yes |  | 1 |
+| `last_ok` | INTEGER | yes |  |  |
+| `error_at` | INTEGER | yes |  |  |
+| `error` | TEXT | no | `''` |  |
+
+## alert_rule
+
+Go types:
+
+- `store.AlertRule` (internal/store): AlertRule is a rule's last pass on one site: the signature it ran with.
+
+| Column | Type | Null | Default | PK |
+| --- | --- | --- | --- | --- |
+| `rule` | TEXT | no |  | 1 |
+| `site_id` | INTEGER | no |  | 2 |
+| `sig` | TEXT | no |  |  |
+| `checked_at` | INTEGER | no |  |  |
 
 ## event
 
@@ -577,6 +650,44 @@ erDiagram
     agg_meta {
         TEXT key PK
         TEXT value
+    }
+    alert {
+        INTEGER id PK
+        INTEGER site_id
+        TEXT rule
+        TEXT kind
+        TEXT key
+        TEXT state
+        TEXT severity
+        REAL figure
+        TEXT unit
+        TEXT text
+        TEXT detail
+        TEXT panel
+        TEXT filter
+        INTEGER first_at
+        INTEGER last_at
+        INTEGER left_at
+        TEXT told
+        TEXT due
+        INTEGER due_at
+        INTEGER notified_at
+        INTEGER attempts
+        TEXT channels
+        TEXT delivered
+        TEXT failed
+    }
+    alert_channel {
+        TEXT name PK
+        INTEGER last_ok
+        INTEGER error_at
+        TEXT error
+    }
+    alert_rule {
+        TEXT rule PK
+        INTEGER site_id PK
+        TEXT sig
+        INTEGER checked_at
     }
     event {
         INTEGER id PK

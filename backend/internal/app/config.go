@@ -34,6 +34,9 @@ type Config struct {
 	SitesFile string
 	// sitesDefault: SitesFile is the default in ConfDir, not BACKEND_SITES_FILE (SitesPath may fall back).
 	sitesDefault bool
+	// NotifyFile holds the alert rules and the channels they send to (docs/notify.example.json). Read at start: a
+	// file with faults never stops it, it sends nothing then.
+	NotifyFile string
 	// RetentionMonths is how long the per-address aggregates, actor classes and model usage are kept, and raw events
 	// at most; the other figures stay, unless the size cap takes them.
 	RetentionMonths int
@@ -76,6 +79,7 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 		TrustedHops:      r.Int("BACKEND_TRUSTED_HOPS", 1),
 		LogLevel:         r.String("BACKEND_LOG_LEVEL", "info"),
 		SitesFile:        r.String("BACKEND_SITES_FILE", ""),
+		NotifyFile:       r.String("BACKEND_NOTIFY_FILE", ""),
 		RetentionMonths:  r.Int("BACKEND_RETENTION_MONTHS", 25),
 		RawRetentionDays: r.Int("BACKEND_RAW_RETENTION_DAYS", 90),
 		MaxDBMB:          r.Int("BACKEND_MAX_DB_MB", 20480),
@@ -94,6 +98,9 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 	}
 	if cfg.SitesFile == "" {
 		cfg.SitesFile, cfg.sitesDefault = filepath.Join(cfg.ConfDir, SitesFileName), true
+	}
+	if cfg.NotifyFile == "" {
+		cfg.NotifyFile = filepath.Join(cfg.ConfDir, "notify.json")
 	}
 	if cfg.OIDCRedirectURL == "" && cfg.PublicFQDN != "" {
 		cfg.OIDCRedirectURL = "https://" + cfg.PublicFQDN + "/api/auth/callback"

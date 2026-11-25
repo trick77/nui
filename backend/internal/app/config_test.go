@@ -22,7 +22,7 @@ func TestLoadConfig_Defaults(t *testing.T) {
 		t.Errorf("trusted hops default %d, want 1 (the compose file's Traefik)", cfg.TrustedHops)
 	}
 	if cfg.Addr != ":8080" || cfg.DataDir != "/data" || cfg.ConfDir != "/conf" || cfg.SitesFile != "/conf/sites.json" ||
-		cfg.RetentionMonths != 25 ||
+		cfg.NotifyFile != "/conf/notify.json" || cfg.RetentionMonths != 25 ||
 		cfg.RawRetentionDays != 90 || cfg.MaxDBMB != 20480 || cfg.LLMModel != "mimo-v2.6-flash" || cfg.LLMDailyCalls != 200 || cfg.OIDCConfigured() ||
 		cfg.Secure() || cfg.AuthDisabled {
 		t.Errorf("cfg = %+v", cfg)

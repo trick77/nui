@@ -26,6 +26,8 @@ import (
 	"github.com/trick77/toolkit/llmwire"
 
 	"github.com/trick77/trakk/backend/internal/agg"
+	"github.com/trick77/trakk/backend/internal/alert"
+	"github.com/trick77/trakk/backend/internal/alert/dispatch"
 	"github.com/trick77/trakk/backend/internal/app"
 	"github.com/trick77/trakk/backend/internal/classify"
 	"github.com/trick77/trakk/backend/internal/dash"
@@ -46,7 +48,13 @@ var (
 	newKeyFlag      = flag.Bool("new-feed-key", false, "print a new feed key and the hash the sites file takes, then exit")
 	demoFlag        = flag.Int("demo", 0, "fill an empty database with this many days of simulated traffic on the configured sites (development)")
 	simFlag         = flag.Bool("sim", false, "serve a simulated world from a temporary data directory, sign-in off (development; BACKEND_SIM_* knobs, README)")
+	notifyCheck     = flag.Bool("notify-check", false, "check the notify file (BACKEND_NOTIFY_FILE) and exit 0 (no fault) or 1; sends nothing")
+	notifyTest      = flag.Bool("notify-test", false, "send a test message to every channel of the notify file, print each one's outcome and exit 0 (all sent) or 1")
 )
+
+// newSenders makes each channel's sender, the seam the shoutrrr-backed one (toolkit/notify) plugs into. Until it
+// does, no channel has one: nothing is sent, the alerts are recorded and shown all the same.
+var newSenders = func(alert.Config) map[string]dispatch.Sender { return nil }
 
 func main() {
 	// server sim <command>: the simulator's own command line (backfill, live, export, check).
@@ -69,6 +77,12 @@ func main() {
 	}
 	if *healthcheckFlag {
 		os.Exit(httpx.Healthcheck(httpx.LocalURL(cfg.Addr, "/readyz")))
+	}
+	if *notifyCheck || *notifyTest {
+		ctx, stop := run.Context(context.Background())
+		code := notifyCmd(ctx, cfg, *notifyTest, os.Stdout)
+		stop()
+		os.Exit(code)
 	}
 	mode, err := startMode(cfg, *simFlag, *demoFlag)
 	if err != nil {
@@ -237,6 +251,10 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 		DailyTokens: int64(cfg.LLMDailyTokens)})
 	ds := &dash.Server{DB: st, Sites: reg, Ref: ref, Counters: counters, Model: model,
 		RetentionMonths: cfg.RetentionMonths, RawDays: cfg.RawRetentionDays, Build: version.String()}
+	notify := loadNotify(cfg, reg)
+	board := alert.NewBoard(nil)
+	alerts := dispatch.New(dispatch.Options{Store: st, Sites: reg, Config: notify, Senders: newSenders(notify),
+		Board: board, PublicFQDN: cfg.PublicFQDN})
 
 	// Background work runs on its own context: the server drains first, then the writer flushes what the drained
 	// requests queued.
@@ -286,6 +304,8 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	})
 	start(model.Run)
 	start(verifier.Run)
+	// The alerts' sends end with the background context: the shutdown aborts them, their rows stay due.
+	start(alerts.Run)
 	// Retention purges raw only from days the job built clean; the cap builds a day through Cover before it deletes
 	// the day's raw.
 	start(func(c context.Context) {
@@ -327,8 +347,8 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 }
 
 // The shutdown budget, in order: the HTTP drain (requests in flight finish and queue their events), the background
-// stop (the writer's write under way and its drain of the queue, ingest.StopTime, plus a margin for the rest), the
-// final counter flush. Their sum stays under compose.yaml's stop_grace_period, after which Docker kills the process.
+// stop (the writer's write under way and its drain of the queue, ingest.StopTime, plus a margin for the rest: the
+// alerts' sends are aborted, not waited for, as a channel may take 45 s), the final counter flush. Their sum stays under compose.yaml's stop_grace_period, after which Docker kills the process.
 const (
 	httpDrain      = 10 * time.Second
 	bgStop         = ingest.StopTime + 2*time.Second

@@ -254,6 +254,56 @@ type AggMeta struct {
 	Value string
 }
 
+// Alert is one alert row: a key a rule matched, its state, its text and its delivery. Times are unix ms.
+//
+// Table: alert
+type Alert struct {
+	ID       int64
+	SiteID   int64 // 0: the instance
+	Rule     string
+	Kind     string
+	Key      string
+	State    string // AlertBaseline, AlertPending, AlertOpen, AlertCleared or AlertOnce
+	Severity string
+	Figure   *float64
+	Unit     string
+	Text     string
+	Detail   string
+	Panel    string
+	Filter   map[string]string
+	FirstAt  int64
+	LastAt   int64
+	LeftAt   *int64
+	Told     string // '', open or clear
+	Due      string // '', open, clear or remind
+	DueAt    *int64
+	// NotifiedAt is when a channel last took a message about it.
+	NotifiedAt *int64
+	Attempts   int64
+	// Channels, Delivered and Failed are the due message's channels, those that took it and those that refused it.
+	Channels, Delivered, Failed []string
+}
+
+// AlertRule is a rule's last pass on one site: the signature it ran with.
+//
+// Table: alert_rule
+type AlertRule struct {
+	Rule      string
+	SiteID    int64
+	Sig       string
+	CheckedAt int64
+}
+
+// AlertChannel is a channel's last delivery and last failure.
+//
+// Table: alert_channel
+type AlertChannel struct {
+	Name    string
+	LastOK  *int64
+	ErrorAt *int64
+	Error   string
+}
+
 // Usage is one site's model calls and tokens on one day.
 //
 // Table: llm_usage
