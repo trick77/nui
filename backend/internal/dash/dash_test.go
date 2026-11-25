@@ -1315,6 +1315,32 @@ func TestLog(t *testing.T) {
 	}
 }
 
+// The log's name filter is exact, as the error detail's count: what only mentions the message is not among its
+// events.
+func TestLogName(t *testing.T) {
+	r, insert := exactRig(t)
+	const msg = "TypeError: x"
+	ts := at("2026-11-20T10:00:00Z")
+	onPath := jsError(ts, "other", "v0")
+	onPath.Path, onPath.Template = "/"+msg, "/"+msg
+	custom := jsError(ts, msg, "v0")
+	custom.Kind = "custom"
+	insert(jsError(ts, msg, "v0"), jsError(ts-2*dayMS, msg, "v1"), jsError(ts, msg+" too", "v0"), onPath, custom)
+	for _, tc := range []struct {
+		kv   []string
+		want float64
+	}{{[]string{"kind", "js_error", "name", msg}, 2}, {[]string{"name", msg}, 3}, {[]string{"name", "TypeError"}, 0},
+		{[]string{"name", "x' OR '1'='1"}, 0}, {[]string{"kind", "js_error", "path", msg}, 4}} {
+		code, b := r.get(t, "log", p(feedSite, tc.kv...))
+		if code != http.StatusOK || num64(b["total"]) != tc.want || len(listRows(b)) != int(tc.want) {
+			t.Errorf("%v: %d, total %v, %d rows, want %v", tc.kv, code, b["total"], len(listRows(b)), tc.want)
+		}
+	}
+	if _, d := r.get(t, "error", p(feedSite, "key", msg)); d["count"] != 2.0 {
+		t.Errorf("the detail counts %v", d["count"])
+	}
+}
+
 func TestDomainAndSites(t *testing.T) {
 	r := newRig(t, 2, 3, &fakeModel{})
 	_, body := r.get(t, "domain", p(feedSite, "range", "7d"))

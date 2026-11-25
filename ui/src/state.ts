@@ -17,6 +17,7 @@ export const LOG_KEYS = [
   "kind",
   "status",
   "calls",
+  "name",
   "endpoint",
   "account",
   "op",

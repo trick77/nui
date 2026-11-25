@@ -299,11 +299,9 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insigh
 	}); err != nil {
 		return nil, err
 	}
-	if err := s.newKeys(ctx, q, "errors", 1, func(k string, v int64, g *keySums) {
-		// One browser's extension is no news of the site's, and nothing about it can be looked up (owner).
-		if maskedError(k) && g.d.count() < minMaskedVisitors {
-			return
-		}
+	// One browser's extension is no news of the site's, and nothing about it can be looked up (owner).
+	shown := func(k string, g *keySums) bool { return !maskedError(k) || g.d.count() >= minMaskedVisitors }
+	if err := s.newKeysOf(ctx, q, "errors", 1, shown, func(k string, v int64, _ *keySums) {
 		add(insight.Fact{ID: "err:" + k, Kind: "problem", Figure: num(float64(v)), Unit: "times",
 			Text: "New error: " + truncate(k, 120), Score: 1000 + float64(v), Target: insight.Target{Panel: "errors"}})
 	}); err != nil {
@@ -361,6 +359,14 @@ func enoughCalls(tiles []tile) bool {
 // comparison: not among its rows, and not maybe collapsed into one of its days' Other rows. fn also gets the key's
 // sums.
 func (s *Server) newKeys(ctx context.Context, q *query, dim string, minValue int64, fn func(k string, v int64, g *keySums)) error {
+	return s.newKeysOf(ctx, q, dim, minValue, func(string, *keySums) bool { return true }, fn)
+}
+
+// newKeysOf is newKeys where a key is there, in either period, only when its sums pass counts: one that does not
+// takes no place among the ten, nor does its past hide it. A key that may sit in the comparison's Other stays no new
+// one: its sums there are not known.
+func (s *Server) newKeysOf(ctx context.Context, q *query, dim string, minValue int64, counts func(k string, g *keySums) bool,
+	fn func(k string, v int64, g *keySums)) error {
 	pl, err := s.planOf(ctx, q)
 	if err != nil {
 		return err
@@ -385,7 +391,9 @@ func (s *Server) newKeys(ctx context.Context, q *query, dim string, minValue int
 	var out []kv
 	for k, g := range cur.m {
 		v := sc.figure(g)
-		if _, seen := prev.m[k]; !seen && !prev.other.hides(k) && v >= minValue && k != "" {
+		was, seen := prev.m[k]
+		seen = (seen && counts(k, was)) || prev.other.hides(k)
+		if !seen && v >= minValue && k != "" && counts(k, g) {
 			out = append(out, kv{k, v, g})
 		}
 	}

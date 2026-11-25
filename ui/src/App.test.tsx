@@ -1475,8 +1475,17 @@ describe("script errors", () => {
       await within(d).findByText("/assets/index-C4v1rT2s.js:1:48113"),
     ).toBeInTheDocument();
     expect(within(d).getByText("The site's code")).toBeInTheDocument();
-    expect(within(d).getByText("Not the site's code")).toBeInTheDocument();
-    expect(within(d).queryByText("Details withheld")).toBeNull();
+    // Every origin is explained, one whose places are all among the cut ones
+    // too, in the backend's order.
+    expect(
+      within(d)
+        .getAllByRole("term")
+        .map((x) => x.textContent),
+    ).toEqual([
+      "The site's code",
+      "Another host's script",
+      "Not the site's code",
+    ]);
     expect(within(d).getByText(/1.1 % of 1.310/)).toBeInTheDocument();
     expect(within(d).getByText("2 more")).toBeInTheDocument();
     expect(
@@ -1504,9 +1513,25 @@ describe("script errors", () => {
         name: "Every occurrence in the log →",
       }),
     );
-    const q = new URLSearchParams(window.location.search);
-    expect(q.get("kind")).toBe("js_error");
-    expect(q.get("path")).toBe("Unhandled rejection: AbortError");
+    const name = "Unhandled rejection: AbortError";
+    const log = await screen.findByRole("region", { name: "Log" });
+    // Exactly this message, as the detail counts it: no substring.
+    for (const q of [
+      new URLSearchParams(window.location.search),
+      lastCall("/api/dash/log"),
+    ]) {
+      expect(q.get("kind")).toBe("js_error");
+      expect(q.get("name")).toBe(name);
+      expect(q.get("path")).toBeNull();
+    }
+    expect(within(log).getByText(`Name ${name}`)).toBeInTheDocument();
+    fireEvent.click(
+      within(log).getByRole("button", { name: "Clear the name filter" }),
+    );
+    await waitFor(() =>
+      expect(lastCall("/api/dash/log").get("name")).toBeNull(),
+    );
+    expect(lastCall("/api/dash/log").get("kind")).toBe("js_error");
   });
 
   it("opens the detail from the full list, which closes", async () => {
