@@ -7,29 +7,11 @@ import (
 	"unicode/utf8"
 )
 
-// defuser maps what a chat, a mail client or a Markdown renderer would act on to look-alikes that do nothing: a
-// path, a referrer or an error message is the outside world's text, and it lands in Slack and mail. No link but
-// the dashboard's own, no mention, no formatting.
-var defuser = strings.NewReplacer(
-	"://", "∶//",
-	"@", "＠",
-	"`", "'",
-	"*", "∗",
-	"_", "＿",
-	"~", "～",
-	"[", "［",
-	"]", "］",
-	"<", "‹",
-	">", "›",
-	"|", "｜",
-	"#", "＃",
-	"\\", "＼",
-)
-
-// Defuse is s as safe plain text of at most n runes: on one line, control and format characters out, what a
-// renderer acts on defused, clipped with an ellipsis. Every text from outside goes through it before it is stored
-// or sent.
-func Defuse(s string, n int) string {
+// Line is s on one line of at most n runes: whitespace runs one space, control and invisible format characters out
+// (a zero-width space, a direction override reads otherwise than it is). What an alert stores and the dashboard
+// shows as text: the outside world's text as it came, readable and copyable. A message defuses it on its way out
+// (toolkit/notify's Plain, internal/alert/dispatch): a chat or a mail client would act on it.
+func Line(s string, n int) string {
 	var b strings.Builder
 	space := false
 	for _, r := range s {
@@ -39,7 +21,7 @@ func Defuse(s string, n int) string {
 		case unicode.IsSpace(r) || unicode.IsControl(r):
 			space = b.Len() > 0
 			continue
-		case unicode.Is(unicode.Cf, r): // zero-width and direction marks: text that reads otherwise than it is
+		case unicode.Is(unicode.Cf, r):
 			continue
 		}
 		if space {
@@ -48,7 +30,7 @@ func Defuse(s string, n int) string {
 		}
 		b.WriteRune(r)
 	}
-	return Clip(defuser.Replace(b.String()), n)
+	return Clip(b.String(), n)
 }
 
 // Clip cuts s to at most n runes, an ellipsis for what is cut.

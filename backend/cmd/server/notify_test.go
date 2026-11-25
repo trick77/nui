@@ -1,13 +1,15 @@
 package main
 
 import (
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/trick77/trakk/backend/internal/alert"
-	"github.com/trick77/trakk/backend/internal/alert/dispatch"
 	"github.com/trick77/trakk/backend/internal/app"
 )
 
@@ -47,14 +49,45 @@ func TestNotifyCmd(t *testing.T) {
 		strings.Contains(out, "hunter2") {
 		t.Errorf("check: %d %s", code, out)
 	}
-	// No sender in this build: the test says so and fails.
-	if code, out := run(true); code != 1 || !strings.Contains(out, "no sender") {
-		t.Errorf("test without a sender: %d %s", code, out)
+	// A channel the sender refuses is a fault like any other, naming the channel and the services, never the URL.
+	write("notify.json", `{"channels": {"chat": "slack://hook:hunter2@T0/B0/X0"}, "rules": [{"name": "a", "on": "error.new"}]}`)
+	if code, out := run(false); code != 1 || !strings.Contains(out, `fault: channel "chat" (slack): unsupported service; supported: generic, gotify, ntfy, pushover, smtp, telegram`) ||
+		strings.Contains(out, "hunter2") {
+		t.Errorf("unsupported: %d %s", code, out)
 	}
-	rec := &dispatch.Recorder{}
-	newSenders = rec.Senders
-	t.Cleanup(func() { newSenders = func(alert.Config) map[string]dispatch.Sender { return nil } })
-	if code, out := run(true); code != 0 || !strings.Contains(out, "ops (ntfy): sent") || len(rec.Messages()) != 1 {
-		t.Errorf("test: %d %s", code, out)
+
+	// -notify-test sends: a webhook that takes it, an ntfy server that refuses it. One line each, exit 1, no URL.
+	var got []string
+	hook := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = append(got, string(b))
+	}))
+	defer hook.Close()
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "token hunter2 refused", http.StatusInternalServerError)
+	}))
+	defer down.Close()
+	host := func(s *httptest.Server) string { return strings.TrimPrefix(s.URL, "http://") }
+	write("notify.json", `{"channels": {"hook": "generic://`+host(hook)+`/hook?disabletls=yes&token=hunter2",
+		"push": "ntfy://user:hunter2@`+host(down)+`/alerts?scheme=http"}, "rules": [{"name": "a", "on": "error.new"}]}`)
+	var logs strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	code, out = run(true)
+	if code != 1 || !strings.Contains(out, "hook (generic): sent") || !strings.Contains(out, "push (ntfy): failed: ") ||
+		len(got) != 1 || !strings.Contains(got[0], "-notify-test") {
+		t.Errorf("test: %d %s, webhook got %v", code, out, got)
+	}
+	for _, s := range []string{out, logs.String()} {
+		if strings.Contains(s, "hunter2") || strings.Contains(s, "127.0.0.1") {
+			t.Errorf("a URL or token in the output: %s", s)
+		}
+	}
+	down.Close()
+	write("notify.json", `{"channels": {"hook": "generic://`+host(hook)+`/hook?disabletls=yes"},
+		"rules": [{"name": "a", "on": "error.new"}]}`)
+	if code, out := run(true); code != 0 || !strings.Contains(out, "hook (generic): sent") {
+		t.Errorf("all sent: %d %s", code, out)
 	}
 }

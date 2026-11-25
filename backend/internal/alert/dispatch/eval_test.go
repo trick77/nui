@@ -123,9 +123,10 @@ func TestEvalFacts(t *testing.T) {
 	if len(occ) != 2 {
 		t.Fatalf("min 1: %s", keys(occ))
 	}
+	// Stored as it came, on one line: the message defuses it (TestFacts), the dashboard shows it.
 	for _, o := range occ {
-		if strings.Contains(o.Text, "https://") || strings.Contains(o.Text, "@") {
-			t.Errorf("not defused: %q", o.Text)
+		if strings.Contains(o.Text, "\n") || (strings.Contains(o.Key, "evil") && !strings.Contains(o.Text, "https://")) {
+			t.Errorf("text %q", o.Text)
 		}
 	}
 	if occ, _ := r.occ(v, c.Rules[2], r.web); keys(occ) != "198.51.100.7" || occ[0].Target.Panel != "visitors" ||
@@ -234,7 +235,7 @@ func TestEvalErrors(t *testing.T) {
 	if own.Target.Panel != "log" || own.Target.Filter["kind"] != "js_error" || own.Target.Filter["name"] != "TypeError: own *x*" ||
 		!strings.Contains(own.Detail, "TypeError at own /assets/a.js:1:7") || !strings.Contains(own.Detail, "2 visitors") ||
 		!strings.Contains(own.Detail, "% of 6 who saw a page") || strings.Contains(own.Detail, "at x (") ||
-		strings.Contains(own.Text, "*") {
+		own.Text != "New error: TypeError: own *x*" {
 		t.Errorf("own %+v", own)
 	}
 	srv := byKey["GET /api/x"]

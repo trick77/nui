@@ -87,6 +87,16 @@ func (c *Config) Sending() bool {
 	return c.Configured && c.Enabled && len(c.Faults) == 0 && !c.Defaulted && len(c.Channels) > 0
 }
 
+// WithFaults is c with faults found beyond the file's own reading (a channel the sender refuses): like any other,
+// they leave the defaults recording and nothing sent.
+func (c Config) WithFaults(faults ...string) Config {
+	if len(faults) == 0 {
+		return c
+	}
+	c.Faults = append(slices.Clone(c.Faults), faults...)
+	return defaulted(c)
+}
+
 // Channel is the named channel.
 func (c *Config) Channel(name string) (Channel, bool) {
 	i := slices.IndexFunc(c.Channels, func(ch Channel) bool { return ch.Name == name })
@@ -381,7 +391,7 @@ func parseRule(raw json.RawMessage, def ruleDefaults, c *Config, k Known) (Rule,
 	}
 	spec, ok := Lookup(j.On)
 	if !ok {
-		bad("on %q is no trigger of the catalogue (README, Notifications)", Defuse(j.On, 40))
+		bad("on %q is no trigger of the catalogue (README, Notifications)", Clip(j.On, 40))
 		return r, errs
 	}
 	r.Spec, r.P = spec, spec.Defaults
@@ -405,7 +415,7 @@ func parseRule(raw json.RawMessage, def ruleDefaults, c *Config, k Known) (Rule,
 	}
 	for _, s := range j.Sites {
 		if !slices.Contains(k.Domains, strings.ToLower(s)) {
-			bad("site %q is not in the sites file", Defuse(s, 80))
+			bad("site %q is not in the sites file", Clip(s, 80))
 		}
 	}
 	for i, s := range r.Sites {
@@ -413,7 +423,7 @@ func parseRule(raw json.RawMessage, def ruleDefaults, c *Config, k Known) (Rule,
 	}
 	for _, p := range j.Products {
 		if !slices.Contains(k.Products, p) {
-			bad("product %q is no product of the sites file", Defuse(p, 80))
+			bad("product %q is no product of the sites file", Clip(p, 80))
 		}
 	}
 	if j.Channels != nil {
@@ -421,7 +431,7 @@ func parseRule(raw json.RawMessage, def ruleDefaults, c *Config, k Known) (Rule,
 	}
 	for _, n := range r.Channels {
 		if _, ok := c.Channel(n); !ok {
-			bad("channel %q is not among the channels", Defuse(n, 64))
+			bad("channel %q is not among the channels", Clip(n, 64))
 		}
 	}
 	durs := []struct {
@@ -474,7 +484,7 @@ func parseRule(raw json.RawMessage, def ruleDefaults, c *Config, k Known) (Rule,
 		r.P.Jobs = j.Jobs
 		for _, n := range j.Jobs {
 			if !slices.Contains(Jobs, n) {
-				bad("job %q is none of %s", Defuse(n, 40), strings.Join(Jobs, ", "))
+				bad("job %q is none of %s", Clip(n, 40), strings.Join(Jobs, ", "))
 			}
 		}
 	}
@@ -485,7 +495,7 @@ func parseRule(raw json.RawMessage, def ruleDefaults, c *Config, k Known) (Rule,
 		}
 		for _, o := range j.Origins {
 			if !slices.Contains(Origins, o) {
-				bad("origin %q is none of %s", Defuse(o, 40), strings.Join(Origins, ", "))
+				bad("origin %q is none of %s", Clip(o, 40), strings.Join(Origins, ", "))
 			}
 		}
 	}

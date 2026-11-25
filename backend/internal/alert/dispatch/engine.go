@@ -286,7 +286,7 @@ var jobNames = map[string]string{alert.JobAgg: "aggregate build", alert.JobReten
 	alert.JobWriter: "event writer"}
 
 func conditionOccurrence(c alert.Condition) alert.Occurrence {
-	o := alert.Occurrence{Key: c.Key, Detail: alert.Defuse(alert.Scrub(c.Text), 300),
+	o := alert.Occurrence{Key: c.Key, Detail: alert.Line(alert.Scrub(c.Text), 300),
 		Target: &alert.Target{Panel: "domain", Filter: map[string]string{}}}
 	if c.Kind == alert.KindSizeCap {
 		o.Text = "The database reached its size cap: the oldest data is deleted"

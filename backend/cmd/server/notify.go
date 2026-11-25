@@ -31,7 +31,7 @@ func notifyCmd(ctx context.Context, cfg app.Config, test bool, out io.Writer) in
 			k.Products = append(k.Products, c.Product)
 		}
 	}
-	c := alert.Load(cfg.NotifyFile, k)
+	c, senders := dispatch.Wire(alert.Load(cfg.NotifyFile, k))
 	_, _ = fmt.Fprintf(out, "notify file %s\n", cfg.NotifyFile)
 	switch {
 	case !c.Configured:
@@ -58,7 +58,7 @@ func notifyCmd(ctx context.Context, cfg app.Config, test bool, out io.Writer) in
 		_, _ = fmt.Fprintln(out, "ok")
 		return 0
 	}
-	if err := dispatch.Test(ctx, c, newSenders(c), out); err != nil {
+	if err := dispatch.Test(ctx, c, senders, out); err != nil {
 		return 1
 	}
 	return 0
@@ -77,9 +77,10 @@ func ruleState(c alert.Config, r alert.Rule) string {
 	return "active, to " + strings.Join(r.Channels, ", ")
 }
 
-// loadNotify reads the notify file for the registry's sites and logs what it holds: a line per rule, every fault.
-// Faults never stop the start: the collector must not stop over a typo in a rule.
-func loadNotify(cfg app.Config, reg *sites.Registry) alert.Config {
+// loadNotify reads the notify file for the registry's sites, builds each channel's sender and logs what it holds: a
+// line per rule, every fault (a channel the sender refuses among them). Faults never stop the start: the collector
+// must not stop over a typo in a rule.
+func loadNotify(cfg app.Config, reg *sites.Registry) (alert.Config, map[string]dispatch.Sender) {
 	var k alert.Known
 	for _, s := range reg.All() {
 		k.Domains = append(k.Domains, s.Domain)
@@ -87,7 +88,7 @@ func loadNotify(cfg app.Config, reg *sites.Registry) alert.Config {
 			k.Products = append(k.Products, s.Product)
 		}
 	}
-	c := alert.Load(cfg.NotifyFile, k)
+	c, senders := dispatch.Wire(alert.Load(cfg.NotifyFile, k))
 	switch {
 	case !c.Configured:
 		slog.Info("No notify file: alerts are recorded with the default rules, nothing is sent",
@@ -106,5 +107,5 @@ func loadNotify(cfg app.Config, reg *sites.Registry) alert.Config {
 			slog.Info("Alert rule", "rule", r.Name, "on", r.Spec.ID, "state", ruleState(c, r))
 		}
 	}
-	return c
+	return c, senders
 }
