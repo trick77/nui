@@ -167,6 +167,34 @@ const SPOT = new RegExp(
 // A URL in a function's name.
 const NAME_QUERY = /(:\/\/[^\s?#]*)[?#]\S*?(?=@?$|\s)/g;
 const ID = /^[\da-f]{32}$/;
+// Script hosts per document, those the first report may take, and the bytes
+// of one: 20 at their longest (quoted, a comma) are 2,060 bytes, about half
+// of LIMITS.propsBytes in one report. The hosts a document remembers.
+const SCRIPT_HOSTS = 20;
+const FIRST_HOSTS = 16;
+const HOST_BYTES = 100;
+const SEEN_HOSTS = 100;
+// A host name as the URL parser gives it: labels of letters, digits, inner
+// hyphens and underscores (hosts do carry them). The backend's hostName.
+const HOSTNAME =
+  /^[a-z\d_]([a-z\d_-]*[a-z\d_])?(\.[a-z\d_]([a-z\d_-]*[a-z\d_])?)*$/;
+const IPV6 = /^\[[\da-f:]+\]$/;
+
+// A URL's hostname as it is sent, "" for none: lower case without a final
+// dot, an IPv6 address in its brackets (the parser's canonical form), a
+// name past HOST_BYTES cut to its last labels (the domain stays, a name
+// stays a name). The backend (watch.scriptHost) keeps the same forms.
+export function scriptHost(hostname: string): string {
+  let h = hostname.toLowerCase().replace(/\.$/, "");
+  if (IPV6.test(h)) return h;
+  if (!HOSTNAME.test(h)) return "";
+  while (h.length > HOST_BYTES) {
+    const i = h.indexOf(".");
+    if (i < 0) return "";
+    h = h.slice(i + 1);
+  }
+  return h;
+}
 
 // UTF-8 length without TextEncoder, which old browsers lack.
 export function utf8Len(s: string): number {
@@ -1234,6 +1262,51 @@ export function start(
     }
   };
   tick();
+  // The hosts the page's scripts came from, so a new one (an injected
+  // skimmer) stands out. The host only, never the URL: a query can carry a
+  // key. Each goes out once per document, with the next engagement; the
+  // page's own and the collector's are no news.
+  // The first report takes at most FIRST_HOSTS: the rest of the 20 wait for
+  // hosts that show up later, an injected script's. Every host seen before
+  // that report is remembered (up to SEEN_HOSTS), sent or not, so the
+  // page's own overflow never takes a later place.
+  const scriptHosts: string[] = [];
+  const seenHosts: string[] = [];
+  let scriptsSent = 0;
+  let firstReport = true;
+  const known = [site, new URL(src, loc.href).hostname].map((h) =>
+    h.toLowerCase().replace(/\.$/, ""),
+  );
+  const addScript = (u: unknown) => {
+    // The URL whole, never cut: a cut inside a long userinfo would name
+    // another host. Only http(s) is parsed: no inline script's "", no data:
+    // URL.
+    const s = String(u);
+    if (scriptHosts.length >= SCRIPT_HOSTS || !/^https?:/i.test(s)) return;
+    let h: string;
+    try {
+      const x = new URL(s);
+      if (x.protocol !== "http:" && x.protocol !== "https:") return;
+      h = scriptHost(x.hostname);
+    } catch {
+      return;
+    }
+    if (
+      !h ||
+      known.indexOf(h) >= 0 ||
+      seenHosts.indexOf(h) >= 0 ||
+      scriptHosts.indexOf(h) >= 0
+    )
+      return;
+    if (firstReport) {
+      if (seenHosts.length >= SEEN_HOSTS) return;
+      seenHosts.push(h);
+      if (scriptHosts.length < FIRST_HOSTS) scriptHosts.push(h);
+      return;
+    }
+    if (seenHosts.length < SEEN_HOSTS) seenHosts.push(h);
+    scriptHosts.push(h);
+  };
   const engagement = (at?: [string, string]) => {
     tick();
     measure();
@@ -1243,16 +1316,28 @@ export function start(
       if (at) pageIn = noInputs();
       return;
     }
-    record(
-      "engagement",
-      {
-        ms: Math.round(activeMs),
-        scroll: Math.round(maxScroll),
-        inputs: pageIn,
-      },
-      undefined,
-      at,
-    );
+    // The script elements too: where the browser has no resource entries,
+    // or its buffer of them was full before this script began.
+    guard(() => {
+      const all = doc.scripts;
+      for (let i = 0; i < all.length && scriptHosts.length < SCRIPT_HOSTS; i++)
+        addScript(all[i].src);
+    });
+    const p: Props = {
+      ms: Math.round(activeMs),
+      scroll: Math.round(maxScroll),
+      inputs: pageIn,
+    };
+    const fresh = scriptHosts.slice(scriptsSent);
+    if (fresh.length) p.scripts = fresh;
+    // Sent only if the props kept them: over the budget fit drops them all
+    // (not reached today, 20 hosts at their longest are half of it). A batch
+    // the collector refuses later is not sent again for them.
+    const r = record("engagement", p, undefined, at);
+    if (r && (!fresh.length || r.p.scripts)) {
+      scriptsSent += fresh.length;
+      firstReport = false;
+    }
     activeMs = 0;
     maxScroll = 0;
     pageInputs = 0;
@@ -1686,6 +1771,13 @@ export function start(
     },
     { durationThreshold: 40 },
   );
+  // Scripts as they load, those before the tracker included (buffered).
+  observe("resource", (l) => {
+    if (scriptHosts.length >= SCRIPT_HOSTS) return;
+    for (const e of l)
+      if ((e as PerformanceResourceTiming).initiatorType === "script")
+        addScript(e.name);
+  });
   const vitalsFinal = () => {
     if (lcp) vital("LCP", lcp, true);
     if (inp) vital("INP", inp);

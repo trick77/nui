@@ -41,7 +41,9 @@ On every page, in `<head>`:
   no inline script and no `innerHTML` (Trusted Types pass); it is served with `Cross-Origin-Resource-Policy:
   cross-origin`.
 - Collected on its own: session start, page views, outbound clicks, downloads, form start and submit (the form's
-  id, name and action only), errors (script, resource, unhandled rejection), web vitals (TTFB, FCP, LCP, INP, CLS).
+  id, name and action only), errors (script, resource, unhandled rejection), web vitals (TTFB, FCP, LCP, INP, CLS),
+  the hosts of the scripts a page loads (never their URLs; at most 16 with the first engagement and 4 more that load
+  later, an IPv6 address in brackets, a name over 100 bytes cut to its last labels).
   A script error or rejection carries its message, file, line and column, the error's type (an `Error`'s or
   `DOMException`'s name, no other object's) and its top 8 stack frames, their URLs without query and fragment; never
   put personal data in an error's message, or in a string you throw or reject with. What `pushState` or
@@ -96,8 +98,8 @@ load (the first 50):
 | `t` | Unix milliseconds the request arrived. Over an hour behind or a minute ahead, Trakk uses the receive time. |
 | `ip` | The client's address as the product resolves it, after its own trusted proxies. Required: without one the event is dropped. |
 | `method`, `path` | The request line. Query and fragment are dropped: strip them before sending, they can hold tokens. |
-| `route` | The router's pattern with the method, as Go's `r.Pattern` gives it (`GET /users/{id}`). Empty for an unmatched request: Trakk then names the path by the site's rules. |
-| `status`, `dur_ms`, `bytes` | Response status, handler time in ms, response body bytes. |
+| `route` | The router's pattern with the method, as Go's `r.Pattern` gives it (`GET /users/{id}`). Empty for an unmatched request: Trakk then names the path by the site's rules. An empty `route` weakens the findings about answered probes and new targets. |
+| `status`, `dur_ms`, `bytes` | Response status, handler time in ms, response body bytes. `bytes` is read: a path refused before and later answered with a clearly different size stands out. |
 | `ua`, `ref`, `lang` | `User-Agent`, `Referer`, `Accept-Language`. |
 | `ch_ua`, `sf_site`, `sf_mode`, `sf_dest` | `Sec-CH-UA`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`. |
 | `sig_agent` | `Signature-Agent` (Web Bot Auth): the agent a client says it is, as sent. Empty when absent. |
@@ -110,7 +112,8 @@ Trakk lists and groups by them. Both are optional; anything but ASCII letters, d
 `_`. A call failed when `err` is set or its status is 400 or above; a 404 is no call, whatever its route, nor is a 401,
 403 or 405 without a `route` (a scanner's path behind a key check, an MCP client's `GET` of a POST-only path). A site
 of kind `api` is shown by them: calls, accounts and failures per endpoint (`route` and `op`), with durations. A site
-with pages shows its endpoints and failures too: report a refused sign-in answered 200 as an `err`.
+with pages shows its endpoints and failures too: report a refused sign-in answered 2xx as an `err`, or it counts as a
+success.
 
 Send exactly these fields, never raw headers (they carry cookies and credentials). Every request counts, 404s and
 401s above all: the probing is what the feed is for. Leave out only the emitter's own traffic and local health

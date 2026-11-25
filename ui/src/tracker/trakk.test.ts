@@ -5,6 +5,7 @@ import {
   cleanProps,
   clip,
   errorProps,
+  scriptHost,
   start,
   utf8Len,
   type Tracker,
@@ -2670,6 +2671,214 @@ function nameOf(e: Body["events"][number]): string {
   }
   return "";
 }
+
+describe("script hosts", () => {
+  afterEach(() => {
+    for (const s of Array.from(document.querySelectorAll("script"))) s.remove();
+  });
+  const load = (...urls: string[]) => {
+    for (const u of urls) {
+      const s = document.createElement("script");
+      s.src = u;
+      document.head.appendChild(s);
+    }
+  };
+  // Input, then the page hidden and shown again: one engagement.
+  const engage = async () => {
+    document.dispatchEvent(new Event("pointerdown"));
+    vi.advanceTimersByTime(1000);
+    for (const v of ["hidden", "visible"]) {
+      Object.defineProperty(document, "visibilityState", {
+        value: v,
+        configurable: true,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+    await vi.advanceTimersByTimeAsync(0);
+  };
+  const sent = () =>
+    bodies()
+      .flatMap((b) => b.events)
+      .filter((e) => e.k === "engagement")
+      .map((e) => e.p.scripts);
+
+  it("sends each host once per document, never the page's own or the collector's", async () => {
+    load(
+      "https://CDN.Example.net/lib.js?key=secret",
+      "https://cdn.example.net/other.js",
+      location.origin + "/app.js",
+      "https://collector.example.com/trakk.js",
+      "http://tags.example.org:8080/t.js",
+    );
+    boot();
+    await engage();
+    load("https://late.example.org/x.js", "https://cdn.example.net/again.js");
+    await engage();
+    // A page of a single-page app is no new document.
+    history.pushState(null, "", "/b");
+    await engage();
+    expect(sent()).toEqual([
+      ["cdn.example.net", "tags.example.org"],
+      ["late.example.org"],
+      undefined,
+    ]);
+    expect(JSON.stringify(bodies())).not.toContain("secret");
+  });
+
+  it("drops other schemes and what is no hostname, cuts a long name to its last labels", async () => {
+    const long = "a".repeat(60) + "." + "b".repeat(30) + ".example.com";
+    expect(long).toHaveLength(103);
+    load(
+      "data:text/javascript,1",
+      "blob:https://blob.example.org/0f2c",
+      "chrome-extension://abcdefghijklmnop/content.js",
+      "file:///tmp/x.js",
+      "ftp://ftp.example.org/x.js",
+      "https://" + long + "/x.js",
+      "https://" + long.slice(3) + "/x.js",
+      "https://a!b.example.org/x.js",
+      "https://under_score.example.org/x.js",
+      "https://[2001:db8::1]/x.js",
+      "https://203.0.113.9/x.js",
+      "https://dot.example.org./x.js",
+      // The host past a long userinfo, never a part of it.
+      "https://not.example.org:" + "0".repeat(2100) + "@far.example.org/x.js",
+    );
+    boot();
+    await engage();
+    expect(sent()).toEqual([
+      [
+        "b".repeat(30) + ".example.com",
+        long.slice(3),
+        "under_score.example.org",
+        "[2001:db8::1]",
+        "203.0.113.9",
+        "dot.example.org",
+        "far.example.org",
+      ],
+    ]);
+  });
+
+  it("names a host as the backend keeps it", () => {
+    expect(scriptHost("[2001:DB8::1]")).toBe("[2001:db8::1]");
+    expect(scriptHost("A_B.Example.org.")).toBe("a_b.example.org");
+    expect(scriptHost("x".repeat(101))).toBe("");
+    expect(scriptHost("-x.example.org")).toBe("");
+    expect(scriptHost("x".repeat(50) + "." + "y".repeat(50) + ".example")).toBe(
+      "y".repeat(50) + ".example",
+    );
+  });
+
+  it("sends at most 16 at first and keeps the rest of 20 for hosts loaded later, their props whole", async () => {
+    const host = (c: string, i: number) =>
+      c + String(i).padStart(2, "0") + "-" + "x".repeat(88) + ".example";
+    expect(host("h", 0)).toHaveLength(100);
+    load(
+      ...Array.from(
+        { length: 25 },
+        (_, i) => "https://" + host("h", i) + "/x.js",
+      ),
+    );
+    boot();
+    await engage();
+    // The page's own overflow is no later arrival, on any engagement.
+    load(
+      ...Array.from(
+        { length: 5 },
+        (_, i) => "https://" + host("l", i) + "/x.js",
+      ),
+    );
+    await engage();
+    load("https://later.example.org/x.js");
+    await engage();
+    const got = sent();
+    expect(got[0]).toEqual(Array.from({ length: 16 }, (_, i) => host("h", i)));
+    expect(got[1]).toEqual(Array.from({ length: 4 }, (_, i) => host("l", i)));
+    expect(got[2]).toBeUndefined();
+    for (const r of fetchMock.mock.calls.map(
+      (c) => (c[1] as RequestInit).body as string,
+    ))
+      expect(batchProblems(r)).toEqual([]);
+  });
+
+  it("sends no host twice past the hosts it remembers", async () => {
+    load(
+      ...Array.from(
+        { length: 110 },
+        (_, i) => "https://cdn" + i + ".example.net/x.js",
+      ),
+    );
+    boot();
+    await engage();
+    await engage();
+    await engage();
+    const got = sent();
+    // Past 100 the page's own count as later: 4 of them, once.
+    expect(got[1]).toHaveLength(4);
+    expect(got[2]).toBeUndefined();
+    const all = got.flatMap((g) => g ?? []);
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("reports a script injected after the first report on a page with many hosts", async () => {
+    load(
+      ...Array.from(
+        { length: 30 },
+        (_, i) => "https://cdn" + i + ".example.net/x.js",
+      ),
+    );
+    boot();
+    await engage();
+    load("https://skimmer.example.org/x.js");
+    await engage();
+    expect(sent()).toEqual([
+      Array.from({ length: 16 }, (_, i) => "cdn" + i + ".example.net"),
+      ["skimmer.example.org"],
+    ]);
+  });
+
+  it("takes scripts from resource entries, those no longer in the page included", async () => {
+    type Entry = { name: string; initiatorType: string };
+    let cb: ((l: { getEntries: () => Entry[] }) => void) | undefined;
+    vi.stubGlobal(
+      "PerformanceObserver",
+      class {
+        static supportedEntryTypes = ["resource"];
+        constructor(f: typeof cb) {
+          cb = f;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    boot();
+    cb!({
+      getEntries: () => [
+        { name: "https://gone.example.org/x.js", initiatorType: "script" },
+        { name: "https://img.example.org/x.png", initiatorType: "img" },
+      ],
+    });
+    await engage();
+    expect(sent()).toEqual([["gone.example.org"]]);
+  });
+
+  it("keeps hosts for the next engagement when none is sent", async () => {
+    load("https://cdn.example.net/x.js");
+    boot();
+    // Hidden without any input: no engagement.
+    for (const v of ["hidden", "visible"]) {
+      Object.defineProperty(document, "visibilityState", {
+        value: v,
+        configurable: true,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent()).toEqual([]);
+    await engage();
+    expect(sent()).toEqual([["cdn.example.net"]]);
+  });
+});
 
 describe("collector limits", () => {
   afterEach(() => {
