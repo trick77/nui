@@ -32,6 +32,7 @@ const (
 	networkShare        = 0.4
 	minProbes           = 3
 	minReferrerVisitors = 2
+	minMaskedVisitors   = 3 // of a script error the browser hides
 	autoShareSwingPP    = 5.0
 	minCallsForTrend    = 100
 	failedSwingPP       = 5.0
@@ -298,7 +299,11 @@ func (s *Server) findings(ctx context.Context, q *query, tiles []tile) ([]insigh
 	}); err != nil {
 		return nil, err
 	}
-	if err := s.newKeys(ctx, q, "errors", 1, func(k string, v int64, _ *keySums) {
+	if err := s.newKeys(ctx, q, "errors", 1, func(k string, v int64, g *keySums) {
+		// One browser's extension is no news of the site's, and nothing about it can be looked up (owner).
+		if maskedError(k) && g.d.count() < minMaskedVisitors {
+			return
+		}
 		add(insight.Fact{ID: "err:" + k, Kind: "problem", Figure: num(float64(v)), Unit: "times",
 			Text: "New error: " + truncate(k, 120), Score: 1000 + float64(v), Target: insight.Target{Panel: "errors"}})
 	}); err != nil {

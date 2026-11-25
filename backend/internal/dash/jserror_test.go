@@ -147,6 +147,46 @@ func TestErrorDetail(t *testing.T) {
 	}
 }
 
+// A hidden error is a finding from three visitors on, however often two get it; a readable one from the first.
+func TestMaskedErrorFinding(t *testing.T) {
+	r := newRig(t, 0, 0, nil)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	insert := func(name, visitor string, n int) {
+		t.Helper()
+		evs := make([]store.Event, n)
+		for i := range evs {
+			evs[i] = store.Event{SiteID: site.ID, TS: r.end.Add(-2*time.Hour).UnixMilli() - int64(i)*1000,
+				Source: "browser", Kind: "js_error", Name: name, Visitor: visitor, IP: "192.0.2.70",
+				IPKey: "192.0.2.70", UA: "Mozilla/5.0", Template: "/", Path: "/", Cls: 1}
+		}
+		if err := r.s.DB.InsertEvents(t.Context(), evs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	found := func() map[string]bool {
+		t.Helper()
+		code, b := r.get(t, "noteworthy", p(feedSite, "range", "24h", "findings", "all"))
+		if code != 200 {
+			t.Fatalf("%d %v", code, b)
+		}
+		out := map[string]bool{}
+		for _, x := range b["items"].([]any) {
+			out[x.(map[string]any)["id"].(string)] = true
+		}
+		return out
+	}
+	insert("Script error.", "a", 20)
+	insert("Script error.", "b", 20)
+	insert("TypeError: x", "a", 1)
+	if f := found(); f["err:Script error."] || !f["err:TypeError: x"] {
+		t.Errorf("two visitors: %v", f)
+	}
+	insert("Script error.", "c", 1)
+	if f := found(); !f["err:Script error."] {
+		t.Errorf("three visitors: %v", f)
+	}
+}
+
 // A breakdown shows its largest rows and says how many more there are.
 func TestErrorTallyTop(t *testing.T) {
 	tally := errorTally{}
