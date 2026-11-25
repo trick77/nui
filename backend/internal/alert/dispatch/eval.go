@@ -376,10 +376,7 @@ func scriptErrorText(e dash.ScriptError) string {
 	} else if e.Type != "" {
 		parts = append(parts, e.Type)
 	}
-	visitors := fmt.Sprintf("%d visitors", e.Visitors)
-	if e.Visitors == 1 {
-		visitors = "1 visitor"
-	}
+	visitors := visitorsText(e.Visitors)
 	switch {
 	case e.Share != nil:
 		parts = append(parts, fmt.Sprintf("%s, %s %% of %d who saw a page", visitors, figure(*e.Share), e.Viewers))
@@ -387,6 +384,13 @@ func scriptErrorText(e dash.ScriptError) string {
 		parts = append(parts, visitors)
 	}
 	return strings.Join(parts, "; ")
+}
+
+func visitorsText(n int64) string {
+	if n == 1 {
+		return "1 visitor"
+	}
+	return fmt.Sprintf("%d visitors", n)
 }
 
 func collectorOccurrence(r alert.Rule, n int64) []alert.Occurrence {
@@ -454,6 +458,9 @@ func (v *Eval) budget(ctx context.Context, site *sites.Site) []alert.Occurrence 
 		Figure: &f, Unit: "calls", Target: &alert.Target{Panel: "domain", Filter: map[string]string{}}}}
 }
 
+// errorLevel is the trigger of the script errors' level: read by ErrorLevels, not a metric of Levels.
+const errorLevel = "level.errors"
+
 // The level metrics by trigger: the figure read, its words, its unit, where its row jumps to.
 var levels = map[string]struct {
 	metric, label, unit string
@@ -467,6 +474,8 @@ var levels = map[string]struct {
 		Filter: map[string]string{}}},
 	"level.p95": {dash.LevelP95, "95th percentile", "ms", alert.Target{Panel: "endpoints",
 		Filter: map[string]string{}}},
+	errorLevel: {"", "Visitors with a script error", "%", alert.Target{Panel: "errors",
+		Filter: map[string]string{}}},
 }
 
 // minComparison is the comparison days with a figure a dynamic level needs: with fewer it does not judge.
@@ -478,7 +487,8 @@ const noComparison = "no-comparison"
 // level is a level rule on a site: the window's figure against min and max, and against the usual (the median of
 // the same window at the same time of day on the 7 days before, or the same weekday of the 4 weeks before) by factor
 // and drop, all that the rule sets together. Without a figure (none on the site, too few calls) it holds what it
-// had; with too few days to compare it notes so, quietly, and holds too: never an alert from a missing baseline.
+// had; with too few days to compare it notes so, quietly, and holds too: never an alert from a missing baseline. The
+// errors' level met by too few visitors holds as well: at night two of two must neither open it nor send an all-clear.
 func (v *Eval) level(ctx context.Context, now time.Time, r alert.Rule, site *sites.Site) ([]alert.Occurrence, bool,
 	error) {
 	l := levels[r.Spec.ID]
@@ -491,7 +501,16 @@ func (v *Eval) level(ctx context.Context, now time.Time, r alert.Rule, site *sit
 			back = []int{7, 14, 21, 28}
 		}
 	}
-	cur, prev, err := v.d.Levels(ctx, site, l.metric, p.Window, now, back)
+	var cur dash.Level
+	var prev []dash.Level
+	var errs dash.ErrorLevel
+	var err error
+	if r.Spec.ID == errorLevel {
+		errs, prev, err = v.d.ErrorLevels(ctx, site, p.Origins, p.Window, now, back, p.Min)
+		cur = errs.Level
+	} else {
+		cur, prev, err = v.d.Levels(ctx, site, l.metric, p.Window, now, back)
+	}
 	if err != nil {
 		return nil, false, err
 	}
@@ -500,7 +519,10 @@ func (v *Eval) level(ctx context.Context, now time.Time, r alert.Rule, site *sit
 		return hold, true, nil
 	}
 	holds := (!p.HasMin || cur.Value >= p.Min) && (!p.HasMax || cur.Value <= p.Max)
-	detail := ""
+	if r.Spec.ID == errorLevel && !holds { // nothing was read to compare with: no usual changes it
+		return nil, true, nil
+	}
+	var detail []string
 	if dynamic {
 		var vals []float64
 		for _, x := range prev {
@@ -516,15 +538,26 @@ func (v *Eval) level(ctx context.Context, now time.Time, r alert.Rule, site *sit
 		usual := median(vals)
 		holds = holds && (p.HasMin || p.HasMax || usual >= p.Floor) &&
 			(!p.HasFactor || cur.Value >= p.Factor*usual) && (!p.HasDrop || cur.Value <= usual*(1-p.Drop/100))
-		detail = fmt.Sprintf("Usually %s%s (median of %d days)", figure(usual), unitText(l.unit), len(vals))
+		detail = append(detail, fmt.Sprintf("Usually %s%s (median of %d days)", figure(usual), unitText(l.unit), len(vals)))
 	}
 	if !holds {
 		return nil, true, nil
 	}
+	if r.Spec.ID == errorLevel {
+		if float64(errs.Affected) < p.Visitors {
+			// No Wait: a baseline waiting for enough of them would be the first spread itself, unsent.
+			return []alert.Occurrence{{Hold: true}}, true, nil
+		}
+		detail = append(detail, fmt.Sprintf("%d of %s", errs.Affected, visitorsText(errs.Visitors)))
+		if errs.Message != "" { // foreign text: last, what is clipped is its own
+			detail = append(detail, fmt.Sprintf("most frequent (%s): %s", visitorsText(errs.MessageVisitors), errs.Message))
+		}
+	}
 	value := cur.Value
 	target := l.target
 	return []alert.Occurrence{{Text: fmt.Sprintf("%s over the last %s: %s%s", l.label, span(p.Window),
-		figure(value), unitText(l.unit)), Detail: detail, Figure: &value, Unit: l.unit, Target: &target}}, true, nil
+		figure(value), unitText(l.unit)), Detail: alert.Line(strings.Join(detail, "; "), 300), Figure: &value, Unit: l.unit,
+		Target: &target}}, true, nil
 }
 
 func median(xs []float64) float64 {

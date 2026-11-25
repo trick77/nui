@@ -16,6 +16,7 @@
     { "name": "refused", "on": "collector.refused", "min": 100, "window": "15m" },
     { "name": "jobs", "on": "job.failed", "severity": "high", "repeat": "12h" },
     { "name": "api-slow", "on": "level.p95", "window": "15m", "factor": 3, "min": 800, "products": ["Lens"], "for": "10m" },
+    { "name": "errors-up", "on": "level.errors", "window": "24h", "min": 10, "factor": 3 },
     { "name": "quiet-night", "on": "level.requests", "window": "1h", "drop": 80, "baseline": "weekday", "enabled": false }
   ]
 }

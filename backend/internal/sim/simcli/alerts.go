@@ -42,7 +42,8 @@ const NotifyFile = `{
     {"name": "requests-surge", "on": "level.requests", "window": "1h", "min": 1000},
     {"name": "requests-drop", "on": "level.requests", "window": "1h", "drop": 90},
     {"name": "api-slow", "on": "level.p95", "window": "1h", "min": 2000},
-    {"name": "api-failing", "on": "level.failed", "window": "1h", "min": 50, "calls": 20}
+    {"name": "api-failing", "on": "level.failed", "window": "1h", "min": 50, "calls": 20},
+    {"name": "errors-up", "on": "level.errors", "window": "12h", "min": 30}
   ]
 }`
 

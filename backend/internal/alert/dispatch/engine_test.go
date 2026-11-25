@@ -243,6 +243,44 @@ func TestConditions(t *testing.T) {
 	}
 }
 
+// A pass that does not know the state is none a condition held in: its for starts over, an open one stays open.
+func TestHoldRestartsFor(t *testing.T) {
+	r := newRig(t, `{`+ops+`, "rules": [{"name": "errs", "on": "level.errors", "window": "1h", "min": 10, "for": "10m"}]}`)
+	met := []alert.Occurrence{{Text: "Visitors with a script error over the last 1 h: 12 %"}}
+	held := []alert.Occurrence{{Hold: true}}
+	pass := func(o []alert.Occurrence) {
+		r.src.occ["errs"] = o
+		r.step(5 * time.Minute)
+	}
+	r.step(0)
+	pass(met)
+	for range 6 {
+		pass(held)
+	}
+	pass(met)
+	pass(met)
+	if rows := r.rows("errs"); len(rows) != 1 || rows[0].State != store.AlertPending || len(r.rec.Messages()) != 0 {
+		t.Fatalf("opened on held passes: %+v", rows)
+	}
+	pass(met)
+	pass(held)
+	if rows := r.rows("errs"); len(rows) != 1 || rows[0].State != store.AlertOpen || len(r.rec.Messages()) != 1 {
+		t.Fatalf("open %+v", rows)
+	}
+}
+
+// Too few affected visitors at a rule's first pass wait for nothing: the spread after it is news.
+func TestHoldWithoutWaitIsBaseline(t *testing.T) {
+	r := newRig(t, `{`+ops+`, "rules": [{"name": "errs", "on": "level.errors", "window": "1h", "min": 10}]}`)
+	r.src.occ["errs"] = []alert.Occurrence{{Hold: true}}
+	r.step(0)
+	r.src.occ["errs"] = []alert.Occurrence{{Text: "Visitors with a script error over the last 1 h: 60 %"}}
+	r.step(5 * time.Minute)
+	if rows := r.rows("errs"); len(rows) != 1 || rows[0].State != store.AlertOpen || len(r.rec.Messages()) != 1 {
+		t.Fatalf("rows %+v", rows)
+	}
+}
+
 // A changed threshold under the same name starts a new baseline; so does a rule not run for six hours.
 func TestBaselineAgain(t *testing.T) {
 	r := newRig(t, `{`+ops+`, "rules": [{"name": "errs", "on": "error.new"}]}`)

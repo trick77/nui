@@ -185,6 +185,144 @@ func TestScriptErrorOf(t *testing.T) {
 	}
 }
 
+// The script errors' level: people decided by visitor (any row of one is the evidence, a batch's other rows still
+// pending), everyone there in the denominator, the origins a rule counts, NaN without people or raw; a statement a
+// window, at most a day, on the site's time index.
+func TestErrorLevels(t *testing.T) {
+	r := newRig(t, 0, 0, nil)
+	ctx := t.Context()
+	site, _ := r.s.Sites.Lookup(feedSite)
+	blog, _ := r.s.Sites.Lookup(plainSite)
+	now := r.end.Add(time.Minute)
+	const own, ext = `{"p":{"src":"https://lens.example.com/a.js"}}`, `{"p":{"src":"chrome-extension://abc/c.js"}}`
+	type row struct {
+		visitor, kind string
+		cls           int
+		name, props   string
+	}
+	insert := func(site int64, at time.Time, rows ...row) {
+		t.Helper()
+		var evs []store.Event
+		for i, x := range rows {
+			if x.props == "" {
+				x.props = "{}"
+			}
+			evs = append(evs, store.Event{SiteID: site, TS: at.UnixMilli() + int64(i), Source: "browser", Kind: x.kind,
+				Name: x.name, Visitor: x.visitor, IP: "192.0.2.70", IPKey: "192.0.2.70", UA: "Mozilla/5.0", Template: "/",
+				Path: "/", Cls: x.cls, Props: x.props})
+		}
+		if err := r.s.DB.InsertEvents(ctx, evs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const a, b = "TypeError: a", "TypeError: b"
+	insert(site.ID, now.Add(-30*time.Minute),
+		// A session's first batch before the classifier's pass: its first event alone is human.
+		row{"first", "session_start", 1, "", ""}, row{"first", "page_view", 0, "", ""}, row{"first", "js_error", 0, a, own},
+		// Nothing says a person yet: nobody, nor do its errors make b the most frequent.
+		row{"pending", "session_start", 0, "", ""}, row{"pending", "page_view", 0, "", ""},
+		row{"pending", "js_error", 0, b, own},
+		// The evidence after the error it counts.
+		row{"late", "page_view", 0, "", ""}, row{"late", "js_error", 0, b, own}, row{"late", "engagement", 1, "", ""},
+		row{"late", "js_error", 0, b, `{"p":{"src":"https://lens.example.com/b.js"}}`},
+		// A tab open from before, no page view and no error: there.
+		row{"open", "engagement", 1, "", ""},
+		// A row classed automated outweighs a person's: the pass judged it, its next batch is human again until the next.
+		row{"mixed", "session_start", 1, "", ""}, row{"mixed", "page_view", 4, "", ""}, row{"mixed", "js_error", 2, b, own},
+		row{"again", "page_view", 4, "", ""}, row{"again", "js_error", 1, b, own},
+		// An error without a message is one, but names nothing.
+		row{"mute1", "js_error", 1, "", own}, row{"mute2", "js_error", 1, "", own},
+		row{"bot", "page_view", 2, "", ""}, row{"bot", "js_error", 2, b, own},
+		row{"monitor", "page_view", 3, "", ""}, row{"unknown", "page_view", 4, "", ""}, row{"unknown", "js_error", 4, b, own},
+		row{"api", "page_view", 5, "", ""},
+		// A tab left open: an error, no page view.
+		row{"tab", "js_error", 1, a, own},
+		// Another JSON type for the file reads as none: an unknown origin, no failure.
+		row{"json", "page_view", 1, "", ""}, row{"json", "js_error", 1, b, `{"p":{"src":{"a":1}}}`},
+		// An extension's error: there, not affected.
+		row{"ext", "page_view", 1, "", ""}, row{"ext", "js_error", 1, "TypeError: ext", ext},
+		row{"seen", "page_view", 1, "", ""}, row{"seen", "page_view", 1, "", ""},
+		row{"", "page_view", 1, "", ""}, row{"", "js_error", 1, b, own})
+	// The days before: one person, unaffected; nobody; a window that begins before raw does.
+	insert(site.ID, now.AddDate(0, 0, -1).Add(-30*time.Minute), row{"p", "page_view", 1, "", ""})
+	insert(site.ID, now.AddDate(0, 0, -3).Add(-10*time.Minute), row{"p", "page_view", 1, "", ""},
+		row{"p", "js_error", 1, a, own})
+
+	var mu sync.Mutex
+	type stmt struct {
+		q    string
+		args []any
+	}
+	var seen []stmt
+	traceSQL = func(q string, args []any) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, stmt{q, append([]any(nil), args...)})
+	}
+	t.Cleanup(func() { traceSQL = nil })
+	cur, prev, err := r.s.ErrorLevels(ctx, site, alert.DefaultOrigins, time.Hour, now, []int{1, 2, 3}, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// first, late, tab, json, mute1 and mute2 of them and open, ext and seen; a and b hit two each, a by its name.
+	if cur.Affected != 6 || cur.Visitors != 9 || cur.Value != 600.0/9 || cur.Message != a || cur.MessageVisitors != 2 {
+		t.Errorf("level %+v", cur)
+	}
+	// Under the least share nothing is compared.
+	if _, prev, err := r.s.ErrorLevels(ctx, site, alert.DefaultOrigins, time.Hour, now, []int{1, 2}, 67); err != nil ||
+		len(prev) != 0 {
+		t.Errorf("under the least %+v %v", prev, err)
+	}
+	if len(prev) != 3 || prev[0].Value != 0 || !math.IsNaN(prev[1].Value) || !math.IsNaN(prev[2].Value) {
+		t.Errorf("days before %+v", prev)
+	}
+	if e, _, err := r.s.ErrorLevels(ctx, site, []string{alert.OriginExtension}, time.Hour, now, nil, 0); err != nil ||
+		e.Affected != 1 || e.Visitors != 9 || e.Message != "TypeError: ext" || e.MessageVisitors != 1 {
+		t.Errorf("an extension's: %+v %v", e, err)
+	}
+	if e, prev, err := r.s.ErrorLevels(ctx, blog, alert.DefaultOrigins, time.Hour, now, []int{1}, 0); err != nil ||
+		!math.IsNaN(e.Value) || len(prev) != 0 {
+		t.Errorf("a site without events: %+v %+v %v", e, prev, err)
+	}
+	// Over the end of summer time a day by the date is 25 hours.
+	zurich, err := time.LoadLocation("Europe/Zurich")
+	if err != nil {
+		t.Fatal(err)
+	}
+	insert(blog.ID, time.Date(2026, 10, 20, 12, 0, 0, 0, zurich), row{"p", "page_view", 1, "", ""})
+	insert(blog.ID, time.Date(2026, 10, 26, 11, 0, 0, 0, zurich), row{"p", "page_view", 1, "", ""})
+	if _, _, err := r.s.ErrorLevels(ctx, blog, alert.DefaultOrigins, 24*time.Hour,
+		time.Date(2026, 10, 26, 12, 0, 0, 0, zurich), []int{1}, 0); err != nil {
+		t.Fatal(err)
+	}
+	traceSQL = nil
+	reads := 0
+	for _, x := range seen {
+		plan, err := plancheck.Explain(ctx, r.s.DB.DB, x.q, x.args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p := plancheck.Problem(x.q, plan); p != "" {
+			t.Errorf("%s: %s", p, strings.Join(strings.Fields(x.q), " "))
+		}
+		if !strings.Contains(x.q, "js_error") {
+			continue
+		}
+		reads++
+		if lo, hi := x.args[1].(int64), x.args[2].(int64); hi-lo > dayMS {
+			t.Errorf("a statement over %d ms: %s", hi-lo, strings.Join(strings.Fields(x.q), " "))
+		}
+		if len(plan) == 0 || plan[0] != "SEARCH event USING INDEX event_site_ts (site_id=? AND ts>? AND ts<?)" {
+			t.Errorf("plan %q", plan)
+		}
+	}
+	// The window and the two days raw covers, the one under the least, the extension's, summer time's two; none for
+	// what raw does not cover.
+	if reads != 7 {
+		t.Errorf("%d statements, want 7", reads)
+	}
+}
+
 // The reads the alert rules make: Noteworthy's own facts at the default thresholds, more at looser ones, the levels
 // with their comparison, the collector's counts and the sources' last delivery. Every statement on an index.
 func TestRuleReads(t *testing.T) {

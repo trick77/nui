@@ -519,6 +519,135 @@ func TestEvalLevelAPI(t *testing.T) {
 	}
 }
 
+// people inserts n people who saw a page on the site, ago before now, the first hit of them with a script error msg.
+func (r *evalRig) people(ago time.Duration, n, hit int, msg string) {
+	r.t.Helper()
+	r.requests(r.web, ago, n+hit, "192.0.2.9", func(e *store.Event) {
+		i := int(e.TS-r.now.Add(-ago).UnixMilli()) / 1000
+		e.Source, e.Kind, e.UA, e.Cls, e.Visitor = "browser", "page_view", "Mozilla/5.0", store.ClsHuman, fmt.Sprint("v", i)
+		if i >= n {
+			e.Kind, e.Name, e.Visitor = "js_error", msg, fmt.Sprint("v", i-n)
+		}
+	})
+}
+
+// waits: the one key is held and the rule's baseline waits for it.
+func waits(occ []alert.Occurrence) bool { return len(occ) > 0 && occ[0].Hold && occ[0].Wait }
+
+// The script errors' level: min, and the usual by factor; too few days to compare, too few affected or nobody there
+// holds; the detail ends with the most frequent message.
+func TestEvalErrorsLevel(t *testing.T) {
+	const on = `"on": "level.errors", "window": "1h"`
+	r := newEvalRig(t)
+	r.people(50*time.Hour, 1, 0, "") // raw begins: two days to compare
+	r.people(30*time.Minute, 100, 12, "TypeError: x")
+	v, c := r.eval(`{"name": "min", `+on+`, "min": 10}, {"name": "under", `+on+`, "min": 12.5},
+		{"name": "few", `+on+`, "min": 10, "visitors": 13}, {"name": "quiet", `+on+`, "min": 12.5, "visitors": 13},
+		{"name": "factor", `+on+`, "min": 5, "factor": 3},
+		{"name": "other", `+on+`, "min": 5, "origins": ["extension"]},
+		{"name": "low", `+on+`, "min": 12.5, "factor": 3}`, time.Time{}, nil)
+	occ, ok := r.occ(v, c.Rules[0], r.web)
+	if !ok || keys(occ) != "" || len(occ) != 1 || *occ[0].Figure != 12 || occ[0].Unit != "%" || occ[0].Hold ||
+		occ[0].Text != "Visitors with a script error over the last 1 h: 12 %" ||
+		occ[0].Detail != "12 of 100 visitors; most frequent (12 visitors): TypeError: x" ||
+		occ[0].Target.Panel != "errors" || len(occ[0].Target.Filter) != 0 {
+		t.Fatalf("min %+v", occ)
+	}
+	if occ, ok := r.occ(v, c.Rules[1], r.web); !ok || len(occ) != 0 {
+		t.Errorf("under min %+v", occ)
+	}
+	if occ, _ := r.occ(v, c.Rules[2], r.web); keys(occ) != "(hold)" || waits(occ) {
+		t.Errorf("too few affected %+v", occ)
+	}
+	// Under min it clears, however few are affected.
+	if occ, ok := r.occ(v, c.Rules[3], r.web); !ok || len(occ) != 0 {
+		t.Errorf("under min, too few affected %+v", occ)
+	}
+	if occ, _ := r.occ(v, c.Rules[4], r.web); keys(occ) != "(hold),no-comparison(quiet)" || !waits(occ) {
+		t.Errorf("too few days %+v", occ)
+	}
+	if occ, ok := r.occ(v, c.Rules[5], r.web); !ok || len(occ) != 0 {
+		t.Errorf("another origin %+v", occ)
+	}
+	// Under min it is judged without days to compare with.
+	if occ, ok := r.occ(v, c.Rules[6], r.web); !ok || len(occ) != 0 {
+		t.Errorf("under min, too few days %+v", occ)
+	}
+	// At the bound: 29 of 100 is 29 %, three times a usual of 7 of 100 is 21 %.
+	r = newEvalRig(t)
+	r.people(9*24*time.Hour, 1, 0, "")
+	for d := 1; d <= 7; d++ {
+		r.people(time.Duration(d)*24*time.Hour+30*time.Minute, 100, 7, "TypeError: old")
+	}
+	r.people(30*time.Minute, 100, 29, "TypeError: x")
+	v, c = r.eval(`{"name": "min", `+on+`, "min": 29}`, time.Time{}, nil)
+	if occ, _ := r.occ(v, c.Rules[0], r.web); len(occ) != 1 || occ[0].Hold {
+		t.Errorf("at min %+v", occ)
+	}
+	r = newEvalRig(t)
+	r.people(9*24*time.Hour, 1, 0, "")
+	for d := 1; d <= 7; d++ {
+		r.people(time.Duration(d)*24*time.Hour+30*time.Minute, 100, 7, "TypeError: old")
+	}
+	r.people(30*time.Minute, 100, 21, "TypeError: x")
+	v, c = r.eval(`{"name": "factor", `+on+`, "min": 5, "factor": 3}`, time.Time{}, nil)
+	if occ, _ := r.occ(v, c.Rules[0], r.web); len(occ) != 1 || occ[0].Hold {
+		t.Errorf("at the factor %+v", occ)
+	}
+
+	// Two of two at night neither open nor clear; nobody there is no figure.
+	r = newEvalRig(t)
+	r.people(26*time.Hour, 1, 0, "")
+	v, c = r.eval(`{"name": "def", `+on+`, "min": 10}, {"name": "one", `+on+`, "min": 10, "visitors": 1},
+		{"name": "fast", "on": "level.errors", "window": "1m", "min": 10}`, time.Time{}, nil)
+	r.people(30*time.Minute, 2, 2, "TypeError: x")
+	if occ, _ := r.occ(v, c.Rules[0], r.web); keys(occ) != "(hold)" || waits(occ) {
+		t.Errorf("two of two %+v", occ)
+	}
+	if occ, _ := r.occ(v, c.Rules[1], r.web); len(occ) != 1 || occ[0].Hold {
+		t.Errorf("visitors 1 %+v", occ)
+	}
+	if occ, _ := r.occ(v, c.Rules[2], r.web); keys(occ) != "(hold)" || !waits(occ) {
+		t.Errorf("nobody there %+v", occ)
+	}
+
+	// Against the usual; a message of another line, invisible characters and any length stays one clipped line.
+	for _, usual := range []int{1, 0} {
+		r := newEvalRig(t)
+		r.people(9*24*time.Hour, 1, 0, "")
+		for d := 1; d <= 7; d++ {
+			r.people(time.Duration(d)*24*time.Hour+30*time.Minute, 50, usual, "TypeError: old")
+		}
+		hostile := "Error:\n" + string(rune(0x202e)) + "x; https://evil.example.com " + strings.Repeat("y", 400)
+		r.people(30*time.Minute, 100, 12, hostile)
+		v, c := r.eval(`{"name": "f3", `+on+`, "min": 5, "factor": 3}, {"name": "f7", `+on+`, "min": 5, "factor": 7},
+			{"name": "min", `+on+`, "min": 12.5, "factor": 3}`, time.Time{}, nil)
+		occ, _ := r.occ(v, c.Rules[0], r.web)
+		want := fmt.Sprintf("Usually %d %% (median of 7 days); 12 of 100 visitors; most frequent (12 visitors): "+
+			"Error: x; https://evil.example.com yyy", 2*usual)
+		if len(occ) != 1 || occ[0].Hold || *occ[0].Figure != 12 || !strings.HasPrefix(occ[0].Detail, want) ||
+			!strings.HasSuffix(occ[0].Detail, "y…") || len([]rune(occ[0].Detail)) != 300 {
+			t.Errorf("usual %d %%, factor 3: %+v", 2*usual, occ)
+		}
+		// 7 times the usual 2 % is above it; a usual of 0 % leaves it to min.
+		if occ, _ := r.occ(v, c.Rules[1], r.web); len(occ) != 1-usual {
+			t.Errorf("usual %d %%, factor 7: %+v", 2*usual, occ)
+		}
+		if occ, _ := r.occ(v, c.Rules[2], r.web); len(occ) != 0 {
+			t.Errorf("usual %d %%, under min: %+v", 2*usual, occ)
+		}
+	}
+
+	r = newEvalRig(t)
+	r.people(26*time.Hour, 1, 0, "")
+	r.people(30*time.Minute, 1, 1, "TypeError: x")
+	v, c = r.eval(`{"name": "one", `+on+`, "min": 10, "visitors": 1}`, time.Time{}, nil)
+	if occ, _ := r.occ(v, c.Rules[0], r.web); len(occ) != 1 ||
+		occ[0].Detail != "1 of 1 visitor; most frequent (1 visitor): TypeError: x" {
+		t.Errorf("one visitor %+v", occ)
+	}
+}
+
 type budgetModel struct{ calls, budget int64 }
 
 func (budgetModel) Configured() bool { return true }

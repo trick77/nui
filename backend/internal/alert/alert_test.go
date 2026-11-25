@@ -79,6 +79,24 @@ func TestParse_Good(t *testing.T) {
 		e.Rules[0].Sig == byName["new-errors"].Sig {
 		t.Errorf("error parameters %v %+v", e.Faults, e.Rules)
 	}
+	l := Parse([]byte(`{"rules":[{"name":"l","on":"level.errors","window":"1h","min":100},
+		{"name":"m","on":"level.errors","window":"24h","min":0.5,"factor":3,"baseline":"weekday","visitors":10,
+			"origins":["own"],"for":"10m"}]}`), known)
+	if len(l.Faults) > 0 {
+		t.Fatalf("errors' level: %v", l.Faults)
+	}
+	if p := l.Rules[0].P; p.Min != 100 || !p.HasMin || p.HasFactor || p.Visitors != 3 || p.Baseline != "days" ||
+		!slices.Equal(p.Origins, DefaultOrigins) || p.Floor != 0 || p.Calls != 0 {
+		t.Errorf("errors' level defaults %+v", p)
+	}
+	if p := l.Rules[1].P; p.Min != 0.5 || !p.HasFactor || p.Baseline != "weekday" || p.Visitors != 10 ||
+		!slices.Equal(p.Origins, []string{"own"}) || p.Window != 24*time.Hour {
+		t.Errorf("errors' level %+v", p)
+	}
+	l.Rules[0].P.Origins[0] = "x" // its own copy, not the catalogue's
+	if DefaultOrigins[0] != OriginOwn {
+		t.Error("a rule's origins are the defaults' own")
+	}
 	// The defaults: Noteworthy's thresholds.
 	d := Parse([]byte(`{"rules":[{"name":"a","on":"spike.net"},{"name":"b","on":"trend.failed"}]}`), known)
 	if d.Rules[0].P.Min != 200 || d.Rules[0].P.Share != 40 || d.Rules[1].P.Min != 100 || d.Rules[1].P.Change != 5 ||
@@ -135,6 +153,14 @@ func TestParse_Faults(t *testing.T) {
 		"origin":           {`{"rules": [{"name": "a", "on": "error.new", "origins": ["mine"]}]}`, `origin "mine"`},
 		"no origin":        {`{"rules": [{"name": "a", "on": "error.new", "origins": []}]}`, "at least one"},
 		"origins foreign":  {`{"rules": [{"name": "a", "on": "failure.new", "origins": ["own"]}]}`, "takes no origins"},
+		"errors min":       {`{"rules": [{"name": "a", "on": "level.errors", "window": "1h", "factor": 3}]}`, "level.errors needs min"},
+		"errors window":    {`{"rules": [{"name": "a", "on": "level.errors", "min": 5}]}`, "level.errors needs window"},
+		"errors min 0":     {`{"rules": [{"name": "a", "on": "level.errors", "window": "1h", "min": 0}]}`, "above 0 and at most 100"},
+		"errors min 120":   {`{"rules": [{"name": "a", "on": "level.errors", "window": "1h", "min": 120}]}`, "above 0 and at most 100"},
+		"errors max":       {`{"rules": [{"name": "a", "on": "level.errors", "window": "1h", "min": 5, "max": 9}]}`, "level.errors takes no max"},
+		"errors drop":      {`{"rules": [{"name": "a", "on": "level.errors", "window": "1h", "min": 5, "drop": 9}]}`, "level.errors takes no drop"},
+		"errors floor":     {`{"rules": [{"name": "a", "on": "level.errors", "window": "1h", "min": 5, "floor": 9}]}`, "level.errors takes no floor"},
+		"errors calls":     {`{"rules": [{"name": "a", "on": "level.errors", "window": "1h", "min": 5, "calls": 9}]}`, "level.errors takes no calls"},
 	} {
 		c := Parse([]byte(tc.file), known)
 		joined := strings.Join(c.Faults, "\n")
@@ -144,6 +170,10 @@ func TestParse_Faults(t *testing.T) {
 		if c.Sending() || !c.Defaulted || len(c.Rules) == 0 {
 			t.Errorf("%s: a file with faults sends or records nothing: %+v", name, c)
 		}
+	}
+	// No bound at all on a level that needs its min: one fault, none naming parameters it does not take.
+	if c := Parse([]byte(`{"rules": [{"name": "a", "on": "level.errors", "window": "1h"}]}`), known); len(c.Faults) != 1 {
+		t.Errorf("faults %q", c.Faults)
 	}
 	// Several at once, and no URL even when one is mistyped.
 	c := Parse([]byte(`{"channels": {"a": "ntfy//user:hunter2@x.example.com"}, "rules": [{"name": "a", "on": "nope"},

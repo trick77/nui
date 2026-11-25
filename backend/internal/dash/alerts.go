@@ -2,6 +2,7 @@ package dash
 
 import (
 	"context"
+	"database/sql"
 	"math"
 	"net/http"
 	"slices"
@@ -145,6 +146,132 @@ func (s *Server) Levels(ctx context.Context, site *sites.Site, metric string, sp
 		prev = append(prev, l)
 	}
 	return cur, prev, nil
+}
+
+// ErrorLevel is the share of a site's people who had a script error over one window.
+type ErrorLevel struct {
+	// Level's value is the share in percent, NaN without people or for a window raw does not reach back to.
+	Level
+	// Affected are the people with an error, Visitors all of them: whoever the script saw in the window, a tab left
+	// open from before it too (errors happen there as well, so a share of its page views alone would be too large).
+	Affected, Visitors int64
+	// Message is the error most of the affected had, MessageVisitors how many they are.
+	Message         string
+	MessageVisitors int64
+}
+
+// ErrorLevels reads the share of a site's people who had a script error from one of origins, over the window before
+// now and, once that share is at least least, over the same window each of back days earlier (below it nothing is
+// compared). Raw only, a statement a window (at most a day).
+func (s *Server) ErrorLevels(ctx context.Context, site *sites.Site, origins []string, span time.Duration, now time.Time,
+	back []int, least float64) (ErrorLevel, []Level, error) {
+	none := ErrorLevel{Level: Level{Value: math.NaN()}}
+	oldest, ok, err := s.rawStart(ctx, site.ID)
+	if err != nil {
+		return none, nil, err
+	}
+	since := time.UnixMilli(oldest).Truncate(time.Hour) // as plan.first
+	// The span is measured from each window's end: across a clock change both ends moved by date are 25 hours apart.
+	read := func(to time.Time, tally bool) (ErrorLevel, error) {
+		if from := to.Add(-span); ok && !from.Before(since) {
+			return s.errorLevel(ctx, site, origins, ms(from), ms(to), tally)
+		}
+		return none, nil
+	}
+	cur, err := read(now, true)
+	if err != nil {
+		return none, nil, err
+	}
+	if math.IsNaN(cur.Value) || cur.Value < least {
+		return cur, nil, nil
+	}
+	var prev []Level
+	for _, d := range back {
+		l, err := read(now.AddDate(0, 0, -d), false)
+		if err != nil {
+			return cur, nil, err
+		}
+		prev = append(prev, l.Level)
+	}
+	return cur, prev, nil
+}
+
+// errorLevel is one window of ErrorLevels, [lo, hi), its most frequent message with tally.
+func (s *Server) errorLevel(ctx context.Context, site *sites.Site, origins []string, lo, hi int64, tally bool) (
+	ErrorLevel, error) {
+	// Humans by visitor, not by row: only a batch's first event carries the browser's context and is human at once
+	// (classify.instantEvent), and that is a session_start or an engagement; the page view and the error after it are
+	// pending until the classifier's pass. So a person's row of any kind is the evidence, and pending rows count with it.
+	// A row classed automated outweighs it: a client the pass judged is human again on each batch's first event until
+	// the next pass (Enrich).
+	rows, err := s.query(ctx, `SELECT DISTINCT visitor, cls, kind = 'js_error',
+		CASE WHEN kind = 'js_error' THEN name ELSE '' END, `+errorSrc+`
+		FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND visitor != '' AND source = 'browser'`, site.ID, lo, hi)
+	if err != nil {
+		return ErrorLevel{}, err
+	}
+	defer func() { _ = rows.Close() }()
+	type client struct{ human, automated, hit bool }
+	clients := map[string]*client{}
+	messages := map[string]map[string]bool{} // the visitors each message hit
+	for rows.Next() {
+		var visitor, name, src string
+		var cls int
+		var failed bool
+		if err := rows.Scan(&visitor, &cls, &failed, &name, &src); err != nil {
+			return ErrorLevel{}, err
+		}
+		c := clients[visitor]
+		if c == nil {
+			c = &client{}
+			clients[visitor] = c
+		}
+		c.human = c.human || cls == store.ClsHuman
+		c.automated = c.automated || (cls != store.ClsHuman && cls != store.ClsPending)
+		if !failed || !slices.Contains(origins, locate(site.Domain, name, src, sql.NullFloat64{},
+			sql.NullFloat64{}).Origin) {
+			continue
+		}
+		c.hit = true
+		if !tally || name == "" {
+			continue
+		}
+		if messages[name] == nil {
+			messages[name] = map[string]bool{}
+		}
+		messages[name][visitor] = true
+	}
+	if err := rows.Err(); err != nil {
+		return ErrorLevel{}, err
+	}
+	var out ErrorLevel
+	person := func(c *client) bool { return c.human && !c.automated }
+	for _, c := range clients {
+		if !person(c) {
+			continue
+		}
+		out.Visitors++
+		if c.hit {
+			out.Affected++
+		}
+	}
+	for m, visitors := range messages {
+		var n int64
+		for v := range visitors {
+			if person(clients[v]) {
+				n++
+			}
+		}
+		if n > out.MessageVisitors || (n == out.MessageVisitors && n > 0 && m < out.Message) {
+			out.Message, out.MessageVisitors = m, n
+		}
+	}
+	out.Value = math.NaN()
+	if out.Visitors > 0 {
+		// Multiplied first, unlike pct: 29 of 100 is 29 and not just short of a rule's min of 29.
+		out.Value = 100 * float64(out.Affected) / float64(out.Visitors)
+	}
+	return out, nil
 }
 
 // levelOf is a metric of one bucket, NaN where the site has no such figure.

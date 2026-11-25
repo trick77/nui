@@ -47,10 +47,13 @@ type errorWhere struct {
 	Place  string `json:"place"` // file:line:col without query, "" when not reported
 }
 
+// errorSrc is an error's file as SQL, "" for another JSON type (errorPlace).
+const errorSrc = `CASE WHEN kind = 'js_error' AND json_type(props, '$.p.src') = 'text'
+	THEN json_extract(props, '$.p.src') ELSE '' END`
+
 // errorPlace is an error's props as SQL: its file, line and column. The sender writes them: another JSON type there
 // reads as none and must not fail the page (a whole number past int64 would fail an integer scan).
-const errorPlace = `CASE WHEN kind = 'js_error' AND json_type(props, '$.p.src') = 'text'
-	THEN json_extract(props, '$.p.src') ELSE '' END,
+const errorPlace = errorSrc + `,
 	CASE WHEN kind = 'js_error' AND json_type(props, '$.p.line') IN ('integer', 'real')
 	THEN json_extract(props, '$.p.line') END,
 	CASE WHEN kind = 'js_error' AND json_type(props, '$.p.col') IN ('integer', 'real')

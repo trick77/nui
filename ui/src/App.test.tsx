@@ -1995,6 +1995,7 @@ describe("alerts page", () => {
     expect(within(p).getByText("console.example.com")).toBeInTheDocument();
     // Every kind by its label, an unknown one by its id.
     for (const k of [
+      "Script errors level",
       "New error",
       "Address spike",
       "Unknown site or wrong key",
@@ -2076,13 +2077,13 @@ describe("alerts page", () => {
     const p = await alerts();
     await within(p).findByText("50 alerts shown");
     fireEvent.click(within(p).getByRole("button", { name: "Load earlier →" }));
-    await within(p).findByText("59 alerts shown");
-    expect(lastCall("/api/dash/alerts").get("before")).toBe("350");
+    await within(p).findByText("60 alerts shown");
+    expect(lastCall("/api/dash/alerts").get("before")).toBe("351");
     // The last page: nothing further, no page twice.
     expect(
       within(p).queryByRole("button", { name: /Load earlier/ }),
     ).toBeNull();
-    expect(rows(p)).toHaveLength(59);
+    expect(rows(p)).toHaveLength(60);
     // Older than any range the log shows: no jump that would open it empty.
     const gone = rowOf(p, "New error: TypeError: gone");
     expect(gone).not.toHaveClass("click");

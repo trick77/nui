@@ -304,6 +304,7 @@ jobs failing, a figure leaving its usual level. The dashboard lists them (`GET /
 | `job.failed` | `jobs`: `agg`, `retention`, `purge`, `refdata`, `classify`, `writer` (all) |
 | `db.size_cap`, `llm.budget` | none |
 | `level.requests`, `level.visitors`, `level.failed` (% of an API's calls), `level.p95` (an API's ms) | `window` (required, at most `24h`) and one or more of `min`, `max`, `factor`, `drop` (%), all of them together: `factor` or `drop`, never both, and `min` not above `max` (a file asking either is a fault); `baseline` (`days`: the 7 days before, `weekday`: that weekday of the 4 weeks before), `floor` (20), `calls` (100, `level.failed` only) |
+| `level.errors` (% of the visitors who had a script error) | `window` (required, at most `24h`), `min` (required; above 0, at most 100), `factor`, `baseline` (as above, `days`), `visitors` affected at least (3), `origins` as in `error.new` (all but `extension`) |
 
 The traffic triggers are Noteworthy's findings over the last 24 hours against the 24 before, checked when an hour
 closes; the others every five minutes. Each key is reported when it enters the set (a new error, a spiking
@@ -315,6 +316,13 @@ after six hours without one record what is there without sending it. A level's `
 the median of the same window at the same time of day; with fewer than 3 days to compare it judges nothing, and
 without `min` or `max` a usual level below `floor` is no alert. After a downtime nothing older than six hours is
 sent.
+
+`level.errors` reports a known error that spreads, where `error.new` reports only new messages. It counts people (an
+error not classified yet counts with its person; never bots, unknown automation or programs) as a share of the people
+the script saw in the window, a tab left open included. At or above `min`, and `factor` times the usual when the rule
+sets one (0 % leaves it to `min`), it opens only from `visitors` affected; with fewer it neither opens nor clears,
+below the bounds it clears (below `min` without days to compare too). Its message ends with the error most of them had. It reads raw only: `weekday` compares with the
+four weeks before, and with less than three of them in raw (`BACKEND_RAW_RETENTION_DAYS`, 90) it judges nothing.
 
 Switching off: `"enabled": false` on a rule (its history stays) or at the top of the file (alerts are recorded,
 nothing is sent). Without the file, or with no rule, Trakk records one rule per trigger that needs no parameter and
