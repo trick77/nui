@@ -41,6 +41,8 @@ const (
 	minNewEndpointCalls = 5
 	minNewFailures      = 3
 	minNewErrors        = 1
+	// maxNewKeys is the most new keys of one list Noteworthy names, the largest counts first.
+	maxNewKeys = 10
 )
 
 // Thresholds are what makes a change a finding. Noteworthy always takes DefaultThresholds: the set of fact ids,
@@ -59,6 +61,10 @@ type Thresholds struct {
 	NewErrors, NewFailures, NewProbes, NewEndpoints, NewReferrers int64
 	// SpikeAddr and SpikeNet are an address's and a network's spike.
 	SpikeAddr, SpikeNet Spike
+	// NewKeys is the most new keys of one list taken, the largest counts first; 0 is Noteworthy's ten. The alert
+	// rules take more: their own filters (visitors, origins) run after the cut, and a key slipping past the tenth
+	// would read as gone.
+	NewKeys int
 }
 
 // Spike is a spike's thresholds: its requests, its part of all (0 to 1) and its growth over the comparison.
@@ -255,6 +261,9 @@ func (s *Server) briefingInputWith(ctx context.Context, q *query, th Thresholds)
 	if err != nil {
 		return in, unbriefed{}, err
 	}
+	if gaps[0] || gaps[1] { // no change of a tile is known
+		q.unknownPart("tiles")
+	}
 	// Closed buckets only (as_of says until when), unlike the overview's tiles: the lists' findings are whole days, and
 	// a trend that turned within the day would have the briefing written again.
 	closed := q.p.closedN()
@@ -294,6 +303,7 @@ func factsHash(facts []insight.Fact) string {
 // finding's type and key.
 func (s *Server) findings(ctx context.Context, q *query, tiles []tile, th Thresholds) ([]insight.Fact, unbriefed,
 	error) {
+	q.maxNew = th.NewKeys
 	var facts []insight.Fact
 	var un unbriefed
 	tidy := func(f insight.Fact) insight.Fact {
@@ -462,6 +472,7 @@ func (s *Server) newKeysOf(ctx context.Context, q *query, dim string, minValue i
 		return err
 	}
 	if pl.gaps > gaps { // a key missing from a gap is not new
+		q.unknownPart(dim)
 		return nil
 	}
 	type kv struct {
@@ -484,7 +495,11 @@ func (s *Server) newKeysOf(ctx context.Context, q *query, dim string, minValue i
 		}
 		return cmp.Compare(a.k, b.k)
 	})
-	for _, x := range out[:min(len(out), 10)] {
+	n := q.maxNew
+	if n <= 0 {
+		n = maxNewKeys
+	}
+	for _, x := range out[:min(len(out), n)] {
 		fn(x.k, x.v, x.g)
 	}
 	return nil
@@ -543,6 +558,7 @@ func (s *Server) spikes(ctx context.Context, q *query, th Thresholds, add func(i
 			return err
 		}
 		if pl.gaps > gaps { // a share or a growth over a gap is not known
+			q.unknownPart("spikes")
 			return nil
 		}
 		for k := range spiking {

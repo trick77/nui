@@ -21,11 +21,13 @@ import (
 
 // Findings are Noteworthy's 24h facts of a site as of now at the thresholds th: the closed hours of the 24 before
 // now against the 24 before those, all classes. The briefing's set: the watch's provisional findings and those past
-// its bound are not among them.
-func (s *Server) Findings(ctx context.Context, site *sites.Site, now time.Time, th Thresholds) ([]insight.Fact, error) {
+// its bound are not among them. Unknown names the parts a gap left unjudged (a list's dimension, "spikes", "tiles"):
+// a fact missing there has not left.
+func (s *Server) Findings(ctx context.Context, site *sites.Site, now time.Time, th Thresholds) (facts []insight.Fact,
+	unknown map[string]bool, err error) {
 	q := &query{site: site, rng: "24h", loc: time.UTC, tz: "UTC", aud: "all", cmp: "prev", p: hoursPeriod(now, time.UTC)}
 	in, _, err := s.briefingInputWith(ctx, q, th)
-	return in.Facts, err
+	return in.Facts, q.unknown, err
 }
 
 // ScriptError is what a new script error's alert says beside its message: where it comes from and whom it hit, over

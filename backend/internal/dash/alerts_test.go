@@ -203,7 +203,10 @@ func TestRuleReads(t *testing.T) {
 	}
 	t.Cleanup(func() { traceSQL = nil })
 
-	facts, err := r.s.Findings(ctx, feed, now, DefaultThresholds())
+	facts, unknown, err := r.s.Findings(ctx, feed, now, DefaultThresholds())
+	if len(unknown) != 0 {
+		t.Errorf("a whole history read with gaps: %v", unknown)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +229,7 @@ func TestRuleReads(t *testing.T) {
 	loose := DefaultThresholds()
 	loose.AutoSharePP, loose.TrendVisitors, loose.TrendVisitorsPct, loose.NewProbes = 0, 0, 0, 1
 	loose.SpikeAddr = Spike{Min: 1, Share: 0.01, Growth: 1}
-	more, err := r.s.Findings(ctx, feed, now, loose)
+	more, _, err := r.s.Findings(ctx, feed, now, loose)
 	if err != nil {
 		t.Fatal(err)
 	}
