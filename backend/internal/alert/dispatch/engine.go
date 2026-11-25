@@ -101,9 +101,11 @@ func New(o Options) *Engine {
 	return e
 }
 
-// Run steps every minute until ctx ends; the first step at once, after the start's test message.
+// Run steps every minute until ctx ends; the first step at once, the start's test message beside the steps.
 func (e *Engine) Run(ctx context.Context) {
-	e.hello(ctx, time.Now())
+	said := make(chan struct{})
+	go func() { defer close(said); e.hello(ctx, time.Now) }()
+	defer func() { <-said }()
 	for wait := time.Duration(0); run.Sleep(ctx, wait); wait = Every {
 		if err := e.Step(ctx, time.Now()); err != nil && ctx.Err() == nil {
 			e.log.Warn("Alerts step failed, retried at the next", logging.Err(err))
