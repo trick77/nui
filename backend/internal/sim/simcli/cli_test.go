@@ -299,10 +299,12 @@ func TestServer(t *testing.T) {
 	if err := s.Backfill(t.Context(), st); err != nil {
 		t.Fatal(err)
 	}
-	// The alert engine stepped through the history: every rule of the world's notify file passed.
-	var passed int
-	if err := st.DB.QueryRow(`SELECT COUNT(DISTINCT rule) FROM alert_rule`).Scan(&passed); err != nil || passed != 22 {
-		t.Errorf("rules passed: %d, %v", passed, err)
+	// The alert engine stepped through the history: every rule of the world's notify file passed but the requests'
+	// drop, whose baseline waits for days to compare with that one day of history lacks.
+	var passed, drop int
+	if err := st.DB.QueryRow(`SELECT COUNT(DISTINCT rule), COUNT(DISTINCT CASE WHEN rule = 'requests-drop' THEN rule END)
+		FROM alert_rule`).Scan(&passed, &drop); err != nil || passed != 21 || drop != 0 {
+		t.Errorf("rules passed: %d (the drop %d), %v", passed, drop, err)
 	}
 	reg, _ := sites.New(rows)
 	counters := ingest.NewCounters(nil)

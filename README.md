@@ -303,7 +303,7 @@ jobs failing, a figure leaving its usual level. The dashboard lists them (`GET /
 | `collector.refused`, `collector.dropped`, `collector.unknown_domain` | `min` (1), `window` (`1h`, counted by the whole hour) |
 | `job.failed` | `jobs`: `agg`, `retention`, `purge`, `refdata`, `classify`, `writer` (all) |
 | `db.size_cap`, `llm.budget` | none |
-| `level.requests`, `level.visitors`, `level.failed` (% of an API's calls), `level.p95` (an API's ms) | `window` (required, at most `24h`) and one or more of `min`, `max`, `factor`, `drop` (%), all of them together; `baseline` (`days`: the 7 days before, `weekday`: that weekday of the 4 weeks before), `floor` (20), `calls` (100, `level.failed` only) |
+| `level.requests`, `level.visitors`, `level.failed` (% of an API's calls), `level.p95` (an API's ms) | `window` (required, at most `24h`) and one or more of `min`, `max`, `factor`, `drop` (%), all of them together: `factor` or `drop`, never both, and `min` not above `max` (a file asking either is a fault); `baseline` (`days`: the 7 days before, `weekday`: that weekday of the 4 weeks before), `floor` (20), `calls` (100, `level.failed` only) |
 
 The traffic triggers are Noteworthy's findings over the last 24 hours against the 24 before, checked when an hour
 closes; the others every five minutes. Each key is reported when it enters the set (a new error, a spiking

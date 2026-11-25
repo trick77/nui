@@ -249,9 +249,11 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	model := llm.New(st, llm.Options{Client: client, Model: cfg.LLMModel, DailyCalls: int64(cfg.LLMDailyCalls),
 		DailyTokens: int64(cfg.LLMDailyTokens)})
 	notify, senders := loadNotify(cfg, reg)
-	if simulated != nil { // nothing leaves the simulator: its recorder takes every message
-		senders = simulated.Recorder.Senders(notify)
+	rec := &dispatch.Recorder{}
+	if simulated != nil {
+		rec = simulated.Recorder
 	}
+	senders = sendersFor(cfg, mode, notify, senders, rec)
 	// The rules read through a dashboard server of their own: its clock is the alert step's.
 	reads := &dash.Server{DB: st, Sites: reg, Ref: ref, Counters: counters, RetentionMonths: cfg.RetentionMonths,
 		RawDays: cfg.RawRetentionDays}

@@ -127,6 +127,8 @@ func TestParse_Faults(t *testing.T) {
 		"source":           {`{"rules": [{"name": "a", "on": "source.silent", "after": "1h", "source": "mail"}]}`, "source is"},
 		"baseline":         {`{"rules": [{"name": "a", "on": "level.p95", "window": "1h", "min": 1, "baseline": "year"}]}`, "baseline"},
 		"jobs":             {`{"rules": [{"name": "a", "on": "job.failed", "jobs": ["backup"]}]}`, `job "backup"`},
+		"factor and drop":  {`{"rules": [{"name": "a", "on": "level.requests", "window": "1h", "factor": 3, "drop": 50}]}`, "exclude each other"},
+		"min above max":    {`{"rules": [{"name": "a", "on": "level.p95", "window": "1h", "min": 900, "max": 100}]}`, "min 900 is above max 100"},
 		"visitors":         {`{"rules": [{"name": "a", "on": "error.new", "visitors": 0}]}`, "visitors 0"},
 		"visitors whole":   {`{"rules": [{"name": "a", "on": "error.new", "visitors": 2.5}]}`, "no whole number"},
 		"visitors foreign": {`{"rules": [{"name": "a", "on": "probe.new", "visitors": 2}]}`, "takes no visitors"},
@@ -173,6 +175,17 @@ func TestExampleFile(t *testing.T) {
 	c := Load(filepath.Join("..", "..", "..", "docs", "notify.example.json"), k)
 	if len(c.Faults) > 0 || !c.Sending() || len(c.Rules) < 8 {
 		t.Errorf("example: %v %+v", c.Faults, c)
+	}
+}
+
+// The level combinations a value can meet are accepted: a band, a bound beside factor or drop.
+func TestLevelCombinations(t *testing.T) {
+	c := Parse([]byte(`{"rules": [{"name": "band", "on": "level.p95", "window": "1h", "min": 100, "max": 900},
+		{"name": "even", "on": "level.p95", "window": "1h", "min": 100, "max": 100},
+		{"name": "up", "on": "level.requests", "window": "1h", "factor": 3, "min": 200, "max": 5000},
+		{"name": "down", "on": "level.requests", "window": "1h", "drop": 80, "max": 10}]}`), known)
+	if len(c.Faults) > 0 {
+		t.Errorf("faults %v", c.Faults)
 	}
 }
 

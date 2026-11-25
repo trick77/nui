@@ -143,7 +143,7 @@ type Occurrence struct {
 	// Figure is the number the alert is about, nil for none; Unit what it counts.
 	Figure *float64
 	Unit   string
-	// Text and Detail are one line each, already defused (Defuse).
+	// Text and Detail are one line each (Line), the outside world's text as it came: a message defuses them.
 	Text, Detail string
 	Target       *Target
 	// Quiet is recorded and shown, never sent: a level rule's "no comparison".
@@ -151,4 +151,9 @@ type Occurrence struct {
 	// Hold: the state is not known in this pass (a job not run since start, a level without its comparison): the
 	// key's row stays as it is, nothing opens or clears.
 	Hold bool
+	// Wait, with Hold: the state is not judged yet but will be (a source within its after of the start, a level
+	// still gathering its comparison or its calls, a script error not looked at yet). A rule's baseline waits for
+	// it: what is there once it is judged was there at the rule's start, and is no news. A job not run since start
+	// holds without waiting: when it runs and fails, that is news.
+	Wait bool
 }
