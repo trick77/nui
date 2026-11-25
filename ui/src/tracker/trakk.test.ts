@@ -1443,6 +1443,366 @@ describe("capture", () => {
     for (const f of s) expect(utf8Len(f)).toBeLessThanOrEqual(160);
   });
 
+  describe("a stack's frames", () => {
+    const own = "https://collector.example.com/trakk.js";
+    const of = (...lines: string[]) =>
+      errorProps({ stack: lines.join("\n") }, own);
+    // Chromium's frames, below the message.
+    const v8 = (...lines: string[]) =>
+      of("Error: m", ...lines.map((l) => "    " + l));
+
+    it("loses everything from the URL's ? or # to the position", () => {
+      for (const [frame, want] of [
+        [
+          "at f (https://x/a.js?t=12:30:45&token=secret:5:6)",
+          "at f (https://x/a.js:5:6)",
+        ],
+        [
+          "at f (https://x/a.js?q=f(x)&token=secret:5:6)",
+          "at f (https://x/a.js:5:6)",
+        ],
+        ["at https://x/a.js?q=f(x)&token=secret:5:6", "at https://x/a.js:5:6"],
+        [
+          "at f (https://x/app/(shop)/page.js?dpl=secret:5:6)",
+          "at f (https://x/app/(shop)/page.js:5:6)",
+        ],
+        [
+          "at https://x/app/(shop)/page.js?dpl=secret:5:6",
+          "at https://x/app/(shop)/page.js:5:6",
+        ],
+        [
+          "at f (https://x/a.js?u=https://y/b.js?z:1:2#secret(:3:4):5:6)",
+          "at f (https://x/a.js:5:6)",
+        ],
+        [
+          "at f (https://x/a.js#a?token=secret:5:6)",
+          "at f (https://x/a.js:5:6)",
+        ],
+        [
+          "at eval (eval at f (https://x/a.js?token=secret:5:6), <anonymous>:1:2)",
+          "at eval (eval at f (https://x/a.js:5:6), <anonymous>:1:2)",
+        ],
+        [
+          "at Foo.#bar (https://x/a.js?token=secret:5:6)",
+          "at Foo.#bar (https://x/a.js:5:6)",
+        ],
+        ["at f (page.js?token=secret:5:6)", "at f (page.js:5:6)"],
+        [
+          "at Object.https://x/y?token=secret (https://x/a.js:5:6)",
+          "at Object.https://x/y (https://x/a.js:5:6)",
+        ],
+      ])
+        expect(v8(frame).stack).toEqual([want]);
+      for (const [frame, want] of [
+        [
+          "f@https://x/a.js?t=12:30:45&token=secret:5:6",
+          "f@https://x/a.js:5:6",
+        ],
+        [
+          "https://x/app/(shop)/page.js?dpl=secret:5:6",
+          "https://x/app/(shop)/page.js:5:6",
+        ],
+        [
+          "f@https://x/a.js?to=me@https://y/b:1:2&token=secret:5:6",
+          "f@https://x/a.js:5:6",
+        ],
+        [
+          "f@https://x/a.js?token=secret line 5 > eval:1:2",
+          "f@https://x/a.js line 5 > eval:1:2",
+        ],
+        [
+          'a["https://x/y?token=secret"]@https://x/a.js:5:6',
+          'a["https://x/y@https://x/a.js:5:6',
+        ],
+      ])
+        expect(of(frame).stack).toEqual([want]);
+    });
+
+    it("has the query nowhere, whatever its place in the line", () => {
+      for (const q of [
+        "?",
+        "#",
+        "?a=:1:2&",
+        "?(",
+        "?)",
+        "?a=(b)&",
+        "?@",
+        "?://",
+      ])
+        for (const p of ["", "(shop)/", "@scope/", "a:1:2/"]) {
+          const url = `https://x/${p}a.js${q}secret:5:6`;
+          for (const props of [
+            v8(`at f (${url})`),
+            v8(`at async f (${url})`),
+            v8(`at new Foo (${url})`),
+            v8(`at ${url}`),
+            v8(`at async ${url}`),
+            of("f@" + url),
+            of("@" + url),
+            of("global code@" + url),
+            of(url),
+          ]) {
+            expect(JSON.stringify(props)).not.toContain("secret");
+            expect(props).toMatchObject({
+              src: `https://x/${p}a.js`,
+              line: 5,
+              col: 6,
+            });
+            expect(props.stack).toHaveLength(1);
+          }
+        }
+    });
+
+    it("places by the whole frame, and keeps a clipped one's position", () => {
+      const url = "https://x.example.com/" + "p".repeat(300) + ".js";
+      for (const props of [
+        v8(`at f (${url}?t=1:7:9)`),
+        of(`f@${url}?t=1:7:9`),
+      ]) {
+        expect(props).toMatchObject({ src: url, line: 7, col: 9 });
+        const [frame] = props.stack as string[];
+        expect(frame).toMatch(/p\.\.\.:7:9\)?$/);
+        expect(utf8Len(frame)).toBe(LIMITS.frameBytes);
+      }
+      // A query longer than a line of the stack is stored.
+      expect(v8(`at f (https://x/a.js?${"q".repeat(3000)}:7:9)`)).toEqual({
+        stack: ["at f (https://x/a.js:7:9)"],
+        src: "https://x/a.js",
+        line: 7,
+        col: 9,
+      });
+      const named = v8(`at ${"ü".repeat(300)} (https://x/a.js:7:9)`);
+      expect(named.src).toBe("https://x/a.js");
+      const [frame] = named.stack as string[];
+      expect(frame).toMatch(/^at ü+\.\.\.:7:9\)$/);
+      expect(utf8Len(frame)).toBeLessThanOrEqual(LIMITS.frameBytes);
+      // The last line read may be a frame cut in half.
+      expect(
+        of("f@https://x/a.js:1:2", "g@https://x/" + "a:3:4".repeat(2000)).stack,
+      ).toEqual(["f@https://x/a.js:1:2"]);
+    });
+
+    it("may have a name with spaces where a URL follows", () => {
+      const frames = [
+        "global code@https://x/a.js:1:2",
+        "module code@https://x/a.js:1:2",
+        "eval code@https://x/a.js:1:2",
+        "promise callback*f@https://x/a.js:1:2",
+        "setTimeout handler*f@https://x/a.js:1:2",
+        "f@https://cdn.example/@scope/pkg.js:1:2",
+      ];
+      expect(of(...frames).stack).toEqual(frames);
+      expect(
+        of(
+          "write to me@example.com",
+          "me@example.com",
+          "mail me@example.com:1:2",
+          "see me@https://x/a.js",
+          "me@12:30:45",
+          "eval code@",
+        ),
+      ).toEqual({});
+      // Chromium's stack has no such frames, only message lines like them.
+      expect(
+        v8("at f (https://x/a.js:1:2)", "me@example.com:1:2").stack,
+      ).toEqual(["at f (https://x/a.js:1:2)"]);
+    });
+
+    it("are Chromium's by their place, never the message's lines", () => {
+      const frames = [
+        "at f (https://x/a.js:1:2)",
+        "at https://x/a.js:1:2",
+        "at async f (https://x/a.js:1:2)",
+        "at async https://x/a.js:1:2",
+        "at new Foo (https://x/a.js:1:2)",
+        "at get size (https://x/a.js:1:2)",
+        "at Foo.bar [as baz] (https://x/a.js:1:2)",
+      ];
+      expect(v8(...frames).stack).toEqual(frames);
+      const rest = [
+        "at Array.map (<anonymous>)",
+        "at <anonymous>",
+        "at <anonymous>:1:2",
+        "at g (<anonymous>:1:2)",
+        "at h (native)",
+        "at async Promise.all (index 0)",
+        "at eval (eval at f (https://x/a.js:5:6), <anonymous>:1:2)",
+        "at eval (eval at g (eval at f (https://x/a.js:5:6)), <anonymous>:1:2)",
+      ];
+      expect(v8(...rest).stack).toEqual(rest);
+      const other = [
+        "at eval (eval at f (<anonymous>:5:6), <anonymous>:1:2)",
+        "at eval (eval at f (unknown source), <anonymous>:1:2)",
+        "at w (wasm://wasm/0a1b2c:wasm-function[3]:0x1f)",
+        "at about:srcdoc:1:2",
+      ];
+      expect(v8(...other).stack).toEqual(other);
+      const said = [
+        "at the end of token secret",
+        "at 12:30:45",
+        "at me@example.com",
+        "at me@example.com:1:2",
+        "at noon (see https://x/?token=secret)",
+        "at noon (12:30:45)",
+        "at native speed",
+        "at https://x/?token=secret",
+      ];
+      expect(v8(...said)).toEqual({});
+      expect(v8(...said, frames[0]).stack).toEqual([frames[0]]);
+    });
+
+    it("begin below the message, though it looks like them", () => {
+      const message = "no\n    at f (https://x/token:1:2)\n    at <anonymous>";
+      const frame = "    at g (https://x/a.js:3:4)";
+      const want = {
+        stack: ["at g (https://x/a.js:3:4)"],
+        src: "https://x/a.js",
+        line: 3,
+        col: 4,
+      };
+      // Under its name, the name it had when it was made, or none.
+      for (const head of ["E: ", "Error: ", ""])
+        expect(
+          errorProps(
+            { name: "E", message, stack: head + message + "\n" + frame },
+            own,
+          ),
+        ).toEqual({ type: "E", ...want });
+      // A message longer than what is read of a stack.
+      const long = message.repeat(1000);
+      expect(
+        errorProps({ message: long, stack: `E: ${long}\n${frame}` }, own),
+      ).toEqual(want);
+      // Firefox and WebKit have none.
+      for (const m of ["f", "f@https", ""])
+        expect(
+          errorProps({ message: m, stack: "f@https://x/a.js:3:4" }).stack,
+        ).toEqual(["f@https://x/a.js:3:4"]);
+    });
+
+    it("place an error at the first file not the script's own", () => {
+      const at = (src: string, line: number, col: number) => ({
+        src,
+        line,
+        col,
+      });
+      for (const [props, want] of [
+        [
+          v8(
+            "at history.pushState (<anonymous>)",
+            `at ${own}?v=2:2:9998`,
+            "at https://x.example/app/(shop)/page.js:5:6",
+            "at next (https://x.example/b.js:1:1)",
+          ),
+          at("https://x.example/app/(shop)/page.js", 5, 6),
+        ],
+        [
+          v8("at f (https://x.example/app/(shop)/page.js:5:6)"),
+          at("https://x.example/app/(shop)/page.js", 5, 6),
+        ],
+        // A path that ends in a parenthesis loses only Chromium's own.
+        [
+          v8("at f (https://x.example/(a):5:6)"),
+          at("https://x.example/(a)", 5, 6),
+        ],
+        [
+          of(
+            "pushState@[native code]",
+            `@${own}:2:1`,
+            "global code@https://x/a.js:5:6",
+          ),
+          at("https://x/a.js", 5, 6),
+        ],
+        // Evaluated code: where eval was called.
+        [
+          v8("at eval (eval at f (https://x/a.js:5:6), <anonymous>:1:2)"),
+          at("https://x/a.js", 5, 6),
+        ],
+        [of("f@https://x/a.js line 5 > eval:1:2"), at("https://x/a.js", 5, 0)],
+        // A wasm offset is no line.
+        [
+          v8(
+            "at f (https://x/m.wasm:wasm-function[3]:0x1f)",
+            "at https://x/a.js:1:2",
+          ),
+          at("https://x/m.wasm", 0, 0),
+        ],
+        // Not understood: no place rather than its caller's.
+        [v8("at f (https://x/a b.js:5:6)", "at g (https://x/b.js:1:2)"), {}],
+        [of("f@https://x/a b.js:5:6", "g@https://x/b.js:1:2"), {}],
+        // Below a message line with a URL that is no frame.
+        [
+          of("E: see https://x/y", "    at g (https://x/b.js:1:2)"),
+          at("https://x/b.js", 1, 2),
+        ],
+      ] as [Record<string, unknown>, object][]) {
+        const { stack, ...place } = props;
+        expect(place).toEqual(want);
+        expect(stack).not.toEqual([]);
+      }
+      // With the event's own place there is none to look for.
+      expect(errorProps({ stack: "f@https://x/a.js:5:6" })).toEqual({
+        stack: ["f@https://x/a.js:5:6"],
+      });
+    });
+
+    it("cost hostile text no more than its length", () => {
+      const parts = [
+        "@",
+        "(",
+        " (",
+        ")",
+        ":",
+        ":1",
+        ":1:2",
+        "?",
+        "#",
+        "://",
+        "a://",
+        "@a://",
+        " line 1 > eval",
+        " at ",
+        "    at ",
+        "    at f (",
+        " ",
+        "1",
+        "a",
+        "\n",
+        "    at (https://x/",
+        "eval at f (",
+        "), <anonymous>",
+        "index 1",
+        "\ud800",
+        ":wasm-function[1]:0x",
+        "?x:1:2",
+      ];
+      const heads = [
+        "",
+        "    at ",
+        "    at f (",
+        "f@",
+        "f@https://x/",
+        "    at f (https://x/a?",
+      ];
+      vi.useRealTimers();
+      let slowest = 0;
+      for (const h of heads)
+        for (const p of parts)
+          for (const q of ["", "!", ":1:2", ":1:2)"])
+            for (const message of [undefined, p.repeat(3000)]) {
+              const stack = h + p.repeat(8000 / p.length) + q + "\n" + h + p;
+              const began = performance.now();
+              const got = errorProps({ message, stack }, own);
+              slowest = Math.max(slowest, performance.now() - began);
+              for (const f of (got.stack || []) as string[])
+                expect(utf8Len(f)).toBeLessThanOrEqual(LIMITS.frameBytes);
+            }
+      // Measured: under 1 ms.
+      expect(slowest).toBeGreaterThan(0);
+      expect(slowest).toBeLessThan(50);
+    });
+  });
+
   it("places a rejection by its stack, and keeps the message when the props are full", async () => {
     const t = boot();
     const at = (file: string) =>
@@ -1637,6 +1997,32 @@ describe("capture", () => {
           col: i.colno ?? 0,
         })),
         HIDDEN,
+      ]);
+    });
+
+    it("is the caller's where the browser blames this script for it", async () => {
+      const t = page(undefined);
+      const fire = (filename: string, stack?: string) =>
+        hidden({
+          message: "SecurityError: x",
+          filename,
+          lineno: 4,
+          colno: 10518,
+          error: { stack },
+        });
+      // As WebKit has it for a script's top-level code.
+      const ours = `pushState@[native code]\n@${SRC}?v=2:4:10480`;
+      const theirs = "global code@https://x.example.com/app.js:6:18";
+      fire(SRC + "?v=2", ours + "\n" + theirs);
+      fire(SRC, ours);
+      // Any other file's error is where the event says.
+      fire("https://x.example.com/b.js", theirs);
+      expect(
+        (await errors(t)).map(({ src, line, col }) => [src, line, col]),
+      ).toEqual([
+        ["https://x.example.com/app.js", 6, 18],
+        [SRC, 4, 10518],
+        ["https://x.example.com/b.js", 4, 10518],
       ]);
     });
 
