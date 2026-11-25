@@ -340,6 +340,7 @@ Go types:
 | `path_rules` | TEXT | no | `'[]'` |  |
 | `active` | INTEGER | no | `1` |  |
 | `created_at` | INTEGER | no |  |  |
+| `sort_order` | INTEGER | no | `0` |  |
 
 Indexes:
 
@@ -545,6 +546,7 @@ erDiagram
         TEXT path_rules
         INTEGER active
         INTEGER created_at
+        INTEGER sort_order
     }
     actor_class }o--|| site : "site_id"
     agg_addr }o--|| site : "site_id"

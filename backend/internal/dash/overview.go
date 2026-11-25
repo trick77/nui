@@ -1,6 +1,7 @@
 package dash
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/trick77/trakk/backend/internal/apix"
+	"github.com/trick77/trakk/backend/internal/sites"
 )
 
 // browserNoise are the automatic kinds the Events tile leaves out: they describe a view, they are not something a
@@ -440,7 +442,13 @@ type siteRow struct {
 
 func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 	rows := []siteRow{}
-	for _, st := range s.Sites.All() {
+	// The menu's order: by product, its ordered sites (1, not 0) first, the rest by domain.
+	all := s.Sites.All()
+	slices.SortFunc(all, func(a, b *sites.Site) int {
+		return cmp.Or(cmp.Compare(a.Product, b.Product), cmp.Compare(min(b.Order, 1), min(a.Order, 1)),
+			cmp.Compare(a.Order, b.Order), cmp.Compare(a.Domain, b.Domain))
+	})
+	for _, st := range all {
 		row := siteRow{Site: st.Domain, Product: st.Product, Kind: st.Kind, Feed: st.HasFeed}
 		b, sv, err := s.lastSeen(r.Context(), st.ID)
 		if err != nil {
@@ -456,18 +464,6 @@ func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, row)
 	}
-	slices.SortFunc(rows, func(a, b siteRow) int {
-		if a.Product != b.Product {
-			if a.Product < b.Product {
-				return -1
-			}
-			return 1
-		}
-		if a.Site < b.Site {
-			return -1
-		}
-		return 1
-	})
 	apix.JSON(w, http.StatusOK, map[string]any{"sites": rows})
 }
 

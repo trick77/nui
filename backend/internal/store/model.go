@@ -36,6 +36,7 @@ type Site struct {
 	Domain      string
 	Kind        string
 	Product     string
+	SortOrder   int // the place among the product's sites, 0 for none
 	FeedKeyHash string
 	PathRules   string
 	Active      bool

@@ -1357,6 +1357,44 @@ func TestDomainAndSites(t *testing.T) {
 	}
 }
 
+// The menu lists a product's ordered sites first (equal ones by domain), then the others by domain; products stay
+// alphabetical whatever their sites' orders.
+func TestSitesOrder(t *testing.T) {
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	site := func(product, domain string, order int) store.Site {
+		return store.Site{Domain: domain, Kind: "site", Product: product, SortOrder: order, PathRules: "[]"}
+	}
+	rows, err := st.SyncSites(t.Context(), []store.Site{
+		site("Mixed", "a.example.com", 0), site("Mixed", "b.example.com", 10), site("Mixed", "c.example.com", 2),
+		site("Mixed", "d.example.com", 0), site("Tie", "z.example.com", 1), site("Tie", "y.example.com", 1),
+		site("Tie", "x.example.com", 2), site("None", "q.example.com", 0), site("None", "p.example.com", 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := sites.New(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := func() time.Time { return rigEnd }
+	r := &rig{h: handler(&Server{DB: st, Sites: reg, Counters: ingest.NewCounters(now), Now: now})}
+	_, body := r.get(t, "sites", nil)
+	var got []string
+	for _, x := range body["sites"].([]any) {
+		got = append(got, x.(map[string]any)["site"].(string))
+	}
+	want := []string{"c.example.com", "b.example.com", "a.example.com", "d.example.com", // Mixed
+		"p.example.com", "q.example.com", // None
+		"y.example.com", "z.example.com", "x.example.com"} // Tie
+	if !slices.Equal(got, want) {
+		t.Errorf("sites = %v, want %v", got, want)
+	}
+}
+
 // A source that never delivered is null in the sites list and the domain footer alike: both, browser only, server
 // only and none yet read apart.
 func TestSourcesNeverDelivered(t *testing.T) {
