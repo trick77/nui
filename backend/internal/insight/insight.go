@@ -19,8 +19,10 @@ type Fact struct {
 	Text   string   `json:"text"`
 	Detail []string `json:"detail"`
 	Target Target   `json:"target"`
-	// Score orders facts without a briefing, most important first.
+	// Score orders facts without a briefing, most important first; At (unix ms, 0 none) those of one score, the
+	// latest first.
 	Score float64 `json:"-"`
+	At    int64   `json:"-"`
 }
 
 // Target is where a finding's row jumps to.

@@ -410,6 +410,13 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 		add(len(pages)-1, last.leave, "vital", "", map[string]any{"name": "INP", "value": float64(40 + r.IntN(360))})
 	}
 	add(len(pages)-1, last.leave, "vital", "", map[string]any{"name": "CLS", "value": math.Round(r.Float64()*0.3*1000) / 1000})
+	// The script reports the hosts the page loaded scripts from once a document, on its first engagement.
+	for i := range evs {
+		if evs[i].e.k == "engagement" {
+			evs[i].e.p["scripts"] = w.scriptHosts(s, evs[i].e.t)
+			break
+		}
+	}
 	evs[len(evs)-1].final = true
 	// Stable by time: events of one moment keep their order.
 	for i := 1; i < len(evs); i++ {
@@ -469,6 +476,20 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 	if len(q) > 0 {
 		send(first.Add(batchWait), q)
 	}
+}
+
+// The hosts pages load scripts from: every site's CDN, and the skimmer script-inject puts on the first script site's.
+const (
+	BaseScriptHost = "cdn.example.org"
+	InjectedHost   = "metrics.example.net"
+)
+
+// scriptHosts are the hosts a page of s loaded scripts from at t.
+func (w *World) scriptHosts(s *Site, t time.Time) []string {
+	if s.idx == w.firstScript() && w.in("script-inject", t) {
+		return []string{BaseScriptHost, InjectedHost}
+	}
+	return []string{BaseScriptHost}
 }
 
 // DeployError is the script error the deploy-error scenario's release throws on lookup pages.

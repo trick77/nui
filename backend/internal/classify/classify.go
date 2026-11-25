@@ -853,6 +853,10 @@ func (c *Classifier) clientVerdict(ip string, addr netip.Addr, g uaDay, f siteFa
 	return clientVerdict{}
 }
 
+// MostlyRefused reports whether half or more of an address's server requests in a day (at least ten) were answered
+// 4xx: the classifier's weak signal, and the watch job's scanner (an answer to such an address is a scanner's hit).
+func MostlyRefused(server, refused int64) bool { return server >= 10 && refused*2 >= server }
+
 // apiOnly: the client's requests loaded no page or asset and its script sent no beacon.
 func apiOnly(g uaDay) bool { return g.docs == 0 && g.assets == 0 && g.browser == 0 }
 
@@ -877,7 +881,7 @@ func (c *Classifier) weakSignals(g uaDay, f siteFacts, nets *refdata.Networks, a
 		if !f.fetchMeta && g.server >= 3 && g.noFetch == g.server && g.noLang == g.server && looksLikeBrowser(g.ua) {
 			weak = append(weak, "missing browser headers")
 		}
-		if g.server >= 10 && g.refused*2 >= g.server {
+		if MostlyRefused(g.server, g.refused) {
 			weak = append(weak, "mostly refused")
 		}
 		// A page load fires its assets and API calls in a burst: pace says something only without any page.

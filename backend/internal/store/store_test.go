@@ -550,7 +550,7 @@ func TestUpgrade_0002(t *testing.T) {
 	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event`).Scan(&events); err != nil || events != 50 {
 		t.Errorf("events after upgrade = %d, %v", events, err)
 	}
-	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 6 {
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 7 {
 		t.Errorf("migrations = %d, %v", migrated, err)
 	}
 	// The site from before the upgrade has no order, and takes one under its id.

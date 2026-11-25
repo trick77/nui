@@ -88,7 +88,8 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
 `backend/`, the knobs as above and flags over them (`-h`):
 
 - `scenarios` lists the scenarios, their windows and what the dashboard shows for each; `check` plays each on its
-  own and checks exactly that.
+  own and checks exactly that. The watch's (`path-flip`, `scanner-hit`, `post-target`, `script-inject`, `soft-404`)
+  need nine days of history: its learning window is a week.
 - `backfill -data ./data [-wipe]` writes a history, `sites.json` and the world's reference data (`ref/`) into an
   empty or absent data directory, or one it wrote before (marked by `sim.json`; a second history is refused,
   `-wipe` empties the directory first). Anything else is refused untouched, and so is every run with `PUBLIC_FQDN`
@@ -245,6 +246,16 @@ day's raw is deleted only once its figures are built from it. Each address's dai
 model's usage are kept `BACKEND_RETENTION_MONTHS` (25). `BACKEND_MAX_DB_MB` caps the whole
 ([`.env.example`](.env.example)).
 
+The watch (a path refused for days that suddenly answers, a scanner answered where nobody was before, a new target,
+a new host the pages load scripts from, once addresses of three networks reported it on one day: a visitor id is the
+browser's word, an IPv4 /24 or an IPv6 /48 one network) judges each day against a small state per site, walked from
+raw a closed day at a time and kept past it: a template or host goes `BACKEND_RETENTION_MONTHS` after its last
+request, never by the size cap (at most 20,000 templates and 500 hosts a site, a host few networks report the first
+to make room). A day makes at most ten findings of a kind, the hosts most networks report first; the rest are found
+on a later day, at their own time. After an upgrade it walks every day with raw first
+and finds nothing in them; a site's first week finds nothing either, everything is new then. Today's findings are
+provisional: judged on the day so far, they may go again, and the briefing waits until their day closes.
+
 A release that first deletes raw by days deletes nothing for 7 days after its first start, a restart included; the
 footer says from when. Then raw from the day holding the months' cutoff back goes at once, the rest down to the raw
 days a day at a time in short steps, and the database file shrinks a MiB at a time (incremental vacuum, the mode
@@ -255,7 +266,8 @@ Trakk creates its database in), at most 30 s per retention round, without lockin
 `/api/dash/*` is the dashboard's own API (a session required). For links into it: the log's `addr` filter takes an
 address or an IPv6 /64 (any other prefix is a 400), its `asn` filter an AS number, its `name` filter
 an event's exact name (a script error's message). Noteworthy shows five findings and counts the rest; `findings=all`
-lists every one.
+lists every one. `watch` answers the watch's findings of a range (flipped paths, scanners' hits, new targets; a site
+with a feed) and the hosts its pages loaded scripts from, the new ones marked.
 
 ## License
 

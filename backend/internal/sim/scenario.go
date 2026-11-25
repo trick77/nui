@@ -95,13 +95,26 @@ var catalogue = []Scenario{
 		"navigator.webdriver.", MinDays: 2, expect: expectHeadless},
 	{Name: "cred-prober", Story: "An address tries logins on the API every two seconds for an hour, an account " +
 		"list in turn.", From: -14 * h, To: -13 * h, expect: expectProber},
+	// The watch's stories need its learning window behind them: a week from the history's first day.
+	{Name: "path-flip", Story: "Scanners probe a dropped PHP file for two days and are refused; then it answers, " +
+		"a webshell in place, and its owner calls it.", From: -50 * h, To: -9 * h, MinDays: 9, expect: expectFlip},
+	{Name: "scanner-hit", Story: "A scanner walks two dozen paths, refused at every one but a database dump " +
+		"nobody asked for before.", From: -30 * h, To: -29 * h, MinDays: 9, expect: expectHit},
+	{Name: "post-target", Story: "A PHP path nobody posted to before takes POSTs and answers them.", From: -23 * h,
+		To: -22 * h, MinDays: 9, expect: expectPostTarget},
+	{Name: "script-inject", Story: "A host the pages never loaded scripts from shows up on every page: a skimmer " +
+		"injected into the site.", From: -40 * h, To: 1000 * 24 * h, MinDays: 9, expect: expectInject},
+	{Name: "soft-404", Story: "The blog starts answering every unknown path with a page of its own, 200: probes " +
+		"refused before are answered now, as is a scanner's spray of new paths.", From: -40 * h, To: 1000 * 24 * h,
+		Domain: "blog.example.org", MinDays: 9, expect: expectSoft},
 }
 
 // Catalogue lists the scenarios.
 func Catalogue() []Scenario { return slices.Clone(catalogue) }
 
 // DefaultScenarios is what server -demo and make sim play: the stories that sit well together.
-const DefaultScenarios = "baseline,referrer-spike,scan-wave,api-walker,deploy-error,headless,cred-prober,growth"
+const DefaultScenarios = "baseline,referrer-spike,scan-wave,api-walker,deploy-error,headless,cred-prober,growth," +
+	"path-flip,scanner-hit,post-target,script-inject"
 
 // Scenarios parses a comma-separated list of names ("all" for every one), baseline always included.
 func Scenarios(list string) ([]*Scenario, error) {
@@ -171,17 +184,22 @@ func items(body map[string]any, key string) []map[string]any {
 // included: a world playing several scenarios has more findings than the panel shows.
 func findings(site, rng string) map[string]string { return params(site, rng, "findings", "all") }
 
-// hasFinding checks a Noteworthy answer for a finding id, among every item's findings (a briefing line merges
-// several). Asked with findings(), the answer holds them all.
+// findingIDs are a Noteworthy answer's finding ids, every item's (a briefing line merges several).
+func findingIDs(body map[string]any) []string {
+	var ids []string
+	for _, it := range items(body, "items") {
+		xs, _ := it["ids"].([]any)
+		for _, x := range xs {
+			ids = append(ids, fmt.Sprint(x))
+		}
+	}
+	return ids
+}
+
+// hasFinding checks a Noteworthy answer for a finding id. Asked with findings(), the answer holds them all.
 func hasFinding(id string) func(map[string]any) error {
 	return func(body map[string]any) error {
-		var ids []string
-		for _, it := range items(body, "items") {
-			xs, _ := it["ids"].([]any)
-			for _, x := range xs {
-				ids = append(ids, fmt.Sprint(x))
-			}
-		}
+		ids := findingIDs(body)
 		if slices.Contains(ids, id) {
 			return nil
 		}
@@ -201,6 +219,33 @@ func errorAt(origin, place string) func(map[string]any) error {
 			return fmt.Errorf("place %v", w)
 		}
 		return nil
+	}
+}
+
+// noFinding checks a Noteworthy answer for no finding whose id starts with prefix. Asked with findings().
+func noFinding(prefix string) func(map[string]any) error {
+	return func(body map[string]any) error {
+		for _, id := range findingIDs(body) {
+			if strings.HasPrefix(id, prefix) {
+				return fmt.Errorf("finding %s", id)
+			}
+		}
+		return nil
+	}
+}
+
+// watchRow checks the watch's answer for a row of list (paths, hosts) whose field is value, then check on it.
+func watchRow(list, field, value string, check func(map[string]any) error) func(map[string]any) error {
+	return func(body map[string]any) error {
+		for _, r := range items(body, list) {
+			if r[field] == value {
+				if check == nil {
+					return nil
+				}
+				return check(r)
+			}
+		}
+		return fmt.Errorf("no %s row %q in %v", list, value, body[list])
 	}
 }
 
@@ -362,6 +407,11 @@ func expectWalker(w *World, _ *Scenario) []Expectation {
 				}
 				return nil
 			}},
+		// A route refusing a key is answered to whoever holds one: no probe flipped, no scanner's hit.
+		{Says: "Noteworthy has no flipped path on the walked route", Endpoint: "noteworthy", Params: findings(s, "7d"),
+			Check: noFinding("flip:GET /api/v1/ip/")},
+		{Says: "Noteworthy has no scanner's hit on the walked route", Endpoint: "noteworthy", Params: findings(s, "7d"),
+			Check: noFinding("hit:GET /api/v1/ip/")},
 	}
 }
 
@@ -492,5 +542,85 @@ func expectProber(w *World, _ *Scenario) []Expectation {
 			Params: findings(s, "24h"), Check: hasFinding("probe:POST /api/v1/login")},
 		visitor("the prober is unknown automated: its client, mostly refused", s, "24h", ProberAddr.String(),
 			"unknown", "client "+ProberUA, "mostly refused"),
+		// A login refusing the prober (a route's 401) and answering people is neither a flip nor a scanner's hit.
+		{Says: "Noteworthy has no flipped login", Endpoint: "noteworthy", Params: findings(s, "7d"),
+			Check: noFinding("flip:POST /api/v1/login")},
+		{Says: "Noteworthy has no scanner's hit on the login", Endpoint: "noteworthy", Params: findings(s, "7d"),
+			Check: noFinding("hit:POST /api/v1/login")},
+	}
+}
+
+func expectFlip(w *World, _ *Scenario) []Expectation {
+	s := w.Sites[w.firstFeed()].Domain
+	id := "flip:GET " + FlipPath
+	return []Expectation{
+		{Says: "Noteworthy lists the refused path now answered", Endpoint: "noteworthy", Params: findings(s, "7d"),
+			Check: hasFinding(id)},
+		{Says: "the answered probes card has it, refused on the days before", Endpoint: "watch",
+			Params: params(s, "7d"), Check: watchRow("paths", "id", id, func(r map[string]any) error {
+				if n, _ := r["refused_addrs"].(float64); n < 1 || r["refused_first"] == nil {
+					return fmt.Errorf("row %v", r)
+				}
+				return nil
+			})},
+	}
+}
+
+func expectHit(w *World, _ *Scenario) []Expectation {
+	s := w.Sites[w.firstFeed()].Domain
+	id := "hit:GET " + DumpPath
+	return []Expectation{
+		{Says: "Noteworthy lists the scanner's hit", Endpoint: "noteworthy", Params: findings(s, "7d"),
+			Check: hasFinding(id)},
+		{Says: "the answered probes card names the scanner", Endpoint: "watch", Params: params(s, "7d"),
+			Check: watchRow("paths", "id", id, func(r map[string]any) error {
+				if r["hit_addr"] != HitScannerAddr.String() {
+					return fmt.Errorf("row %v", r)
+				}
+				return nil
+			})},
+	}
+}
+
+func expectPostTarget(w *World, _ *Scenario) []Expectation {
+	s := w.Sites[w.firstFeed()].Domain
+	return []Expectation{{Says: "Noteworthy lists the new target POST " + PostPath, Endpoint: "noteworthy",
+		Params: findings(s, "7d"), Check: hasFinding("endpoint:POST " + PostPath)}}
+}
+
+func expectInject(w *World, _ *Scenario) []Expectation {
+	s := w.Sites[w.firstScript()].Domain
+	return []Expectation{
+		{Says: "Noteworthy lists the new script host", Endpoint: "noteworthy", Params: findings(s, "7d"),
+			Check: hasFinding("script:" + InjectedHost)},
+		{Says: "the script hosts card marks it new beside the known one", Endpoint: "watch", Params: params(s, "7d"),
+			Check: func(b map[string]any) error {
+				if err := watchRow("hosts", "host", InjectedHost, func(r map[string]any) error {
+					if r["new"] != true {
+						return fmt.Errorf("row %v", r)
+					}
+					return nil
+				})(b); err != nil {
+					return err
+				}
+				return watchRow("hosts", "host", BaseScriptHost, nil)(b)
+			}},
+	}
+}
+
+func expectSoft(_ *World, sc *Scenario) []Expectation {
+	s := sc.Domain
+	return []Expectation{
+		{Says: "the watch notes the soft day", Endpoint: "watch", Params: params(s, "7d"),
+			Check: func(b map[string]any) error {
+				if b["soft_day"] == nil {
+					return fmt.Errorf("no soft day: %v", b)
+				}
+				return nil
+			}},
+		{Says: "Noteworthy has no flipped path: a soft 404 answers every probe", Endpoint: "noteworthy",
+			Params: findings(s, "7d"), Check: noFinding("flip:")},
+		{Says: "Noteworthy has no scanner's hit", Endpoint: "noteworthy", Params: findings(s, "7d"),
+			Check: noFinding("hit:")},
 	}
 }

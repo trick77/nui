@@ -59,7 +59,8 @@ func TestExport(t *testing.T) {
 		t.Fatalf("index: %d answers, world %v", len(idx.Responses), idx.World)
 	}
 	for _, k := range []string{"sites", "overview?aud=bots&cmp=yoy&range=24h&site=lens.example.com",
-		"visitor?aud=all&cmp=prev&key=203.0.113.5&range=24h&site=lens.example.com"} {
+		"visitor?aud=all&cmp=prev&key=203.0.113.5&range=24h&site=lens.example.com",
+		"watch?aud=all&cmp=prev&range=24h&site=console.example.com"} {
 		if e, ok := idx.Responses[k]; !ok || e.Status != http.StatusOK {
 			t.Errorf("%s: %+v", k, e)
 		}
