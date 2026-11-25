@@ -222,7 +222,7 @@ func TestLargeTable(t *testing.T) {
 		}
 		return plan
 	}
-	keyDays := 0
+	keyDays, viewers := 0, 0
 	for name, set := range map[string]map[string]stmt{"dashboard": seen, "builder": built} {
 		for _, s := range set {
 			plan := strings.Join(explain(s), " | ")
@@ -238,7 +238,13 @@ func TestLargeTable(t *testing.T) {
 			if strings.Contains(s.q, "LEFT JOIN agg_addr t INDEXED BY agg_addr_key ON t.site_id = d.site_id AND t.ip_key") {
 				keyDays++
 			}
+			if strings.Contains(s.q, "SELECT DISTINCT visitor FROM event") {
+				viewers++
+			}
 		}
+	}
+	if viewers == 0 { // read only once the error occurs
+		t.Error("no read of an error's viewers: its key is not in the history")
 	}
 	if keyDays == 0 {
 		t.Error("no read of one key's days pinned to agg_addr_key")

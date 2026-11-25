@@ -35,9 +35,13 @@ const ORIGIN: Record<ErrorOrigin, [string, string]> = {
     "Another host's script",
     "Thrown by a script this domain loads from another host.",
   ],
+  named: [
+    "Code without a web address",
+    "Thrown by code known by a name only, as a bundler or eval gives it, or by a local file. The name does not tell whose it is.",
+  ],
   unknown: [
     "No location",
-    "The browser reported no file or line, as with a rejected promise.",
+    "No file or line was reported, as with a promise rejected with something that is no error.",
   ],
 };
 
@@ -78,7 +82,7 @@ function Breakdown({
   className?: string;
 }) {
   return (
-    <div className={`min-w-0 ${className}`}>
+    <div className={`min-w-0 overflow-x-auto ${className}`}>
       <table className="t" aria-label={title}>
         <thead>
           <tr>
@@ -130,7 +134,7 @@ export function ErrorDetail({
     <Panel
       id="error-detail"
       label="Error"
-      className="card mt-3"
+      className="card col-span-full min-w-0"
       busy={d.loading}
     >
       <div className="flex flex-wrap items-baseline gap-3">
@@ -210,32 +214,34 @@ function Body({ d, since }: { d: Detail; since: string | null }) {
           </ol>
         </>
       )}
-      <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 min-[700px]:grid-cols-2">
-        <Breakdown
-          title="Where"
-          of={d.places}
-          label={(r) => mono(r.where ? whereText(r.where) : r.key)}
-          className="min-[700px]:col-span-2"
-        />
-        <Breakdown title="Page" of={d.pages} label={(r) => mono(r.key)} />
-        <Breakdown
-          title="Client"
-          of={d.clients}
-          label={(r) => r.key || "unknown"}
-        />
-        <Breakdown
-          title="Class"
-          of={d.classes}
-          label={(r) => (
-            <>
-              <i
-                className="sw"
-                style={{ background: classColor(r.key as ClassKey) }}
-              />
-              {CLASSES.find((x) => x.key === r.key)?.label ?? r.key}
-            </>
-          )}
-        />
+      <div className="@container mt-3">
+        <div className="grid grid-cols-1 gap-x-4 gap-y-3 @min-[640px]:grid-cols-2 @min-[1000px]:grid-cols-3">
+          <Breakdown
+            title="Where"
+            of={d.places}
+            label={(r) => mono(r.where ? whereText(r.where) : r.key)}
+            className="col-span-full"
+          />
+          <Breakdown title="Page" of={d.pages} label={(r) => mono(r.key)} />
+          <Breakdown
+            title="Client"
+            of={d.clients}
+            label={(r) => r.key || "unknown"}
+          />
+          <Breakdown
+            title="Class"
+            of={d.classes}
+            label={(r) => (
+              <>
+                <i
+                  className="sw"
+                  style={{ background: classColor(r.key as ClassKey) }}
+                />
+                {CLASSES.find((x) => x.key === r.key)?.label ?? r.key}
+              </>
+            )}
+          />
+        </div>
       </div>
       <div className="eyebrow mt-4">
         Latest{SEP}open a visitor for what came before
@@ -248,20 +254,22 @@ function Body({ d, since }: { d: Detail; since: string | null }) {
                 <td className="font-mono text-[12.5px] whitespace-nowrap">
                   {when(r.t)}
                 </td>
-                <td>
+                {/* An IPv6 address or a long client wraps rather than push
+                    the page out of sight in a narrow panel. */}
+                <td className="min-w-[135px] wrap-anywhere">
                   <button
                     type="button"
-                    className="link font-mono !text-[12.5px] !text-ink"
+                    className="link font-mono !text-[12.5px] whitespace-normal !text-ink"
                     title="This visitor's trail"
                     onClick={() => goPanel("visitors", { key: r.key })}
                   >
                     {r.addr}
                   </button>
                 </td>
-                <td className="text-[12px] whitespace-nowrap text-muted">
+                <td className="min-w-[85px] text-[12px] wrap-anywhere text-muted">
                   {r.client}
                 </td>
-                <td className="font-mono text-[12.5px] wrap-anywhere">
+                <td className="min-w-[100px] font-mono text-[12.5px] wrap-anywhere">
                   {r.page}
                 </td>
               </tr>

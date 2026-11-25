@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/trick77/trakk/backend/internal/apix"
 	"github.com/trick77/trakk/backend/internal/insight"
@@ -719,9 +720,13 @@ func changeText(c change) string {
 	return ""
 }
 
+// truncate cuts s to at most n bytes, at a rune's start, and marks the cut.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return strings.TrimSpace(s[:n]) + "…"
 }
