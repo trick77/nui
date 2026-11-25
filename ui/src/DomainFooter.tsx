@@ -1,5 +1,13 @@
 import type { ReactNode } from "react";
-import { api, type Domain, type SourceState, type Watch } from "./api";
+import {
+  api,
+  type Domain,
+  type Notify,
+  type NotifyChannel,
+  type Severity,
+  type SourceState,
+  type Watch,
+} from "./api";
 import { SEP, bytes, date, dateTime, joinSep, num } from "./format";
 import { type Loaded, useApi } from "./hooks";
 import { scopeKey } from "./lists";
@@ -11,8 +19,9 @@ function Dl({ rows }: { rows: ([string, ReactNode] | false)[] }) {
     <dl className="mt-2 mb-0 grid grid-cols-[auto_1fr] gap-x-3.5 gap-y-[5px] text-[13px]">
       {rows
         .filter((r) => r !== false)
-        .map(([k, v]) => (
-          <div key={k} className="contents">
+        .map(([k, v], i) => (
+          // By place: a channel may share its name with a term.
+          <div key={i} className="contents">
             <dt className="whitespace-nowrap text-muted">{k}</dt>
             <dd className="m-0">{v}</dd>
           </div>
@@ -39,6 +48,82 @@ function Source({ s, missing }: { s: SourceState | null; missing: string }) {
       </span>
     </>
   );
+}
+
+const FROM: Record<Severity, string> = {
+  low: "every alert",
+  normal: "normal and high",
+  high: "high only",
+};
+
+// A channel: its service and what it takes, when it last delivered, and
+// its last failure, a warning only while no delivery came after it.
+function Channel({ c }: { c: NotifyChannel }) {
+  const err = c.last_error;
+  const failing =
+    err != null &&
+    (c.last_ok == null || Date.parse(err.at) > Date.parse(c.last_ok));
+  return (
+    <>
+      {joinSep([
+        c.service,
+        Object.hasOwn(FROM, c.min_severity)
+          ? FROM[c.min_severity]
+          : c.min_severity,
+      ])}
+      <div className="text-[12px] text-muted">
+        {c.last_ok
+          ? `last delivered ${dateTime(c.last_ok)}`
+          : "nothing delivered yet"}
+      </div>
+      {err && (
+        <div
+          className={`text-[12px] wrap-anywhere ${failing ? "text-ochre" : "text-muted"}`}
+        >
+          {`failed ${dateTime(err.at)}: ${err.text}`}
+        </div>
+      )}
+    </>
+  );
+}
+
+// Where alerts go: whether they are set up and on, what is wrong with the
+// configuration, the rules and each channel. A backend without alerts sends
+// no block: as not configured. Faults show whatever the state: a
+// configuration that failed to load may be why it reads as none.
+function Notifications({ n }: { n: Notify | undefined }) {
+  // A list the backend left empty may come as null.
+  const faults = n?.faults ?? [];
+  const channels = n?.channels ?? [];
+  const rows: ([string, ReactNode] | false)[] = [
+    [
+      "Alerts",
+      !n?.configured
+        ? joinSep(["not configured", "no rules or channels are set up"])
+        : n.enabled
+          ? "on"
+          : joinSep(["switched off", "nothing is sent"]),
+    ],
+    faults.length > 0 && [
+      "Config faults",
+      <ul className="m-0 list-none p-0 text-ochre">
+        {faults.map((f, i) => (
+          <li key={i} className="wrap-anywhere">
+            {f}
+          </li>
+        ))}
+      </ul>,
+    ],
+  ];
+  if (n?.configured) {
+    rows.push([
+      "Rules",
+      joinSep([`${num(n.rules.active)} active`, `${num(n.rules.off)} off`]),
+    ]);
+    if (!channels.length) rows.push(["Channels", "none"]);
+    for (const c of channels) rows.push([c.name, <Channel c={c} />]);
+  }
+  return <Dl rows={rows} />;
 }
 
 // How the domain is connected, what Trakk accepted and refused, what is
@@ -107,7 +192,9 @@ export function DomainFooter({ watch }: { watch: Loaded<Watch> }) {
                 </div>
               ))}
             </div>
-            <div className="grid grid-cols-1 border-t border-border min-[1000px]:grid-cols-3">
+            {/* Two by two from 1000 px: sources beside notifications,
+                storage beside the rules. */}
+            <div className="grid grid-cols-1 border-t border-border min-[1000px]:grid-cols-2">
               <section className="px-[18px] py-4">
                 <div className="eyebrow">
                   Sources{SEP}
@@ -164,7 +251,14 @@ export function DomainFooter({ watch }: { watch: Loaded<Watch> }) {
                   ]}
                 />
               </section>
-              <section className="border-border-soft px-[18px] py-4 max-[999px]:border-t min-[1000px]:border-l">
+              <section
+                aria-label="Notifications"
+                className="border-border-soft px-[18px] py-4 max-[999px]:border-t min-[1000px]:border-l"
+              >
+                <div className="eyebrow">Notifications</div>
+                <Notifications n={x.notify} />
+              </section>
+              <section className="border-t border-border-soft px-[18px] py-4">
                 <div className="eyebrow">Storage</div>
                 <Dl
                   rows={[
@@ -204,7 +298,7 @@ export function DomainFooter({ watch }: { watch: Loaded<Watch> }) {
                   ]}
                 />
               </section>
-              <section className="border-border-soft px-[18px] py-4 max-[999px]:border-t min-[1000px]:border-l">
+              <section className="border-t border-border-soft px-[18px] py-4 min-[1000px]:border-l">
                 <div className="eyebrow">Rules and reference data</div>
                 <Dl
                   rows={[

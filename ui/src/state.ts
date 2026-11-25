@@ -1,7 +1,8 @@
 // The page's state lives in the URL, so a reload or a link reproduces the
 // view: /dashboard/?site=…&range=7d&aud=bots&cmp=yoy, the log at
-// /dashboard/log?site=…&addr=…. What the URL leaves out is the browser's
-// last: the audience, the domain, and each domain's range.
+// /dashboard/log?site=…&addr=…, the alerts at /dashboard/alerts?site=…&all=1.
+// What the URL leaves out is the browser's last: the audience, the domain,
+// and each domain's range.
 
 import type { Audience, Compare, LogFilter, Range } from "./api";
 import { SEP } from "./format";
@@ -24,7 +25,7 @@ export const LOG_KEYS = [
   "failure",
 ] as const;
 
-export type Page = "dash" | "log";
+export type Page = "dash" | "log" | "alerts";
 
 // A view as the URL says it: site and range null where it does not.
 export type View = {
@@ -34,6 +35,8 @@ export type View = {
   aud: Audience;
   cmp: Compare;
   log: LogFilter;
+  // The alerts of every site and the instance's, not the domain's alone.
+  all: boolean;
 };
 
 // A view of a listed domain, nothing left open.
@@ -87,9 +90,12 @@ export function storeShown(site: string, range: Range) {
   store(rangeKey(site), range);
 }
 
+// The pages beside the dashboard, by their path under the mount.
+const SUBPAGE = /\/(log|alerts)\/?$/;
+
 // The app's mount: /dashboard/ in production, / under the dev server.
 export function basePath(pathname: string): string {
-  const p = pathname.replace(/\/log\/?$/, "/");
+  const p = pathname.replace(SUBPAGE, "/");
   return p.endsWith("/") ? p : `${p}/`;
 }
 
@@ -103,13 +109,15 @@ export function parseView(pathname: string, search: string): View {
     const v = q.get(k);
     if (v) log[k] = v;
   }
+  const page = (SUBPAGE.exec(pathname)?.[1] ?? "dash") as Page;
   return {
-    page: /\/log\/?$/.test(pathname) ? "log" : "dash",
+    page,
     site: q.get("site") || null,
     range: RANGES.includes(range) ? range : null,
     aud: AUDIENCES.includes(aud) ? aud : storedAudience(),
     cmp: COMPARES.includes(cmp) ? cmp : "prev",
     log,
+    all: page === "alerts" && q.get("all") === "1",
   };
 }
 
@@ -129,10 +137,15 @@ export function resolveView(v: View, sites: readonly string[]): Shown | null {
 export const PRODUCT = "Trakk";
 
 // The tab names the domain shown and, on the log, the address or network it
-// follows or the log itself: several tabs open side by side stay apart.
-// Range, audience and the other filters stay out, a tab has no room for them.
+// follows or the log itself, on the alerts page that (without the domain when
+// they are every site's): several tabs open side by side stay apart. Range,
+// audience and the other filters stay out, a tab has no room for them.
 export function tabTitle(site: string | null, v: View): string {
   if (!site) return PRODUCT;
+  if (v.page === "alerts")
+    return v.all
+      ? `${PRODUCT}${SEP}Alerts`
+      : [PRODUCT, site, "Alerts"].join(SEP);
   const parts = [PRODUCT, site];
   if (v.page === "log") {
     const asn = v.log.asn && `AS${v.log.asn.replace(/^as/i, "")}`;
@@ -150,12 +163,12 @@ export function viewHref(base: string, v: View): string {
   if (v.page === "dash") {
     q.set("aud", v.aud);
     if (v.cmp !== "prev") q.set("cmp", v.cmp);
-  } else {
+  } else if (v.page === "log") {
     for (const k of LOG_KEYS) {
       const val = v.log[k];
       if (val) q.set(k, val);
     }
-  }
+  } else if (v.all) q.set("all", "1");
   const s = q.toString();
-  return `${base}${v.page === "log" ? "log" : ""}${s ? `?${s}` : ""}`;
+  return `${base}${v.page === "dash" ? "" : v.page}${s ? `?${s}` : ""}`;
 }
