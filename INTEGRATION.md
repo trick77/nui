@@ -12,8 +12,9 @@ its values from a settings page instead of the environment ([Settings](#settings
 
 ## On the Trakk host (not in the product's repo)
 
-The product's repo cannot do this part. The integrating side hands the operator a `sites.json` entry and, for a
-feed, a place for the key in the product's `.env` ([Settings](#settings)).
+The product's repo cannot do this part. The integrating side hands the operator a `sites.json` entry (the host's
+`conf/sites.json`, `/conf/sites.json` in the container) and, for a feed, a place for the key in the product's `.env`
+([Settings](#settings)).
 
 - `domain`: the exact hostname the pages are served from, case-insensitive. `www.example.com` and `example.com` are
   two sites. A page on a host not listed gets 403 and its script switches itself off.

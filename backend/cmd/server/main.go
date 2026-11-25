@@ -174,7 +174,8 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	if _, err := logging.Setup(logging.Options{Level: cfg.LogLevel, LevelVar: "BACKEND_LOG_LEVEL"}); err != nil {
 		return err
 	}
-	slog.Info("starting Trakk", "version", version.String(), "public_fqdn", cfg.PublicFQDN, "data_dir", cfg.DataDir)
+	slog.Info("starting Trakk", "version", version.String(), "public_fqdn", cfg.PublicFQDN, "data_dir", cfg.DataDir,
+		"conf_dir", cfg.ConfDir)
 	if err := checkDataDir(cfg, mode); err != nil {
 		return err
 	}
@@ -351,22 +352,28 @@ func stopWithin(stop func(), wg *sync.WaitGroup, limit time.Duration) bool {
 }
 
 func loadSites(ctx context.Context, cfg app.Config, st *store.Store) (*sites.Registry, error) {
-	cs, err := sites.Load(cfg.SitesFile)
+	path, legacy := cfg.SitesPath()
+	if legacy {
+		slog.Warn("Sites file read from the data directory, where it no longer belongs: move it to the conf directory "+
+			"(compose.yaml mounts ./conf at /conf), the fallback goes in a later release", "sites_file", path,
+			"move_to", cfg.SitesFile)
+	}
+	cs, err := sites.Load(path)
 	if err != nil {
 		return nil, err
 	}
-	switch _, statErr := os.Stat(cfg.SitesFile); {
+	switch _, statErr := os.Stat(path); {
 	case errors.Is(statErr, fs.ErrNotExist):
 		slog.Warn("Sites file missing: the collector refuses every event and the dashboard lists no domain until it "+
-			"exists (docs/sites.example.json in the repo, restart after writing it)", "sites_file", cfg.SitesFile)
+			"exists (docs/sites.example.json in the repo, restart after writing it)", "sites_file", path)
 	case len(cs) == 0:
-		slog.Warn("Sites file lists no site: the collector refuses every event", "sites_file", cfg.SitesFile)
+		slog.Warn("Sites file lists no site: the collector refuses every event", "sites_file", path)
 	default:
 		domains := make([]string, 0, len(cs))
 		for _, c := range cs {
 			domains = append(domains, c.Domain)
 		}
-		slog.Info("Sites loaded", "sites_file", cfg.SitesFile, "domains", strings.Join(domains, ","))
+		slog.Info("Sites loaded", "sites_file", path, "domains", strings.Join(domains, ","))
 	}
 	rows, err := st.SyncSites(ctx, sites.Rows(cs))
 	if err != nil {

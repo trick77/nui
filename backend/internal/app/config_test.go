@@ -21,7 +21,8 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if cfg.TrustedHops != 1 {
 		t.Errorf("trusted hops default %d, want 1 (the compose file's Traefik)", cfg.TrustedHops)
 	}
-	if cfg.Addr != ":8080" || cfg.DataDir != "/data" || cfg.SitesFile != "/data/sites.json" || cfg.RetentionMonths != 25 ||
+	if cfg.Addr != ":8080" || cfg.DataDir != "/data" || cfg.ConfDir != "/conf" || cfg.SitesFile != "/conf/sites.json" ||
+		cfg.RetentionMonths != 25 ||
 		cfg.RawRetentionDays != 90 || cfg.MaxDBMB != 20480 || cfg.LLMModel != "mimo-v2.6-flash" || cfg.LLMDailyCalls != 200 || cfg.OIDCConfigured() ||
 		cfg.Secure() || cfg.AuthDisabled {
 		t.Errorf("cfg = %+v", cfg)
@@ -32,6 +33,7 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 	cfg, err := LoadConfig(lookup(map[string]string{
 		"BACKEND_ADDR":               "127.0.0.1:9090",
 		"BACKEND_DATA_DIR":           "/var/lib/trakk",
+		"BACKEND_CONF_DIR":           "/etc/trakk",
 		"BACKEND_LOG_LEVEL":          "debug",
 		"PUBLIC_FQDN":                "trakk.example.com",
 		"BACKEND_OIDC_ISSUER":        "https://auth.example.com",
@@ -47,9 +49,44 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.OIDCRedirectURL != "https://trakk.example.com/api/auth/callback" || !cfg.Secure() || !cfg.OIDCConfigured() ||
-		cfg.SitesFile != "/var/lib/trakk/sites.json" || cfg.RetentionMonths != 13 || cfg.RawRetentionDays != 15 ||
+		cfg.SitesFile != "/etc/trakk/sites.json" || cfg.RetentionMonths != 13 || cfg.RawRetentionDays != 15 ||
 		cfg.TrustedHops != 0 {
 		t.Errorf("cfg = %+v", cfg)
+	}
+}
+
+// The default sites file falls back to the data directory's while only that one exists; a set one never does.
+func TestSitesPath(t *testing.T) {
+	data, conf := t.TempDir(), t.TempDir()
+	load := func(vars map[string]string) Config {
+		t.Helper()
+		cfg, err := LoadConfig(lookup(vars))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	dirs := map[string]string{"BACKEND_DATA_DIR": data, "BACKEND_CONF_DIR": conf}
+	want := filepath.Join(conf, "sites.json")
+	if p, legacy := load(dirs).SitesPath(); p != want || legacy {
+		t.Errorf("neither exists: %s %v", p, legacy)
+	}
+	old := filepath.Join(data, "sites.json")
+	if err := os.WriteFile(old, []byte(`{"sites":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p, legacy := load(dirs).SitesPath(); p != old || !legacy {
+		t.Errorf("only the data one: %s %v", p, legacy)
+	}
+	set := map[string]string{"BACKEND_DATA_DIR": data, "BACKEND_SITES_FILE": filepath.Join(conf, "other.json")}
+	if p, legacy := load(set).SitesPath(); p != set["BACKEND_SITES_FILE"] || legacy {
+		t.Errorf("set: %s %v", p, legacy)
+	}
+	if err := os.WriteFile(want, []byte(`{"sites":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p, legacy := load(dirs).SitesPath(); p != want || legacy {
+		t.Errorf("both exist: %s %v", p, legacy)
 	}
 }
 

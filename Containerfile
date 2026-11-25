@@ -20,6 +20,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/trick77/ship/
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=backend /out/server /app/server
 USER 65532:65532
+# Mounted by compose.yaml: /data (BACKEND_DATA_DIR, written by Trakk) and /conf (BACKEND_CONF_DIR, read-only).
 EXPOSE 8080
 # Exec form: distroless has no shell.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD ["/app/server", "-healthcheck"]

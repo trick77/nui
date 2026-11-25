@@ -279,7 +279,7 @@ func TestServer(t *testing.T) {
 	}
 	cfg = app.Config{}
 	if err := s.Configure(&cfg); err != nil || !cfg.AuthDisabled || !cfg.RefDataDisabled || cfg.Addr != "127.0.0.1:9099" ||
-		cfg.DataDir != s.Dir || cfg.TrustedHops != 1 || !sim.Owned(s.Dir) {
+		cfg.DataDir != s.Dir || cfg.ConfDir != s.Dir || cfg.TrustedHops != 1 || !sim.Owned(s.Dir) {
 		t.Fatalf("config %+v, %v", cfg, err)
 	}
 	st, err := store.Open(t.Context(), filepath.Join(cfg.DataDir, store.FileName))
