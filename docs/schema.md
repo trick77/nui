@@ -440,6 +440,7 @@ Go types:
 | `active` | INTEGER | no | `1` |  |
 | `created_at` | INTEGER | no |  |  |
 | `sort_order` | INTEGER | no | `0` |  |
+| `name` | TEXT | no | `''` |  |
 
 Indexes:
 
@@ -735,6 +736,7 @@ erDiagram
         INTEGER active
         INTEGER created_at
         INTEGER sort_order
+        TEXT name
     }
     watch_open {
         INTEGER site_id PK, FK

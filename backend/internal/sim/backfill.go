@@ -61,7 +61,8 @@ func (s Stats) String() string {
 func (w *World) SitesFile() sites.File {
 	var f sites.File
 	for _, s := range w.Sites {
-		c := sites.Config{Domain: s.Domain, Product: s.Product, Order: s.Order, Kind: s.Kind, PathRules: s.Rules}
+		c := sites.Config{Domain: s.Domain, Name: s.Name, Product: s.Product, Order: s.Order, Kind: s.Kind,
+			PathRules: s.Rules}
 		if s.Feed {
 			c.FeedKeySHA256 = sites.HashKey(s.FeedKey)
 		}
@@ -108,8 +109,8 @@ func SitesFrom(ctx context.Context, st *store.Store) ([]*Site, error) {
 		if err := json.Unmarshal([]byte(r.PathRules), &rules); err != nil {
 			return nil, fmt.Errorf("site %s: %w", r.Domain, err)
 		}
-		out = append(out, &Site{Domain: r.Domain, Product: r.Product, Order: r.SortOrder, Kind: r.Kind, Script: r.Kind != "api",
-			Feed: r.FeedKeyHash != "", SPA: true, Rules: rules})
+		out = append(out, &Site{Domain: r.Domain, Name: r.Name, Product: r.Product, Order: r.SortOrder, Kind: r.Kind,
+			Script: r.Kind != "api", Feed: r.FeedKeyHash != "", SPA: true, Rules: rules})
 	}
 	return out, nil
 }

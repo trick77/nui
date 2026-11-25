@@ -13,7 +13,7 @@ import { jumpRange } from "./AlertsPage";
 import App from "./App";
 import { MainChart, StackChart, scaleLines } from "./charts";
 import { type FixtureOptions, TRAIL_NEXT, fixtureFetch } from "./fixtures";
-import { SEP, pct } from "./format";
+import { SEP, joinSep, pct } from "./format";
 import { VitalHint } from "./ui";
 
 let calls: string[] = [];
@@ -1993,7 +1993,11 @@ describe("alerts page", () => {
     expect(document.title).toBe(`Trakk${SEP}Alerts`);
     expect(within(p).getByText("Site")).toBeInTheDocument();
     expect(within(p).getAllByText("Instance").length).toBeGreaterThan(0);
-    expect(within(p).getByText("console.example.com")).toBeInTheDocument();
+    // A listed site by its name, its domain in the title.
+    expect(within(p).getByText("Console")).toHaveAttribute(
+      "title",
+      "console.example.com",
+    );
     // Every kind by its label, an unknown one by its id.
     for (const k of [
       "Script errors level",
@@ -2180,6 +2184,62 @@ describe("alerts page", () => {
       null,
     ]);
     expect(of("visitors", 200 * 24)).toBeUndefined();
+  });
+
+  it("calls a site by its name and asks by its domain", async () => {
+    const first = start("/dashboard/alerts?site=console.example.com");
+    let p = await alerts();
+    await within(p).findByRole("button", { name: "Console" });
+    expect(document.title).toBe(`Trakk${SEP}Console${SEP}Alerts`);
+    expect(lastCall("/api/dash/alerts").get("site")).toBe(
+      "console.example.com",
+    );
+    const menu = screen.getByRole("combobox", { name: "Domain" });
+    expect(menu).toHaveValue("console.example.com");
+    expect(
+      within(menu)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual([
+      "lens.example.com",
+      "Console",
+      "api.example.com",
+      "blog.example.org",
+    ]);
+    first.unmount();
+    // Both in the footer, where the domain is what is connected.
+    const second = start("/dashboard/?site=console.example.com");
+    const footer = () => screen.findByRole("region", { name: "This domain" });
+    await within(await footer()).findByText(
+      joinSep(["Sources", "Console", "console.example.com"]),
+      asIs,
+    );
+    second.unmount();
+    const third = start("/dashboard/?site=lens.example.com");
+    await within(await footer()).findByText(
+      joinSep(["Sources", "lens.example.com"]),
+      asIs,
+    );
+    third.unmount();
+    // One dropped from the sites file has no name any more.
+    const fx = fixtureFetch();
+    setFetcher(async (u, i) => {
+      const r = await fx(u, i);
+      if (!u.startsWith("/api/dash/sites")) return r;
+      const { sites } = (await r.json()) as { sites: { site: string }[] };
+      return Response.json({
+        sites: sites.filter((s) => s.site !== "console.example.com"),
+      });
+    });
+    window.history.replaceState(
+      null,
+      "",
+      "/dashboard/alerts?site=lens.example.com&all=1",
+    );
+    render(<App />);
+    p = await alerts();
+    await within(p).findByText("console.example.com");
+    expect(within(p).queryByText("Console")).toBeNull();
   });
 
   it("jumps from another domain's row to its panel and visitor", async () => {

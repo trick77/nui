@@ -153,7 +153,7 @@ export default function Dashboard({ me }: { me: Me }) {
     if (shownSite && shownRange) storeShown(shownSite, shownRange);
   }, [shownSite, shownRange]);
 
-  const title = tabTitle(site?.site ?? null, view);
+  const title = tabTitle(site?.name ?? null, view);
   useEffect(() => {
     document.title = title;
   }, [title]);
@@ -401,7 +401,7 @@ export default function Dashboard({ me }: { me: Me }) {
               <AlertsPage
                 all={view.all}
                 onAll={(all) => set({ all })}
-                sites={list?.map((s) => s.site) ?? []}
+                sites={list ?? []}
               />
             ) : (
               <>
@@ -484,7 +484,7 @@ function FilterBar({
           <optgroup key={prod} label={prod}>
             {ss.map((s) => (
               <option key={s.site} value={s.site}>
-                {s.site}
+                {s.name}
               </option>
             ))}
           </optgroup>

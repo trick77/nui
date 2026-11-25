@@ -34,6 +34,7 @@ func ClassCode(name string) int {
 type Site struct {
 	ID          int64
 	Domain      string
+	Name        string // what the site is called, "" for its domain
 	Kind        string
 	Product     string
 	SortOrder   int // the place among the product's sites, 0 for none

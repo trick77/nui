@@ -150,6 +150,15 @@ func TestParse_Faults(t *testing.T) {
 		"no template":   `{"sites":[{"domain":"a.example.com","path_rules":[{"pattern":"/x","template":""}]}]}`,
 		"below zero":    `{"sites":[{"domain":"a.example.com","order":-1}]}`,
 		"no integer":    `{"sites":[{"domain":"a.example.com","order":1.5}]}`,
+		"name twice":    `{"sites":[{"domain":"a.example.com","name":"Blog"},{"domain":"b.example.com","name":" blog "}]}`,
+		"name a domain": `{"sites":[{"domain":"a.example.com"},{"domain":"b.example.com","name":"A.example.com"}]}`,
+		"domain a name": `{"sites":[{"domain":"b.example.com","name":"A.example.com"},{"domain":"a.example.com"}]}`,
+		"name spaced":   `{"sites":[{"domain":"a.example.com","name":"My Blog"},{"domain":"b.example.com","name":"My  Blog"}]}`,
+		"name of named": `{"sites":[{"domain":"a.example.com","name":"b.example.com"},{"domain":"b.example.com","name":"B"}]}`,
+		"name a line":   `{"sites":[{"domain":"a.example.com","name":"a\nb"}]}`,
+		"name a markup": `{"sites":[{"domain":"a.example.com","name":"*a*"}]}`,
+		"name reversed": `{"sites":[{"domain":"a.example.com","name":"a` + string(rune(0x202e)) + `b"}]}`,
+		"name long":     `{"sites":[{"domain":"a.example.com","name":"` + strings.Repeat("ü", 65) + `"}]}`,
 	} {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -193,6 +202,38 @@ func TestOrder(t *testing.T) {
 		if s := reg.All()[i]; s.Order != want {
 			t.Errorf("%s: order %d, want %d", s.Domain, s.Order, want)
 		}
+	}
+}
+
+// A name is what the site is called and nothing else: it is looked up by its domain alone, and a name may be its own
+// domain or a host that is not listed.
+func TestName(t *testing.T) {
+	cs, err := Parse([]byte(`{"sites":[{"domain":"www.example.com","name":" example.com "},{"domain":"b.example.com"},
+		{"domain":"c.example.com","name":"c.example.com"},{"domain":"d.example.com","name":"Zoë's (d) 2-1"},
+		{"domain":"e.example.com","name":"x.example.com"},{"domain":"f.example.com","name":"F"},
+		{"domain":"g.example.com","name":"` + strings.Repeat("ü", 64) + `"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]store.Site{}
+	for i, r := range Rows(cs) {
+		r.ID = int64(i + 1)
+		rows[r.Domain] = r
+	}
+	reg, err := New(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{"example.com", "b.example.com", "c.example.com", "Zoë's (d) 2-1", "x.example.com", "F"} {
+		if got := reg.All()[i].Label(); got != want {
+			t.Errorf("site %d is called %q, want %q", i, got, want)
+		}
+	}
+	if _, ok := reg.Lookup("example.com"); ok {
+		t.Error("a site is looked up by its name")
+	}
+	if s, ok := reg.Lookup("f.example.com"); !ok || s.Name != "F" {
+		t.Errorf("lookup by domain = %+v %v", s, ok)
 	}
 }
 

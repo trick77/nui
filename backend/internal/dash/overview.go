@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/trick77/trakk/backend/internal/apix"
@@ -431,7 +432,9 @@ func (s *Server) live(ctx context.Context, site int64) (live, error) {
 }
 
 type siteRow struct {
-	Site    string `json:"site"`
+	Site string `json:"site"`
+	// Name: what the site is called, its domain without a configured one.
+	Name    string `json:"name"`
 	Product string `json:"product"`
 	Kind    string `json:"kind"`
 	// Feed: a server feed is configured, delivered or not.
@@ -442,14 +445,14 @@ type siteRow struct {
 
 func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 	rows := []siteRow{}
-	// The menu's order: by product, its ordered sites (1, not 0) first, the rest by domain.
+	// The menu's order: by product, its ordered sites (1, not 0) first, the rest by what they are called.
 	all := s.Sites.All()
 	slices.SortFunc(all, func(a, b *sites.Site) int {
 		return cmp.Or(cmp.Compare(a.Product, b.Product), cmp.Compare(min(b.Order, 1), min(a.Order, 1)),
-			cmp.Compare(a.Order, b.Order), cmp.Compare(a.Domain, b.Domain))
+			cmp.Compare(a.Order, b.Order), cmp.Compare(strings.ToLower(a.Label()), strings.ToLower(b.Label())))
 	})
 	for _, st := range all {
-		row := siteRow{Site: st.Domain, Product: st.Product, Kind: st.Kind, Feed: st.HasFeed}
+		row := siteRow{Site: st.Domain, Name: st.Label(), Product: st.Product, Kind: st.Kind, Feed: st.HasFeed}
 		b, sv, err := s.lastSeen(r.Context(), st.ID)
 		if err != nil {
 			s.fail(w, r, err)

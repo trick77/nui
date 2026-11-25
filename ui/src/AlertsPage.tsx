@@ -7,6 +7,7 @@ import {
   type DeliveryState,
   type Range,
   type Severity,
+  type SiteInfo,
 } from "./api";
 import { SEP, num, when } from "./format";
 import { useApi, useMore } from "./hooks";
@@ -172,8 +173,10 @@ export function AlertsPage({
 }: {
   all: boolean;
   onAll: (all: boolean) => void;
-  // The listed domains: a row of another one leads there only if it is.
-  sites: string[];
+  // The listed domains: a row of another one leads there only if it is, and
+  // one dropped from the list has no name left. A new one may have taken its
+  // domain as its name: the title tells them apart.
+  sites: SiteInfo[];
 }) {
   const { site, goPanel } = useDash();
   const of = all ? "" : site.site;
@@ -185,11 +188,12 @@ export function AlertsPage({
   // are the previous one's: no paging from them.
   const fresh = !page.loading;
   const next = more.next ?? page.data?.next ?? "";
+  const listed = (a: Alert) => sites.find((s) => s.site === a.site);
   // A row leads where it happened: the log or the script hosts over a range
   // that holds it, another panel as it is.
   const leads = (a: Alert) =>
     a.target != null &&
-    (a.site === "" || sites.includes(a.site)) &&
+    (a.site === "" || listed(a) != null) &&
     jumpRange(a) !== null;
   return (
     <>
@@ -203,7 +207,7 @@ export function AlertsPage({
           <Seg
             label="Alerts of"
             options={[
-              { key: "site", label: site.site },
+              { key: "site", label: site.name },
               { key: "all", label: "All sites" },
             ]}
             value={all ? "all" : "site"}
@@ -267,8 +271,8 @@ export function AlertsPage({
                     >
                       <td>{go ? <RowButton>{time}</RowButton> : time}</td>
                       {all && (
-                        <td className="whitespace-nowrap">
-                          {a.site || (
+                        <td className="whitespace-nowrap" title={a.site}>
+                          {(listed(a)?.name ?? a.site) || (
                             <span className="text-muted">Instance</span>
                           )}
                         </td>
