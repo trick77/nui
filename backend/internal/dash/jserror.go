@@ -23,7 +23,7 @@ const (
 	// Measured on uncaught throws in a timer: Chromium 159 hides another host's script loaded without CORS; WebKit
 	// 27.2 (desktop Playwright) one loaded with crossorigin and Access-Control-Allow-Origin too, and the
 	// SecurityError past its 100 pushState calls per 10 s, which the page's own script throws readably without us:
-	// trakk.js wraps pushState.
+	// trakk.js wraps pushState. The browser still hides that one; trakk.js, whose wrapper sees it, reports it itself.
 	originWithheld  = "withheld"
 	originExtension = "extension" // a browser extension, or another script that is not the page's
 	originOwn       = "own"       // the site's own host
