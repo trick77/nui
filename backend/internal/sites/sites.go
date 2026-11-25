@@ -31,6 +31,9 @@ type Config struct {
 	Domain string `json:"domain"`
 	// Product groups domains in the dashboard's menu ("Lens").
 	Product string `json:"product"`
+	// Order is the domain's place among its product's, from 1; 0 (or left out) is none: after the ordered ones, by
+	// domain.
+	Order int `json:"order,omitempty"`
 	// Kind is site (pages) or api (with a feed, the dashboard shows calls instead of visits).
 	Kind string `json:"kind"`
 	// FeedKeySHA256 is the hex SHA-256 of the server feed's bearer key; empty means the site has no server feed.
@@ -95,6 +98,9 @@ func Parse(b []byte) ([]Config, error) {
 		if c.Kind != "site" && c.Kind != "api" {
 			errs = append(errs, fmt.Errorf("site %s: kind %q, want site or api", c.Domain, c.Kind))
 		}
+		if c.Order < 0 {
+			errs = append(errs, fmt.Errorf("site %s: order %d, want 1 or more (0 or left out: none)", c.Domain, c.Order))
+		}
 		switch {
 		case c.FeedKeySHA256 == "":
 		case !hashRE.MatchString(c.FeedKeySHA256):
@@ -126,7 +132,7 @@ func Rows(cs []Config) []store.Site {
 	for _, c := range cs {
 		rules, _ := json.Marshal(nonNilRules(c.PathRules))
 		out = append(out, store.Site{Domain: c.Domain, Kind: c.Kind, Product: c.Product,
-			FeedKeyHash: c.FeedKeySHA256, PathRules: string(rules), Active: true})
+			SortOrder: c.Order, FeedKeyHash: c.FeedKeySHA256, PathRules: string(rules), Active: true})
 	}
 	return out
 }
@@ -143,7 +149,9 @@ type Site struct {
 	ID      int64
 	Domain  string
 	Product string
-	Kind    string
+	// Order is the place among the product's sites, 0 for none.
+	Order int
+	Kind  string
 	// HasFeed is whether a feed key is configured.
 	HasFeed bool
 	keyHash []byte
@@ -171,7 +179,7 @@ func New(rows map[string]store.Site) (*Registry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("site %s: %w", row.Domain, err)
 		}
-		s := &Site{ID: row.ID, Domain: row.Domain, Product: row.Product, Kind: row.Kind,
+		s := &Site{ID: row.ID, Domain: row.Domain, Product: row.Product, Order: row.SortOrder, Kind: row.Kind,
 			HasFeed: row.FeedKeyHash != "", rules: cr}
 		if s.HasFeed {
 			s.keyHash, _ = hex.DecodeString(row.FeedKeyHash)

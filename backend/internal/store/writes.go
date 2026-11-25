@@ -25,11 +25,12 @@ func (s *Store) SyncSites(ctx context.Context, sites []Site) (map[string]Site, e
 	now := time.Now().UnixMilli()
 	for _, st := range sites {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO site (domain, kind, product, feed_key_hash, path_rules, active, created_at)
-			VALUES (?, ?, ?, ?, ?, 1, ?)
+			INSERT INTO site (domain, kind, product, sort_order, feed_key_hash, path_rules, active, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, 1, ?)
 			ON CONFLICT (domain) DO UPDATE SET kind = excluded.kind, product = excluded.product,
-				feed_key_hash = excluded.feed_key_hash, path_rules = excluded.path_rules, active = 1`,
-			st.Domain, st.Kind, st.Product, st.FeedKeyHash, st.PathRules, now); err != nil {
+				sort_order = excluded.sort_order, feed_key_hash = excluded.feed_key_hash,
+				path_rules = excluded.path_rules, active = 1`,
+			st.Domain, st.Kind, st.Product, st.SortOrder, st.FeedKeyHash, st.PathRules, now); err != nil {
 			return nil, fmt.Errorf("sync site %s: %w", st.Domain, err)
 		}
 	}
@@ -42,7 +43,7 @@ func (s *Store) SyncSites(ctx context.Context, sites []Site) (map[string]Site, e
 // Sites returns every site keyed by domain.
 func (s *Store) Sites(ctx context.Context) (map[string]Site, error) {
 	rows, err := s.DB.QueryContext(ctx,
-		`SELECT id, domain, kind, product, feed_key_hash, path_rules, active FROM site ORDER BY id`)
+		`SELECT id, domain, kind, product, sort_order, feed_key_hash, path_rules, active FROM site ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -50,8 +51,8 @@ func (s *Store) Sites(ctx context.Context) (map[string]Site, error) {
 	out := map[string]Site{}
 	for rows.Next() {
 		var st Site
-		if err := rows.Scan(&st.ID, &st.Domain, &st.Kind, &st.Product, &st.FeedKeyHash, &st.PathRules,
-			&st.Active); err != nil {
+		if err := rows.Scan(&st.ID, &st.Domain, &st.Kind, &st.Product, &st.SortOrder, &st.FeedKeyHash,
+			&st.PathRules, &st.Active); err != nil {
 			return nil, err
 		}
 		out[st.Domain] = st

@@ -52,6 +52,21 @@ func TestSyncSites(t *testing.T) {
 	if sites["a.example.com"].ID != id || sites["a.example.com"].Product != "P" || sites["b.example.com"].Active {
 		t.Fatalf("after resync = %+v", sites)
 	}
+	// An order set on a known site, changed and removed again reaches its row each time; a new site starts with its.
+	for _, want := range []int{2, 1, 0} {
+		sites, err = st.SyncSites(t.Context(), []Site{{Domain: "a.example.com", Kind: "site", SortOrder: want,
+			PathRules: "[]"}, {Domain: "new" + strconv.Itoa(want) + ".example.com", Kind: "site", SortOrder: want,
+			PathRules: "[]"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := sites["a.example.com"].SortOrder; got != want {
+			t.Errorf("known site's order = %d, want %d", got, want)
+		}
+		if got := sites["new"+strconv.Itoa(want)+".example.com"].SortOrder; got != want {
+			t.Errorf("new site's order = %d, want %d", got, want)
+		}
+	}
 }
 
 func seed(t *testing.T, st *Store) int64 {
@@ -484,6 +499,21 @@ func TestRawWritesMarkAggDirty(t *testing.T) {
 	}
 }
 
+// seedOld is seed on a database an old version left: 0001's columns, not SyncSites, whose statement names later ones.
+func seedOld(t *testing.T, db *sql.DB) int64 {
+	t.Helper()
+	res, err := db.ExecContext(t.Context(), `INSERT INTO site (domain, kind, created_at)
+		VALUES ('a.example.com', 'site', 1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 // TestUpgrade_0002 opens a database that 0.1 left (0001 only, with events): Open adds the aggregate tables, empty,
 // and every event stays.
 func TestUpgrade_0002(t *testing.T) {
@@ -500,7 +530,7 @@ func TestUpgrade_0002(t *testing.T) {
 		migrate.Options{Dialect: migrate.SQLite}); err != nil {
 		t.Fatal(err)
 	}
-	id := seed(t, &Store{DB: db})
+	id := seedOld(t, db)
 	day := time.Now().UnixMilli()/dayMS - 30
 	// As 0.1 wrote them: plain inserts, no aggregate table to touch.
 	for i := range 50 {
@@ -520,8 +550,17 @@ func TestUpgrade_0002(t *testing.T) {
 	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event`).Scan(&events); err != nil || events != 50 {
 		t.Errorf("events after upgrade = %d, %v", events, err)
 	}
-	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 5 {
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 6 {
 		t.Errorf("migrations = %d, %v", migrated, err)
+	}
+	// The site from before the upgrade has no order, and takes one under its id.
+	sites, err := st.Sites(t.Context())
+	if err != nil || sites["a.example.com"].ID != id || sites["a.example.com"].SortOrder != 0 {
+		t.Fatalf("sites after upgrade = %+v, %v", sites, err)
+	}
+	sites, err = st.SyncSites(t.Context(), []Site{{Domain: "a.example.com", Kind: "site", SortOrder: 3, PathRules: "[]"}})
+	if err != nil || sites["a.example.com"].ID != id || sites["a.example.com"].SortOrder != 3 {
+		t.Errorf("site synced after upgrade = %+v, %v", sites, err)
 	}
 	for _, tbl := range []string{"agg_day", "agg_hour", "agg_list", "agg_addr"} {
 		var n int
@@ -556,7 +595,7 @@ func TestUpgrade_0004(t *testing.T) {
 	if _, err := migrate.Up(t.Context(), db, old, migrate.Options{Dialect: migrate.SQLite}); err != nil {
 		t.Fatal(err)
 	}
-	id := seed(t, &Store{DB: db})
+	id := seedOld(t, db)
 	// Every column its own value: a column copied into another would show.
 	for i, class := range []string{"human", "bot", "monitor", "unknown"} {
 		if _, err := db.Exec(`INSERT INTO actor_class VALUES (?, ?, ?, ?, ?, ?)`, id, fmt.Sprintf("192.0.2.%d", i+1),

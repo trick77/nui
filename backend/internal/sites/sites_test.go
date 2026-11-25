@@ -148,6 +148,8 @@ func TestParse_Faults(t *testing.T) {
 		"placeholder":   `{"sites":[{"domain":"a.example.com","path_rules":[{"pattern":"/{nope}","template":"/x"}]}]}`,
 		"no slash":      `{"sites":[{"domain":"a.example.com","path_rules":[{"pattern":"x","template":"/x"}]}]}`,
 		"no template":   `{"sites":[{"domain":"a.example.com","path_rules":[{"pattern":"/x","template":""}]}]}`,
+		"below zero":    `{"sites":[{"domain":"a.example.com","order":-1}]}`,
+		"no integer":    `{"sites":[{"domain":"a.example.com","order":1.5}]}`,
 	} {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -164,6 +166,33 @@ func TestParse_Faults(t *testing.T) {
 		strings.Repeat("AB", 32) + `"}]}`))
 	if err != nil || cs[0].Domain != "a.example.com" || cs[0].Kind != "site" || cs[0].FeedKeySHA256 != strings.Repeat("ab", 32) {
 		t.Fatalf("normalised = %+v, %v", cs, err)
+	}
+	// Every fault is named at once, the order's among them.
+	_, err = Parse([]byte(`{"sites":[{"domain":"a.example.com","order":-1},{"domain":"b.example.com","kind":"blog"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "order -1") || !strings.Contains(err.Error(), `kind "blog"`) {
+		t.Errorf("two faults: %v", err)
+	}
+}
+
+func TestOrder(t *testing.T) {
+	cs, err := Parse([]byte(`{"sites":[{"domain":"a.example.com","order":2},{"domain":"b.example.com","order":0},
+		{"domain":"c.example.com"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]store.Site{}
+	for i, r := range Rows(cs) {
+		r.ID = int64(i + 1)
+		rows[r.Domain] = r
+	}
+	reg, err := New(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []int{2, 0, 0} {
+		if s := reg.All()[i]; s.Order != want {
+			t.Errorf("%s: order %d, want %d", s.Domain, s.Order, want)
+		}
 	}
 }
 

@@ -151,8 +151,10 @@ run), set it to 0: the caller could otherwise write its own address into the hea
 Trakk only stores events for the sites listed in `data/sites.json` (the container's `/data/sites.json`; shape in
 [docs/sites.example.json](docs/sites.example.json)): domain, product, path rules that group raw paths into
 templates, for a server feed the SHA-256 of its key, and its kind: `site`, or `api` for a domain with a feed and no
-pages, shown by its calls (endpoints, accounts, failures, durations) instead of its visits. The file is read at start:
-restart Trakk after changing it.
+pages, shown by its calls (endpoints, accounts, failures, durations) instead of its visits. An optional `order` (1, 2,
+…) sets the domain's place among its product's in the menu; domains without one follow, by name. The menu's first
+domain is the one the dashboard opens with, unless the browser remembers another. The file is read at start: restart
+Trakk after changing it. A Trakk older than a field refuses the file: update first, then add it.
 Without it Trakk still starts, logs `Sites file missing`, refuses every event (403) and the dashboard lists no
 domain; with it, the start log names the loaded domains (`Sites loaded`).
 

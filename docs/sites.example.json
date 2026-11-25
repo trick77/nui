@@ -3,6 +3,7 @@
     {
       "domain": "lens.example.com",
       "product": "Lens",
+      "order": 1,
       "kind": "site",
       "feed_key_sha256": "",
       "path_rules": [
