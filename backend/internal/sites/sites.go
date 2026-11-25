@@ -106,8 +106,7 @@ func Parse(b []byte) ([]Config, error) {
 		case !hashRE.MatchString(c.FeedKeySHA256):
 			errs = append(errs, fmt.Errorf("site %s: feed_key_sha256 is not 64 hex digits", c.Domain))
 		case keys[c.FeedKeySHA256] != "":
-			// One key for two sites: the collector could file a batch under only one of them, and the other's
-			// would be refused as another site's for good.
+			// The key alone says whose a batch is: with one for two sites both would be filed under one of them.
 			errs = append(errs, fmt.Errorf("site %s: feed_key_sha256 is also %s's, every site needs its own key",
 				c.Domain, keys[c.FeedKeySHA256]))
 		default:

@@ -218,11 +218,11 @@ received within 10 s is a 408: send it again.
 
 ### Server feed
 
-`POST /api/feed` takes `{"v": 1, "site": "<domain>", "events": [...]}` as JSON, at most 256 KiB and 500 events per
-batch, rate-limited per key (200 events a second, a burst of 5000): a batch is charged one per event it stores and
+`POST /api/feed` takes `{"v": 1, "events": [...]}` as JSON, at most 256 KiB and 500 events per
+batch, its key saying the site, rate-limited per key (200 events a second, a burst of 5000): a batch is charged one per event it stores and
 passes while the key has a token left, running it into debt; a key without one is refused before its body is read.
 `Retry-After` covers the retry: the same batch sent again after it passes. The batch as a whole is refused only for an unparseable envelope (400), a wrong key
-(401), another site's name (400), its size or event count (413), a body not received within 30 s (408) or the rate
+(401), another site's domain as `site` (400; it may be left out), its size or event count (413), a body not received within 30 s (408) or the rate
 (429). One event's content never refuses the batch: strings over their limit are clipped (on a character boundary),
 and an event that is no JSON object, has a field of the wrong type, lacks a parseable `ip` or has an impossible
 `status` (outside 0-999), `dur_ms` or `bytes` (negative) is dropped and counted as rejected in the dashboard's

@@ -601,8 +601,9 @@ func (c *Collector) HandleFeed(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusBadRequest, "malformed request")
 		return
 	}
-	if b.V != 1 || !strings.EqualFold(b.Site, site.Domain) {
-		fail(http.StatusBadRequest, "v must be 1 and site the key's site")
+	// The key says whose batch it is. A sender from before that still names the site: a swapped key shows.
+	if b.V != 1 || b.Site != "" && !strings.EqualFold(b.Site, site.Domain) {
+		fail(http.StatusBadRequest, "v must be 1 and site, if sent, the key's")
 		return
 	}
 	if len(b.Events) > MaxFeedEvents {
