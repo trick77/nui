@@ -306,7 +306,9 @@ func scratchHistory(ctx context.Context, k sim.Knobs, log *slog.Logger) (*store.
 	if _, err := w.SyncSites(ctx, st); err != nil {
 		return fail(err)
 	}
-	o, err := backfillAlerting(ctx, st, w, &dispatch.Recorder{}, sim.BackfillOptions{Days: k.Days, Classify: k.Classify})
+	// The engine steps only where an expectation reads alerts (sim check); an export reads none.
+	o, err := backfillAlerting(ctx, st, w, &dispatch.Recorder{}, sim.BackfillOptions{Days: k.Days, Classify: k.Classify},
+		w.AlertHours())
 	if err != nil {
 		return fail(err)
 	}

@@ -91,7 +91,7 @@ func (s *Server) Configure(cfg *app.Config) error {
 // stepping through its last days on the virtual clock.
 func (s *Server) Backfill(ctx context.Context, st *store.Store) error {
 	o, err := backfillAlerting(ctx, st, s.World, s.Recorder, sim.BackfillOptions{Days: s.Knobs.Days,
-		Classify: s.Knobs.Classify})
+		Classify: s.Knobs.Classify}, lastDays(s.World))
 	if err != nil {
 		return err
 	}
