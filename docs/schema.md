@@ -326,6 +326,7 @@ Checks:
 
 Go types:
 
+- `dash.Collected` (internal/dash): Collected are the collector's counts of a site (0: the requests without one) over whole hours, the hour not flushed yet included.
 - `store.IngestStat` (internal/store): IngestStat is one site's collector counters for one hour.
 
 | Column | Type | Null | Default | PK |

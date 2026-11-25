@@ -35,6 +35,7 @@ import (
 	"github.com/trick77/ship/kit/logging"
 	"github.com/trick77/ship/kit/run"
 
+	"github.com/trick77/trakk/backend/internal/alert"
 	"github.com/trick77/trakk/backend/internal/refdata"
 	"github.com/trick77/trakk/backend/internal/sites"
 	"github.com/trick77/trakk/backend/internal/store"
@@ -112,6 +113,8 @@ type Classifier struct {
 	Verifier *refdata.Verifier
 	Log      *slog.Logger
 	Now      func() time.Time
+	// Report takes each pass's outcome (job.failed, classify).
+	Report alert.Reporter
 
 	mu    sync.Mutex
 	today int64
@@ -240,8 +243,12 @@ func (c *Classifier) instantEvent(a netip.Addr, e *store.Event) int {
 // Run passes every Every until ctx ends.
 func (c *Classifier) Run(ctx context.Context) {
 	for {
-		if err := c.Pass(ctx); err != nil && ctx.Err() == nil {
+		err := c.Pass(ctx)
+		if err != nil && ctx.Err() == nil {
 			c.log().Warn("Classification pass failed", logging.Err(err))
+		}
+		if ctx.Err() == nil {
+			alert.Fail(c.Report, alert.JobClassify, err)
 		}
 		if !run.Sleep(ctx, Every) {
 			return

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/trick77/trakk/backend/internal/alert"
 	"github.com/trick77/trakk/backend/internal/app"
 )
 
@@ -202,14 +203,18 @@ func TestRunRetention_PurgeErrorKeepsCap(t *testing.T) {
 	}), nil))
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
+	board := alert.NewBoard(nil)
 	go func() {
 		st.RunRetention(ctx, coverOpts(st, RetentionOptions{Months: 25, RawDays: 3, MaxBytes: used / 2,
-			CapEvery: 20 * time.Millisecond, Log: log}))
+			CapEvery: 20 * time.Millisecond, Log: log, Report: board}))
 		close(done)
 	}()
 	deadline := time.Now().Add(10 * time.Second)
+	reported := func() bool {
+		return slices.ContainsFunc(board.Conditions(), func(c alert.Condition) bool { return c.Key == alert.JobRetention })
+	}
 	for {
-		if u, _ := st.UsedBytes(t.Context()); u <= used/2 {
+		if u, _ := st.UsedBytes(t.Context()); u <= used/2 && reported() {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -223,6 +228,20 @@ func TestRunRetention_PurgeErrorKeepsCap(t *testing.T) {
 	defer mu.Unlock()
 	if !strings.Contains(logs.String(), "no unix ms") {
 		t.Errorf("the purge's error not logged: %s", logs.String())
+	}
+	// Reported: the purge failed, the rest of the round got through, the size cap was checked (its text the use).
+	got := map[string]alert.Condition{}
+	for _, c := range board.Conditions() {
+		got[c.Kind+" "+c.Key] = c
+	}
+	if c := got["job.failed purge"]; !c.Open || !strings.Contains(c.Text, "no unix ms") {
+		t.Errorf("purge %+v", c)
+	}
+	if c, ok := got["job.failed retention"]; !ok || c.Open {
+		t.Errorf("retention %+v", c)
+	}
+	if c := got["db.size_cap "]; !strings.Contains(c.Text, "MiB used") {
+		t.Errorf("size cap %+v", c)
 	}
 }
 

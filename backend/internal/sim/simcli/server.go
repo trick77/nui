@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/trick77/trakk/backend/internal/alert"
+	"github.com/trick77/trakk/backend/internal/alert/dispatch"
 	"github.com/trick77/trakk/backend/internal/app"
 	"github.com/trick77/trakk/backend/internal/sim"
 	"github.com/trick77/trakk/backend/internal/store"
@@ -22,6 +24,8 @@ type Server struct {
 	Knobs sim.Knobs
 	Dir   string
 	World *sim.World
+	// Recorder takes every alert message, the backfill's and the live server's: nothing is sent.
+	Recorder *dispatch.Recorder
 
 	live *sim.Live
 }
@@ -32,7 +36,7 @@ func NewServer(k sim.Knobs, now time.Time) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{Knobs: k, Dir: dir}
+	s := &Server{Knobs: k, Dir: dir, Recorder: &dispatch.Recorder{}}
 	fail := func(err error) (*Server, error) { s.Close(); return nil, err }
 	if err := sim.Mark(dir); err != nil {
 		return fail(err)
@@ -45,6 +49,9 @@ func NewServer(k sim.Knobs, now time.Time) (*Server, error) {
 		return fail(err)
 	}
 	if err := s.World.WriteSitesFile(filepath.Join(dir, app.SitesFileName)); err != nil {
+		return fail(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, alert.FileName), []byte(NotifyFile), 0o600); err != nil {
 		return fail(err)
 	}
 	return s, nil
@@ -73,15 +80,22 @@ func (s *Server) Configure(cfg *app.Config) error {
 	}
 	// The temporary directory is the conf directory too: never the developer's own /conf.
 	cfg.DataDir, cfg.ConfDir, cfg.SitesFile = s.Dir, s.Dir, filepath.Join(s.Dir, app.SitesFileName)
+	cfg.NotifyFile = filepath.Join(s.Dir, alert.FileName)
 	cfg.AuthDisabled, cfg.RefDataDisabled = true, true
 	cfg.Addr = fmt.Sprintf("127.0.0.1:%d", s.Knobs.Port)
 	cfg.TrustedHops = 1
 	return nil
 }
 
-// Backfill writes the history before the anchor into st (the sites synced from the sites file).
+// Backfill writes the history before the anchor into st (the sites synced from the sites file), the alert engine
+// stepping through its last days on the virtual clock.
 func (s *Server) Backfill(ctx context.Context, st *store.Store) error {
-	stats, err := sim.Backfill(ctx, st, s.World, sim.BackfillOptions{Days: s.Knobs.Days, Classify: s.Knobs.Classify})
+	o, err := backfillAlerting(ctx, st, s.World, s.Recorder, sim.BackfillOptions{Days: s.Knobs.Days,
+		Classify: s.Knobs.Classify})
+	if err != nil {
+		return err
+	}
+	stats, err := sim.Backfill(ctx, st, s.World, o)
 	if err == nil {
 		slog.Info("Simulated history written", "days", s.Knobs.Days, "seed", s.Knobs.Seed, "scale", s.Knobs.Scale,
 			"stats", stats.String())

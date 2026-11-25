@@ -217,14 +217,17 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 		}
 	}
 
-	ref := refdata.New(refdata.Options{Dir: filepath.Join(cfg.DataDir, "ref")})
+	// The jobs report their failures and the size cap to the board; the alert engine reads it.
+	board := alert.NewBoard(nil)
+	ref := refdata.New(refdata.Options{Dir: filepath.Join(cfg.DataDir, "ref"), Report: board})
 	verifier := refdata.NewVerifier(nil, 3*time.Second)
-	cls := &classify.Classifier{DB: st, Sites: reg, Ref: ref, Verifier: verifier}
+	cls := &classify.Classifier{DB: st, Sites: reg, Ref: ref, Verifier: verifier, Report: board}
 	if !verifyBots(mode) {
 		cls.Verifier = nil
 	}
 	counters := ingest.NewCounters(nil)
 	writer := ingest.NewWriter(st, counters, 0, cls.Enrich, nil)
+	writer.Report = board
 	collector := &ingest.Collector{Sites: reg, Writer: writer, Counters: counters,
 		Browser: ingest.BrowserTiers(cfg.TrustedHops, nil), Feed: ingest.FeedLimiter(nil), TrustedHops: cfg.TrustedHops}
 
@@ -249,12 +252,18 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	}
 	model := llm.New(st, llm.Options{Client: client, Model: cfg.LLMModel, DailyCalls: int64(cfg.LLMDailyCalls),
 		DailyTokens: int64(cfg.LLMDailyTokens)})
-	ds := &dash.Server{DB: st, Sites: reg, Ref: ref, Counters: counters, Model: model,
-		RetentionMonths: cfg.RetentionMonths, RawDays: cfg.RawRetentionDays, Build: version.String()}
 	notify := loadNotify(cfg, reg)
-	board := alert.NewBoard(nil)
-	alerts := dispatch.New(dispatch.Options{Store: st, Sites: reg, Config: notify, Senders: newSenders(notify),
-		Board: board, PublicFQDN: cfg.PublicFQDN})
+	senders := newSenders(notify)
+	if simulated != nil {
+		senders = simulated.Recorder.Senders(notify)
+	}
+	// The rules read through a dashboard server of their own: its clock is the alert step's.
+	reads := &dash.Server{DB: st, Sites: reg, Ref: ref, Counters: counters, RetentionMonths: cfg.RetentionMonths,
+		RawDays: cfg.RawRetentionDays}
+	alerts := dispatch.New(dispatch.Options{Store: st, Sites: reg, Config: notify, Senders: senders, Board: board,
+		Source: dispatch.NewEval(reads, notify.Rules, time.Now(), model), PublicFQDN: cfg.PublicFQDN})
+	ds := &dash.Server{DB: st, Sites: reg, Ref: ref, Counters: counters, Model: model,
+		RetentionMonths: cfg.RetentionMonths, RawDays: cfg.RawRetentionDays, Build: version.String(), Notify: alerts}
 
 	// Background work runs on its own context: the server drains first, then the writer flushes what the drained
 	// requests queued.
@@ -285,7 +294,7 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	})
 	// The aggregate job backfills every day with raw after an upgrade, then builds each day as it falls due. It waits
 	// for the reference data as the classifier does: the start's own reads first.
-	aggOpts := agg.Options{Months: cfg.RetentionMonths}
+	aggOpts := agg.Options{Months: cfg.RetentionMonths, Report: board}
 	start(func(c context.Context) {
 		select {
 		case <-refCached:
@@ -310,7 +319,7 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	// the day's raw.
 	start(func(c context.Context) {
 		st.RunRetention(c, store.RetentionOptions{Months: cfg.RetentionMonths, RawDays: cfg.RawRetentionDays,
-			Builder: agg.Version, Cover: agg.Cover(st, aggOpts), MaxBytes: int64(cfg.MaxDBMB) << 20})
+			Builder: agg.Version, Cover: agg.Cover(st, aggOpts), MaxBytes: int64(cfg.MaxDBMB) << 20, Report: board})
 	})
 	if cfg.OIDCConfigured() && !cfg.AuthDisabled {
 		start(func(c context.Context) {

@@ -123,6 +123,9 @@ type backfill struct {
 	cls   *classify.Classifier
 	stats Stats
 	log   *slog.Logger
+	// step and stepFrom: BackfillOptions.Step and StepFrom.
+	step     func(context.Context, time.Time) error
+	stepFrom time.Time
 }
 
 func (b *backfill) clock() time.Time { return b.now }
@@ -148,6 +151,10 @@ type BackfillOptions struct {
 	ClassifyLast int
 	// Log reports each day's progress; nil is quiet.
 	Log *slog.Logger
+	// Step, when set, runs at the end of every simulated hour from StepFrom on, the hour's events written and the
+	// counters flushed: the alert engine's step on the virtual clock, where no ticker ever fires.
+	Step     func(ctx context.Context, now time.Time) error
+	StepFrom time.Time
 }
 
 // Backfill writes the world's last o.Days days before its anchor into st through the real collector: the
@@ -156,7 +163,8 @@ type BackfillOptions struct {
 // pass run at the end of every day. The world's sites must be in st (SyncSites, or a sites file).
 func Backfill(ctx context.Context, st *store.Store, w *World, o BackfillOptions) (_ Stats, err error) {
 	start := time.Now()
-	b := &backfill{ctx: ctx, st: st, log: o.Log, stats: Stats{Refused: map[int]int{}}}
+	b := &backfill{ctx: ctx, st: st, log: o.Log, stats: Stats{Refused: map[int]int{}}, step: o.Step,
+		stepFrom: o.StepFrom}
 	if b.log == nil {
 		b.log = quietLog()
 	}
@@ -252,8 +260,24 @@ func (b *backfill) window(w *World, from, to time.Time, retries *reqHeap) error 
 				b.drain()
 			}
 		}
+		if err := b.stepAt(end); err != nil {
+			return err
+		}
 	}
 	return b.ctx.Err()
+}
+
+// stepAt runs the step at the end of an hour: what the hour sent written, its counters flushed.
+func (b *backfill) stepAt(end time.Time) error {
+	if b.step == nil || end.Before(b.stepFrom) {
+		return nil
+	}
+	b.drain()
+	b.now = end
+	if err := b.col.Counters.Flush(b.ctx, b.st); err != nil {
+		return err
+	}
+	return b.step(b.ctx, end)
 }
 
 // send hands one request to the collector's handler and books the answer.

@@ -249,6 +249,28 @@ func watchRow(list, field, value string, check func(map[string]any) error) func(
 	}
 }
 
+// alerts is the alerts request of a site's history, as many as one page holds.
+func alerts(site string) map[string]string { return map[string]string{"site": site, "limit": "200"} }
+
+// hasAlert checks an alerts answer for an alert of kind on key in state whose last message was sent (the
+// simulator's recording channel takes every one).
+func hasAlert(kind, key, state string) func(map[string]any) error {
+	return func(body map[string]any) error {
+		var seen []string
+		for _, a := range items(body, "alerts") {
+			seen = append(seen, fmt.Sprintf("%v %q %v", a["kind"], a["key"], a["state"]))
+			if a["kind"] != kind || a["key"] != key || a["state"] != state {
+				continue
+			}
+			if d, _ := a["delivery"].(map[string]any); d["state"] != "sent" {
+				return fmt.Errorf("%s %q %s delivered %v", kind, key, state, d)
+			}
+			return nil
+		}
+		return fmt.Errorf("no %s %q %s among %v", kind, key, state, seen)
+	}
+}
+
 // rowWith checks a list for a row whose key is key, then check on it.
 func rowWith(key string, check func(map[string]any) error) func(map[string]any) error {
 	return func(body map[string]any) error {
@@ -383,6 +405,8 @@ func expectScan(w *World, _ *Scenario) []Expectation {
 	return []Expectation{
 		{Says: "Noteworthy lists the new probed path GET /.env", Endpoint: "noteworthy", Params: findings(s, "7d"),
 			Check: hasFinding("probe:GET /.env")},
+		{Says: "an alert reports the new probed path GET /.env", Endpoint: "alerts", Params: alerts(s),
+			Check: hasAlert("probe.new", "GET /.env", "once")},
 		{Says: "the probed list has GET /.env answered 404", Endpoint: "list",
 			Params: params(s, "7d", "dim", "probed", "limit", "50"), Check: rowWith("GET /.env", func(r map[string]any) error {
 				if r["sub"] != "404" {
@@ -431,6 +455,8 @@ func expectDeploy(w *World, _ *Scenario) []Expectation {
 			}},
 		{Says: "an error the browser hides says so, without a place", Endpoint: "error",
 			Params: params(s, "7d", "key", MaskedError), Check: errorAt("withheld", "")},
+		{Says: "an alert reports the release's script error once, and it was sent", Endpoint: "alerts",
+			Params: alerts(s), Check: hasAlert("error.new", DeployError, "once")},
 		{Says: "the status breakdown has 5xx answers", Endpoint: "status", Params: params(s, "7d"),
 			Check: func(b map[string]any) error {
 				for _, r := range items(b, "rows") {
@@ -454,8 +480,16 @@ func expectFlood(w *World, sc *Scenario) []Expectation {
 	s := w.Sites[w.firstFeed()].Domain
 	id := map[string]string{"flood-addr": "spike:addr:" + FloodAddr.String(),
 		"flood-64": "spike:addr:" + ratelimit.Key(hostIn(Flood64, 1).String()), "flood-48": "spike:net:64506"}[sc.Name]
-	return []Expectation{{Says: "Noteworthy lists the spike " + id, Endpoint: "noteworthy", Params: findings(s, "24h"),
+	out := []Expectation{{Says: "Noteworthy lists the spike " + id, Endpoint: "noteworthy", Params: findings(s, "24h"),
 		Check: hasFinding(id)}}
+	if sc.Name == "flood-addr" {
+		out = append(out,
+			Expectation{Says: "an alert reports the address's spike", Endpoint: "alerts", Params: alerts(s),
+				Check: hasAlert("spike.addr", FloodAddr.String(), "once")},
+			Expectation{Says: "the requests' level rule opened for the flood's hour and cleared after it",
+				Endpoint: "alerts", Params: alerts(s), Check: hasAlert("level.requests", "", "cleared")})
+	}
+	return out
 }
 
 func expectOutage(w *World, sc *Scenario) []Expectation {
@@ -485,7 +519,8 @@ func expectOutage(w *World, sc *Scenario) []Expectation {
 				return fmt.Errorf("no outage then recovery in %v", ser)
 			}
 			return nil
-		}}}
+		}}, {Says: "an alert reported the silent feed and cleared it when it came back", Endpoint: "alerts",
+		Params: alerts(s), Check: hasAlert("source.silent", "server", "cleared")}}
 }
 
 func expectLateFeed(w *World, sc *Scenario) []Expectation {
@@ -516,6 +551,8 @@ func expectHammer(w *World, _ *Scenario) []Expectation {
 	return []Expectation{
 		{Says: "Noteworthy has the collector's refusals as a problem", Endpoint: "noteworthy", Params: findings(s, "24h"),
 			Check: hasFinding("collector:refused")},
+		{Says: "an alert reported the refusals and cleared once they stopped", Endpoint: "alerts", Params: alerts(s),
+			Check: hasAlert("collector.refused", "", "cleared")},
 		{Says: "the footer counts rate-limited events", Endpoint: "domain", Params: params(s, "24h"),
 			Check: func(b map[string]any) error {
 				c, _ := b["counters"].(map[string]any)

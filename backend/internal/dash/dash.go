@@ -38,6 +38,8 @@ type Server struct {
 	Now     func() time.Time
 	// Source is where the figures the aggregates can serve come from: SourceAuto but in tests.
 	Source Source
+	// Notify is the notifications' state the footer shows; nil: none configured.
+	Notify NotifyStatus
 
 	snaps snapshots // the visitor tables a cursor pages through
 	// trace, when set (tests), sees the source of every piece a plan read: from the aggregates or not, and whether
@@ -61,8 +63,12 @@ func (s *Server) now() time.Time {
 // ServeHTTP dispatches GET /api/dash/{endpoint}.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("endpoint")
-	if name == "sites" {
+	switch name { // no range, and a site only to filter by
+	case "sites":
 		s.handleSites(w, r)
+		return
+	case "alerts":
+		s.handleAlerts(w, r)
 		return
 	}
 	h, ok := map[string]func(http.ResponseWriter, *http.Request, *query){

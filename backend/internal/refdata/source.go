@@ -2,6 +2,7 @@ package refdata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/trick77/ship/kit/logging"
 	"github.com/trick77/ship/kit/run"
+
+	"github.com/trick77/trakk/backend/internal/alert"
 )
 
 // The ipverse sources, as lens fetches them.
@@ -46,6 +49,9 @@ type Options struct {
 	// Every is the refresh interval, a day by default.
 	Every time.Duration
 	Log   *slog.Logger
+	// Report takes each refresh that fetched something (job.failed, refdata): a failed download or parse opens it,
+	// the next refresh that gets everything through clears it.
+	Report alert.Reporter
 }
 
 // Data is the current reference data. The zero value has none and answers every lookup with "unknown".
@@ -150,8 +156,19 @@ func (d *Data) Run(ctx context.Context) {
 // the cached copy: one that does not parse (an error page served with 200, a truncated file) is discarded, and the
 // last good copy stays on disk and in memory.
 func (d *Data) Refresh(ctx context.Context) {
+	tried := false
+	var errs []error
+	warn := func(what string, err error) {
+		tried, errs = true, append(errs, err)
+		d.warn(what, err)
+	}
+	defer func() {
+		if tried && ctx.Err() == nil {
+			alert.Fail(d.o.Report, alert.JobRefdata, errors.Join(errs...))
+		}
+	}()
 	if d.stale(crawlersFile) || d.stale(monitorFile) || d.Bots() == nil {
-		d.warn("bot list", d.refreshBots(ctx))
+		warn("bot list", d.refreshBots(ctx))
 	}
 	for _, src := range []struct {
 		name, url, file string
@@ -169,7 +186,7 @@ func (d *Data) Refresh(ctx context.Context) {
 		if !d.stale(src.file) && d.loaded(src.file) {
 			continue
 		}
-		d.warn(src.name, d.refreshOne(ctx, src.url, src.file, src.install))
+		warn(src.name, d.refreshOne(ctx, src.url, src.file, src.install))
 	}
 }
 

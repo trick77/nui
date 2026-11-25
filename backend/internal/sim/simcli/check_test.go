@@ -7,12 +7,14 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/trick77/trakk/backend/internal/alert/dispatch"
 	"github.com/trick77/trakk/backend/internal/sim"
 	"github.com/trick77/trakk/backend/internal/store"
 )
@@ -134,6 +136,13 @@ func (h *sharedHistory) build(seed uint64, scale float64, days int, scenarios st
 	}
 	if _, err := h.w.SyncSites(ctx, h.st); err != nil {
 		return err
+	}
+	// The alert engine's hourly steps are the slowest part of a history under -race: only where an expectation reads
+	// alerts (sim check steps every history).
+	if slices.ContainsFunc(h.w.Expectations(), func(e sim.Expectation) bool { return e.Endpoint == "alerts" }) {
+		if o, err = backfillAlerting(ctx, h.st, h.w, &dispatch.Recorder{}, o); err != nil {
+			return err
+		}
 	}
 	if _, err = sim.Backfill(ctx, h.st, h.w, o); err != nil {
 		return err

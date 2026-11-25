@@ -23,6 +23,11 @@ type Fact struct {
 	// latest first.
 	Score float64 `json:"-"`
 	At    int64   `json:"-"`
+	// What an alert rule filters by, beside the id (internal: neither the model nor the briefing cache sees them):
+	// Value the figure (a count, a tile's value), Change a trend's percent or points, Share the part of all requests
+	// (0 to 1) and Growth the factor over the comparison (+Inf from none) of a spike, Volume the calls a failed share
+	// is of in the smaller of both periods.
+	Value, Change, Share, Growth, Volume float64 `json:"-"`
 }
 
 // Target is where a finding's row jumps to.

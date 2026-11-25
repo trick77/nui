@@ -13,6 +13,8 @@ import (
 
 	"github.com/trick77/ship/kit/logging"
 	"github.com/trick77/ship/kit/run"
+
+	"github.com/trick77/trakk/backend/internal/alert"
 )
 
 const (
@@ -584,6 +586,10 @@ func (s *Store) EnforceCap(ctx context.Context, o RetentionOptions, now time.Tim
 		return 0, nil
 	}
 	used, err := s.UsedBytes(ctx)
+	if err == nil {
+		alert.Note(o.Report, alert.Condition{Kind: alert.KindSizeCap, Open: used > maxBytes,
+			Text: fmt.Sprintf("%d MiB used, the cap is %d MiB", used>>20, maxBytes>>20)})
+	}
 	if err != nil || used <= maxBytes {
 		return 0, err
 	}
@@ -846,6 +852,9 @@ type RetentionOptions struct {
 	CapEvery time.Duration
 	Now      func() time.Time
 	Log      *slog.Logger
+	// Report takes each round's outcome (job.failed: retention, purge) and whether the rows are over the cap
+	// (db.size_cap).
+	Report alert.Reporter
 	// capStalls is, per site, the day the cap's raw step last stopped at, complemented while it only waits
 	// (RunRetention keeps it across rounds): its warning once per reason, not every few minutes.
 	capStalls map[int64]int64
@@ -934,22 +943,22 @@ func (s *Store) RunRetention(ctx context.Context, o RetentionOptions) {
 		}
 		// Every check: a site waiting for the job goes on minutes after it built the day, not a day later.
 		start := time.Now()
-		n, waits, err := s.PurgeRaw(ctx, o, o.Now())
-		deleted, errs = deleted+n, append(errs, err)
+		n, waits, purgeErr := s.PurgeRaw(ctx, o, o.Now())
+		deleted = deleted + n
+		alert.Fail(o.Report, alert.JobPurge, purgeErr)
 		if n > 0 {
 			o.Log.Info("Raw purge done", "deleted", n, "took", time.Since(start).Round(time.Millisecond).String())
 		}
 		logWaits(o.Log, waiting, waits)
-		n, err = s.EnforceCap(ctx, o, o.Now())
+		n, err := s.EnforceCap(ctx, o, o.Now())
 		deleted, errs = deleted+n, append(errs, err)
-		err = errors.Join(errs...)
 		// Every round while free pages are left, a budget at a time (a stall or another mode: none left to try).
 		var vacuumed time.Duration
 		next = o.CapEvery
 		if ctx.Err() == nil {
 			began := time.Now()
 			left, verr := s.vacuum(ctx, vacuumBudget)
-			vacuumed, err = time.Since(began), errors.Join(err, verr)
+			vacuumed, errs = time.Since(began), append(errs, verr)
 			switch {
 			case left > 0:
 				next = retentionYield
@@ -962,6 +971,9 @@ func (s *Store) RunRetention(ctx context.Context, o RetentionOptions) {
 				shrinking = time.Time{}
 			}
 		}
+		// The purge reports apart: its waits for the aggregate job are no failure, its errors are.
+		alert.Fail(o.Report, alert.JobRetention, errors.Join(errs...))
+		err = errors.Join(append(errs, purgeErr)...)
 		switch {
 		case err != nil && ctx.Err() == nil:
 			o.Log.Warn("Retention failed", logging.Err(err))

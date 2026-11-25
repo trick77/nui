@@ -166,8 +166,7 @@ func (e *Engine) sitesOf(r alert.Rule) []*sites.Site {
 	}
 	var out []*sites.Site
 	for _, s := range e.o.Sites.All() {
-		if (len(r.Sites) == 0 && len(r.Products) == 0) || slices.Contains(r.Sites, s.Domain) ||
-			slices.Contains(r.Products, s.Product) {
+		if selects(r, s) {
 			out = append(out, s)
 		}
 	}

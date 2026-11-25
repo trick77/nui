@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/trick77/trakk/backend/internal/alert"
 )
 
 func addr(s string) netip.Addr { return netip.MustParseAddr(s) }
@@ -371,8 +373,18 @@ func TestData_RefreshCacheAndFailure(t *testing.T) {
 	defer srv.Close()
 	dir := t.TempDir()
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	board := alert.NewBoard(nil)
 	o := Options{Dir: dir, Crawlers: srv.URL + "/crawlers.json", Monitoring: srv.URL + "/monitoring.json",
-		Networks: srv.URL + "/as.tar.gz", Countries: srv.URL + "/geo.tar.gz", Log: quiet}
+		Networks: srv.URL + "/as.tar.gz", Countries: srv.URL + "/geo.tar.gz", Log: quiet, Report: board}
+	refdataOpen := func() bool {
+		for _, c := range board.Conditions() {
+			if c.Key == alert.JobRefdata {
+				return c.Open
+			}
+		}
+		t.Fatal("no refresh reported")
+		return false
+	}
 	d := New(o)
 	if d.Bots() != nil || d.Networks() != nil || d.Countries() != nil {
 		t.Fatal("data before load")
@@ -380,6 +392,9 @@ func TestData_RefreshCacheAndFailure(t *testing.T) {
 	d.Refresh(t.Context())
 	if d.Bots() == nil || d.Networks() == nil || d.Countries() == nil || d.Bots().Updated.IsZero() {
 		t.Fatal("refresh loaded nothing")
+	}
+	if refdataOpen() {
+		t.Error("a refresh that got through reported a failure")
 	}
 	// Fresh caches: a second refresh fetches nothing.
 	before := hits.Load()
@@ -403,6 +418,9 @@ func TestData_RefreshCacheAndFailure(t *testing.T) {
 	d2.Refresh(t.Context())
 	if d2.Networks() == nil || d2.Bots() == nil {
 		t.Fatal("failed refresh dropped the data")
+	}
+	if !refdataOpen() {
+		t.Error("a failed refresh reported nothing")
 	}
 	// A download that does not parse is rolled back: the previous file stays in place.
 	fail.Store(false)

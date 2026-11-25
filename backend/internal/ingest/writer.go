@@ -13,6 +13,7 @@ import (
 
 	"github.com/trick77/ship/kit/logging"
 
+	"github.com/trick77/trakk/backend/internal/alert"
 	"github.com/trick77/trakk/backend/internal/store"
 )
 
@@ -59,6 +60,9 @@ type Writer struct {
 	insert func(context.Context, []store.Event) error
 	// retryWait is the pause before the second attempt, doubled before each further one.
 	retryWait time.Duration
+	// Report takes each write's outcome (job.failed, writer): a chunk dropped opens it, the next one written clears
+	// it. Set before Run.
+	Report alert.Reporter
 }
 
 // NewWriter returns a writer for st holding at most maxEvents queued (DefaultQueueEvents when 0) and
@@ -192,7 +196,9 @@ func (w *Writer) write(ctx context.Context, evs []store.Event, hours []int64) {
 	for start := 0; start < len(evs); start += writeBatch {
 		end := min(start+writeBatch, len(evs))
 		chunk := evs[start:end]
-		if err := w.insertRetry(ctx, chunk); err != nil {
+		err := w.insertRetry(ctx, chunk)
+		alert.Fail(w.Report, alert.JobWriter, err)
+		if err != nil {
 			w.log.Error("Event batch write failed, events dropped", "events", len(chunk), logging.Err(err))
 			type key struct{ site, hour int64 }
 			lost := map[key]*store.IngestStat{}
