@@ -359,8 +359,13 @@ func (e *Engine) apply(ctx context.Context, now time.Time, r alert.Rule, site in
 		}
 	}
 	if baseline && waiting {
-		// Not recorded: the next pass is the baseline still, for the keys judged only then (a source silent since
-		// before the start would otherwise be sent as news once its after passed).
+		// Not recorded as a pass: the next is the baseline still, for the keys judged only then (a source silent since
+		// before the start would otherwise be sent as news once its after passed). A first one is known all the same,
+		// so retire closes its rows (a quiet note, shown) should the rule go: checked at 0 means known, never judged,
+		// stale for the next pass.
+		if !ok {
+			return st.SetAlertRule(ctx, store.AlertRule{Rule: r.Name, SiteID: site, Sig: r.Sig})
+		}
 		return nil
 	}
 	return st.SetAlertRule(ctx, store.AlertRule{Rule: r.Name, SiteID: site, Sig: r.Sig, CheckedAt: nowMS})
@@ -433,13 +438,14 @@ func (e *Engine) enter(ctx context.Context, now time.Time, r alert.Rule, site in
 		FirstAt: nowMS, LastAt: nowMS}
 	fill(a, occ)
 	switch {
+	case occ.Quiet:
+		// Shown on a baseline too: the note is of a rule that cannot judge yet, whose every pass is a baseline.
+		a.State = store.AlertOnce
 	case baseline:
 		a.State = store.AlertBaseline
-	case occ.Quiet || !r.Spec.Condition:
+	case !r.Spec.Condition:
 		a.State = store.AlertOnce
-		if !occ.Quiet {
-			e.due(a, r, "open", now)
-		}
+		e.due(a, r, "open", now)
 	case r.For > 0:
 		a.State = store.AlertPending
 	default:
