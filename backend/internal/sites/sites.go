@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/trick77/trakk/backend/internal/store"
@@ -212,6 +213,7 @@ func New(rows map[string]store.Site) (*Registry, error) {
 		r.byDomain[s.Domain] = s
 		r.list = append(r.list, s)
 	}
+	slices.SortFunc(r.list, func(a, b *Site) int { return cmp.Compare(a.ID, b.ID) })
 	return r, nil
 }
 
@@ -232,15 +234,7 @@ func (r *Registry) ByID(id int64) (*Site, bool) {
 }
 
 // All is every active site, in id order.
-func (r *Registry) All() []*Site {
-	out := append([]*Site(nil), r.list...)
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j].ID < out[j-1].ID; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
-	return out
-}
+func (r *Registry) All() []*Site { return slices.Clone(r.list) }
 
 // ByKey is the site a feed key belongs to. Every configured hash is compared, in constant time each, so the answer's
 // timing does not depend on which site (if any) matched.

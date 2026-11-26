@@ -239,24 +239,25 @@ func (c *Collector) HandleBrowser(w http.ResponseWriter, r *http.Request) {
 	}
 	body, status := readBody(w, r, MaxBrowserBody, c.bodyTimeout(browserBodyTimeout))
 	if status != 0 {
-		c.refuse(w, c.siteOf(r), status, false)
+		c.reject(w, c.siteOf(r), status)
 		return
 	}
 	var b browserBatch
 	if err := json.Unmarshal(body, &b); err != nil || b.V != 1 || b.Site == "" {
-		c.refuse(w, c.siteOf(r), http.StatusBadRequest, false)
+		c.reject(w, c.siteOf(r), http.StatusBadRequest)
 		return
 	}
 	site, ok := c.Sites.Lookup(b.Site)
 	if !ok {
-		c.refuse(w, c.siteOf(r), http.StatusForbidden, true)
+		c.count(c.siteOf(r), func(s *store.IngestStat) { s.UnknownDomain++ })
+		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 	// A browser on another site naming this one (the script copied onto a foreign page) is refused: Origin is the
 	// browser's, not the page's, to set.
 	if o := r.Header.Get("Origin"); o != "" {
 		if u, err := url.Parse(o); err != nil || !strings.EqualFold(u.Hostname(), site.Domain) {
-			c.refuse(w, site.ID, http.StatusForbidden, false)
+			c.reject(w, site.ID, http.StatusForbidden)
 			return
 		}
 	}
@@ -266,7 +267,7 @@ func (c *Collector) HandleBrowser(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errTooLarge) {
 			status = http.StatusRequestEntityTooLarge
 		}
-		c.refuse(w, site.ID, status, false)
+		c.reject(w, site.ID, status)
 		return
 	}
 	// The rest of the charge, the first token paid above.
@@ -292,19 +293,10 @@ func browserCost(events, stored int) int {
 	return max(events, (stored+StoreUnit-1)/StoreUnit)
 }
 
+// reject answers a request the collector will not store (a browser's token is paid on arrival).
 func (c *Collector) reject(w http.ResponseWriter, site int64, status int) {
 	c.count(site, func(s *store.IngestStat) { s.Rejected++ })
 	w.WriteHeader(status)
-}
-
-// refuse answers a browser request the collector will not store (its token is paid on arrival).
-func (c *Collector) refuse(w http.ResponseWriter, site int64, status int, unknownDomain bool) {
-	if unknownDomain {
-		c.count(site, func(s *store.IngestStat) { s.UnknownDomain++ })
-		w.WriteHeader(status)
-		return
-	}
-	c.reject(w, site, status)
 }
 
 func (c *Collector) accept(site int64, source string, evs []store.Event) {
@@ -520,10 +512,6 @@ func checkValue(key string, v any, depth int) error {
 			limit = maxURL
 		}
 		return checkString(t, limit)
-	case float64:
-		if math.IsInf(t, 0) || math.IsNaN(t) {
-			return errors.New("number")
-		}
 	case []any:
 		if len(t) > MaxBrowserEvents {
 			return errTooLarge

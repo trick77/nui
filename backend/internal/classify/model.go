@@ -15,12 +15,12 @@ type uaDay struct {
 	delivered, authed int64
 	// beaconElsewhere: a beacon with the client's user agent for one of its pages came from another address key
 	// (dual stack, a relay that leaves per host).
-	beaconElsewhere   bool
-	refused           int64
-	webdriver         bool
-	noFetch, noLang   int64
-	noSite            int64
-	engaged, pageView int64
+	beaconElsewhere bool
+	refused         int64
+	webdriver       bool
+	noFetch, noLang int64
+	noSite          int64
+	engaged         int64
 	// active are the engagements with input, among the rows readProbes reads: visible and focused time alone proves no
 	// person, a tool emulates focus. probes are the script's indicators of automation.
 	active int64
@@ -42,7 +42,6 @@ type actorKey struct {
 //
 // Table: event
 type actorDay struct {
-	key, ip string
-	asn     int64
-	uas     []uaDay
+	ip  string
+	uas []uaDay
 }
