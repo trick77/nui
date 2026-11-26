@@ -445,11 +445,38 @@ body:has(.gate) {
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   border-bottom: 1px solid var(--color-border);
 }
-/* A domain without a feed has four tiles: two rows of two where one row
-   does not hold them, never three and a lone one. */
-@media (max-width: 999px) {
-  .tiles.four {
-    grid-template-columns: repeat(2, 1fr);
+/* Every row filled, never a lone tile. A five-digit figure beside its spark
+   takes about 230px (measured). Five tiles (an API, a website without a
+   feed): one row from 1200px, else three and two. Seven (a website with a
+   feed): four and three, below 1000px three, two and two; the content stops
+   at 1350px, too narrow for seven in a row. */
+.tiles.seven {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  & .tile {
+    grid-column: span 3;
+  }
+  & .tile:nth-child(n + 5) {
+    grid-column: span 4;
+  }
+  @media (max-width: 999px) {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    & .tile {
+      grid-column: span 2;
+    }
+    & .tile:nth-child(n + 4) {
+      grid-column: span 3;
+    }
+  }
+}
+.tiles.five {
+  @media (max-width: 1199px) {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    & .tile {
+      grid-column: span 2;
+    }
+    & .tile:nth-child(n + 4) {
+      grid-column: span 3;
+    }
   }
 }
 .tile {

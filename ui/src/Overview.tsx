@@ -15,6 +15,9 @@ export const AUD_NOTE: Record<Audience, string> = {
   humans: "Humans only.",
   bots: "Bots only: API clients, known bots, uptime probes and unknown automation.",
 };
+// The tile row's layout by tile count, each laid out in index.css with every
+// row filled. Any other count falls back to auto-fit and can leave a lone tile.
+const TILE_ROW: Partial<Record<number, string>> = { 5: "five", 7: "seven" };
 
 function TileValue({ t }: { t: Tile }) {
   return (
@@ -73,7 +76,7 @@ export function OverviewSection({
           </div>
         ) : (
           <>
-            <div className={`tiles${tiles.length === 4 ? " four" : ""}`}>
+            <div className={`tiles ${TILE_ROW[tiles.length] ?? ""}`.trim()}>
               {tiles.map((t) => (
                 <button
                   key={t.key}

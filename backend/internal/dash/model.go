@@ -8,6 +8,7 @@ type bucketStats struct {
 	gap      bool // part of it was read as nothing (plan.gaps)
 	visitors uniq // visitor ids (aud bots: address keys)
 	views    float64
+	starts   float64 // session starts: visits
 	events   float64
 	requests float64
 	unknown  float64 // unknown automated requests, over all requests whatever aud

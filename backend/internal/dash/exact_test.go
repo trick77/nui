@@ -97,8 +97,10 @@ func TestExact_BothSourcesOpenBucketPrevious(t *testing.T) {
 	if ps := vis["prev_mean"].([]any); ps[3*24+13] != nil || num64(ps[3*24+14]) != 0.17 || num64(ps[3*24+15]) != 0 || num64(ps[6*24+9]) != 0.17 || num64(ps[6*24+8]) != 0 {
 		t.Errorf("visitors prior means %v", ps)
 	}
-	if v := tl["views"]; num64(v["value"]) != 2 || num64(v["prev"]) != 2 {
-		t.Errorf("views tile %v", v)
+	for _, key := range []string{"visits", "views"} {
+		if v := tl[key]; num64(v["value"]) != 2 || num64(v["prev"]) != 2 {
+			t.Errorf("%s tile %v", key, v)
+		}
 	}
 	if v := tl["requests"]; num64(v["value"]) != 2 || num64(v["prev"]) != 2 {
 		t.Errorf("requests tile %v", v)
@@ -161,7 +163,7 @@ func TestExact_Last24Hours(t *testing.T) {
 		t.Errorf("period %v", period)
 	}
 	tl := tiles(t, ov)
-	for _, key := range []string{"visitors", "views", "requests"} {
+	for _, key := range []string{"visitors", "visits", "views", "requests"} {
 		v := tl[key]
 		if num64(v["value"]) != 2 || num64(v["prev"]) != 1 || changeOf(v["change"]) != `{"pct":100}` {
 			t.Errorf("%s tile %v", key, v)
@@ -253,8 +255,10 @@ func TestExact_24hLastYear(t *testing.T) {
 	n := countPieces(r, func(r *rig) {
 		_, body = r.getFrom(t, SourceAuto, "overview", p(feedSite, "range", "24h", "cmp", "yoy"))
 	})
-	if v := tiles(t, body)["views"]; num64(v["value"]) != 1 || num64(v["prev"]) != 1 || n.agg == 0 || n.raw != 0 {
-		t.Errorf("views %v, pieces %+v", v, n)
+	for _, key := range []string{"visits", "views"} {
+		if v := tiles(t, body)[key]; num64(v["value"]) != 1 || num64(v["prev"]) != 1 || n.agg == 0 || n.raw != 0 {
+			t.Errorf("%s %v, pieces %+v", key, v, n)
+		}
 	}
 }
 

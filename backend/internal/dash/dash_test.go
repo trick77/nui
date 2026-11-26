@@ -466,7 +466,7 @@ func TestOverview(t *testing.T) {
 					t.Errorf("%s: %d slots, open %v", rng, len(period["labels"].([]any)), period["open"])
 				}
 				ts := tiles(t, body)
-				if len(ts) != 6 {
+				if len(ts) != 7 {
 					t.Errorf("%s: %d tiles", rng, len(ts))
 				}
 				if low, ok := period["low"].(map[string]any); ts["views"]["low"] == true {
@@ -491,8 +491,9 @@ func TestOverview(t *testing.T) {
 	}
 	_, body := r.get(t, "overview", p(feedSite))
 	ts := tiles(t, body)
-	if ts["visitors"]["value"].(float64) == 0 || ts["views"]["value"].(float64) == 0 ||
-		ts["requests"]["value"].(float64) == 0 || ts["auto_share"]["value"].(float64) == 0 {
+	if ts["visitors"]["value"].(float64) == 0 || ts["visits"]["value"].(float64) == 0 ||
+		ts["views"]["value"].(float64) == 0 || ts["requests"]["value"].(float64) == 0 ||
+		ts["auto_share"]["value"].(float64) == 0 {
 		t.Errorf("empty tiles: %v", ts)
 	}
 	// A tile's value covers every bucket, the open one in: a count is their sum, the visitors distinct, never more.
@@ -505,8 +506,10 @@ func TestOverview(t *testing.T) {
 	if v := ts["visitors"]["value"].(float64); v > sum("visitors") {
 		t.Errorf("visitors %v above the bucket sum %v", v, sum("visitors"))
 	}
-	if v := ts["views"]["value"].(float64); v != sum("views") {
-		t.Errorf("views %v, the buckets %v", v, sum("views"))
+	for _, key := range []string{"visits", "views"} {
+		if v := ts[key]["value"].(float64); v != sum(key) {
+			t.Errorf("%s %v, the buckets %v", key, v, sum(key))
+		}
 	}
 	if ts["auto_share"]["change"] != nil {
 		if _, ok := ts["auto_share"]["change"].(map[string]any)["pp"]; !ok {
@@ -516,7 +519,7 @@ func TestOverview(t *testing.T) {
 	// Without a feed: no server tiles.
 	_, body = r.get(t, "overview", p(plainSite))
 	ts = tiles(t, body)
-	if len(ts) != 4 || ts["requests"] != nil || ts["auto_share"] != nil {
+	if len(ts) != 5 || ts["visits"] == nil || ts["requests"] != nil || ts["auto_share"] != nil {
 		t.Errorf("plain site tiles %v", ts)
 	}
 }

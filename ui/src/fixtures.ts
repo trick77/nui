@@ -349,6 +349,7 @@ function overview(
   function siteTiles() {
     return [
       mk("visitors", aud === "bots" ? "Addresses" : "Unique visitors", base, 1),
+      mk("visits", "Visits", base * 1.31, 7),
       mk("views", "Page views", base * 2.34, 2),
       mk("events", "Events", base * 0.43, 3),
       mk("requests", "Requests", base * 9.2, 4, { server: true }),
