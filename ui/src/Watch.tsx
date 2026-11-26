@@ -99,7 +99,7 @@ function Rows<R>({
 // The hosts the pages loaded scripts from, the range's new ones first: a
 // host nobody added is how injected code shows.
 export function ScriptHosts({ watch }: { watch: Loaded<Watch> }) {
-  const { focus } = useDash();
+  const { focus, scope } = useDash();
   const w = watch.data;
   const cols: Col<WatchHost>[] = [
     {
@@ -144,6 +144,7 @@ export function ScriptHosts({ watch }: { watch: Loaded<Watch> }) {
       ) : (
         <>
           <Rows
+            key={scope.site}
             rows={w.hosts}
             cols={cols}
             rowKey={(h) => h.host}

@@ -1575,6 +1575,9 @@ export function start(
 
   // Outbound links and downloads: one listener on the document.
   const linkClick = (e: Event) => {
+    // auxclick is every other button's: the middle one opens the link, the
+    // right one a menu.
+    if (e.type === "auxclick" && (e as MouseEvent).button !== 1) return;
     const t = e.target as Element | null;
     const a =
       t && t.closest ? (t.closest("a[href]") as HTMLAnchorElement) : null;

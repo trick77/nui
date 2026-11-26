@@ -93,6 +93,7 @@ export function useMore<T>(key: string) {
     setSeen(key);
     setMore({ key: "", items: [], next: "" });
     setBusy(null);
+    setError(null);
   }
   const seq = useRef(0);
   useEffect(() => {
