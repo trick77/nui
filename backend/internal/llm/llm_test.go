@@ -27,6 +27,20 @@ type rig struct {
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
+// Drain works every queued job now.
+func (s *Service) Drain(ctx context.Context) {
+	for {
+		select {
+		case j := <-s.urgent:
+			s.done(j.key, s.work(ctx, j))
+		case j := <-s.normal:
+			s.done(j.key, s.work(ctx, j))
+		default:
+			return
+		}
+	}
+}
+
 func newRig(t *testing.T, calls int64) *rig {
 	t.Helper()
 	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "app.db"))

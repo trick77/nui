@@ -333,7 +333,7 @@ func (e *Engine) apply(ctx context.Context, now time.Time, r alert.Rule, site in
 			if occ.Hold {
 				// A pending one is not known to have held meanwhile: its for starts over.
 				if a.State == store.AlertPending {
-					if err := e.leave(ctx, now, a); err != nil {
+					if err := e.leave(ctx, now, r, a); err != nil {
 						return err
 					}
 				}
@@ -353,7 +353,7 @@ func (e *Engine) apply(ctx context.Context, now time.Time, r alert.Rule, site in
 	}
 	for _, k := range slices.Sorted(maps.Keys(open)) {
 		if !seen[k] {
-			if err := e.leave(ctx, now, open[k]); err != nil {
+			if err := e.leave(ctx, now, r, open[k]); err != nil {
 				return err
 			}
 		}
@@ -451,7 +451,7 @@ func (e *Engine) enter(ctx context.Context, now time.Time, r alert.Rule, site in
 
 // leave closes a row whose key left the set: a pending condition never was one, an open one is cleared (sent when
 // its opening was), anything else just leaves.
-func (e *Engine) leave(ctx context.Context, now time.Time, a *store.Alert) error {
+func (e *Engine) leave(ctx context.Context, now time.Time, r alert.Rule, a *store.Alert) error {
 	nowMS := now.UnixMilli()
 	switch a.State {
 	case store.AlertPending:
@@ -460,9 +460,7 @@ func (e *Engine) leave(ctx context.Context, now time.Time, a *store.Alert) error
 		a.State = store.AlertCleared
 		switch {
 		case a.Told == "open":
-			if r, ok := e.rule(a.Rule); ok {
-				e.due(a, r, "clear", now)
-			}
+			e.due(a, r, "clear", now)
 		case a.Due != "":
 			// Its opening was never heard: its clearing is not news either.
 			a.Due, a.DueAt, a.Channels = "", nil, nil
@@ -470,14 +468,6 @@ func (e *Engine) leave(ctx context.Context, now time.Time, a *store.Alert) error
 	}
 	a.LeftAt = &nowMS
 	return e.o.Store.UpdateAlert(ctx, a)
-}
-
-func (e *Engine) rule(name string) (alert.Rule, bool) {
-	i := slices.IndexFunc(e.o.Config.Rules, func(r alert.Rule) bool { return r.Name == name })
-	if i < 0 {
-		return alert.Rule{}, false
-	}
-	return e.o.Config.Rules[i], true
 }
 
 // fill takes an occurrence's figures and text into a row.

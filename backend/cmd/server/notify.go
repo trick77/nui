@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"slices"
 	"strings"
 
 	"github.com/trick77/trakk/backend/internal/alert"
@@ -27,10 +26,7 @@ func notifyCmd(ctx context.Context, cfg app.Config, test bool, out io.Writer) in
 	}
 	var k alert.Known
 	for _, c := range cs {
-		k.Domains = append(k.Domains, c.Domain)
-		if !slices.Contains(k.Products, c.Product) {
-			k.Products = append(k.Products, c.Product)
-		}
+		k.Add(c.Domain, c.Product)
 	}
 	c, senders := dispatch.Wire(alert.Load(cfg.NotifyFile, k))
 	_, _ = fmt.Fprintf(out, "notify file %s\n", cfg.NotifyFile)
@@ -104,10 +100,7 @@ func ruleState(c alert.Config, r alert.Rule) string {
 func loadNotify(cfg app.Config, reg *sites.Registry) (alert.Config, map[string]dispatch.Sender) {
 	var k alert.Known
 	for _, s := range reg.All() {
-		k.Domains = append(k.Domains, s.Domain)
-		if !slices.Contains(k.Products, s.Product) {
-			k.Products = append(k.Products, s.Product)
-		}
+		k.Add(s.Domain, s.Product)
 	}
 	c, senders := dispatch.Wire(alert.Load(cfg.NotifyFile, k))
 	switch {

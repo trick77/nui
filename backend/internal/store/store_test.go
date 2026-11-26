@@ -92,6 +92,26 @@ func seed(t *testing.T, st *Store) int64 {
 	return sites["a.example.com"].ID
 }
 
+// Prune runs retention's steps once at now: age, the raw purge, the cap, then hands the freed pages back. It
+// returns the events and aggregate rows deleted.
+func (s *Store) Prune(ctx context.Context, o RetentionOptions, now time.Time) (int64, error) {
+	total, err := s.PruneAge(ctx, now.AddDate(0, -o.Months, 0))
+	if err != nil {
+		return total, err
+	}
+	n, _, err := s.PurgeRaw(ctx, o, now)
+	total += n
+	if err != nil {
+		return total, err
+	}
+	n, err = s.EnforceCap(ctx, o, now)
+	total += n
+	if err != nil {
+		return total, err
+	}
+	return total, s.Vacuum(ctx)
+}
+
 // coverOpts is o with a Cover that builds a site-day as the job's handshake does, without rows (store has no
 // builder): frozen and clean by o.Builder unless it is built already (the job's own rule) or its raw is cut.
 func coverOpts(st *Store, o RetentionOptions) RetentionOptions {
