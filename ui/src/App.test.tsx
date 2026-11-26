@@ -1157,7 +1157,6 @@ describe("dashboard on a domain with a server feed", () => {
       return new Response(
         JSON.stringify({
           ...d,
-          sources: { ...d.sources, first: null },
           storage: {
             ...d.storage,
             events: 0,
