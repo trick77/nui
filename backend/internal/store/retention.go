@@ -38,26 +38,6 @@ func (s *Store) UsedBytes(ctx context.Context) (int64, error) {
 	return (pages - free) * size, nil
 }
 
-// Prune runs one round of RunRetention at now: age, the raw purge, the cap, then hands the freed pages back. It
-// returns the events and aggregate rows deleted. Every delete is its own short statement.
-func (s *Store) Prune(ctx context.Context, o RetentionOptions, now time.Time) (int64, error) {
-	total, err := s.PruneAge(ctx, now.AddDate(0, -o.Months, 0))
-	if err != nil {
-		return total, err
-	}
-	n, _, err := s.PurgeRaw(ctx, o, now)
-	total += n
-	if err != nil {
-		return total, err
-	}
-	n, err = s.EnforceCap(ctx, o, now)
-	total += n
-	if err != nil {
-		return total, err
-	}
-	return total, s.Vacuum(ctx)
-}
-
 // delAggAddrBefore deletes a chunk of a site's per-address rows older than a day (?1 site, ?2 day, ?3 chunk).
 const delAggAddrBefore = `DELETE FROM agg_addr WHERE site_id = ?1 AND (day, ip_key, part) IN
 	(SELECT day, ip_key, part FROM agg_addr WHERE site_id = ?1 AND day < ?2 LIMIT ?3)`

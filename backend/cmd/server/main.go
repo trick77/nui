@@ -283,32 +283,23 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 			ref.Run(c)
 		}
 	})
-	start(func(c context.Context) {
-		select {
-		case <-refCached:
-			cls.Run(c)
-		case <-c.Done():
-		}
-	})
+	afterRef := func(job func(context.Context)) {
+		start(func(c context.Context) {
+			select {
+			case <-refCached:
+				job(c)
+			case <-c.Done():
+			}
+		})
+	}
+	afterRef(cls.Run)
 	// The aggregate job backfills every day with raw after an upgrade, then builds each day as it falls due. It waits
 	// for the reference data as the classifier does: the start's own reads first.
 	aggOpts := agg.Options{Months: cfg.RetentionMonths, Report: board}
-	start(func(c context.Context) {
-		select {
-		case <-refCached:
-			agg.Run(c, st, aggOpts)
-		case <-c.Done():
-		}
-	})
+	afterRef(func(c context.Context) { agg.Run(c, st, aggOpts) })
 	// The watch job walks raw into its state per site (every day with raw after an upgrade, then each as it closes)
 	// and judges the open days on every wake. It waits as the aggregate job does.
-	start(func(c context.Context) {
-		select {
-		case <-refCached:
-			watch.Run(c, st, watch.Options{})
-		case <-c.Done():
-		}
-	})
+	afterRef(func(c context.Context) { watch.Run(c, st, watch.Options{}) })
 	start(model.Run)
 	start(verifier.Run)
 	// The alerts' sends end with the background context: the shutdown aborts them, their rows stay due.

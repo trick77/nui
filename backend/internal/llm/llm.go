@@ -224,20 +224,6 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 
-// Drain works every queued job now (tests).
-func (s *Service) Drain(ctx context.Context) {
-	for {
-		select {
-		case j := <-s.urgent:
-			s.done(j.key, s.work(ctx, j))
-		case j := <-s.normal:
-			s.done(j.key, s.work(ctx, j))
-		default:
-			return
-		}
-	}
-}
-
 func (s *Service) work(ctx context.Context, j job) error {
 	switch {
 	case j.briefing != nil:

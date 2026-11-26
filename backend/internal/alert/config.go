@@ -130,6 +130,14 @@ type Known struct {
 	Domains, Products []string
 }
 
+// Add takes a site's domain and its product, a product once.
+func (k *Known) Add(domain, product string) {
+	k.Domains = append(k.Domains, domain)
+	if !slices.Contains(k.Products, product) {
+		k.Products = append(k.Products, product)
+	}
+}
+
 // Load reads the notify file at path. A missing file is no fault: nothing is sent, the defaults record.
 func Load(path string, k Known) Config {
 	b, err := os.ReadFile(path) //nolint:gosec // the operator's configured file
