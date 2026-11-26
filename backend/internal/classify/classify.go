@@ -838,7 +838,8 @@ func (c *Classifier) clientVerdict(ip string, addr netip.Addr, g uaDay, f siteFa
 		looksLikeBrowser(g.ua):
 		// Every browser sends Accept-Language, and every current one Sec-Fetch-Mode; this feed carries both.
 		return clientVerdict{class: "unknown", reason: "missing browser headers"}
-	case g.server >= machineRequests && apiOnly(g) && avgGap(g) < machineGap:
+	case g.server >= machineRequests && apiOnly(g) && g.last > g.first && avgGap(g) < machineGap:
+		// No span is no pace: a feed batch without usable times is dated to its arrival, every event the same.
 		return clientVerdict{class: "unknown", reason: reasonMachinePace}
 	case !looksLikeBrowser(g.ua) && g.browser == 0 && g.engaged == 0 && !g.beaconElsewhere &&
 		(g.docs == 0 || !signedIn(g)):
