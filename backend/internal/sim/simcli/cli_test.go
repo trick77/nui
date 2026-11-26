@@ -300,10 +300,11 @@ func TestServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The alert engine stepped through the history: every rule of the world's notify file passed but the requests'
-	// drop, whose baseline waits for days to compare with that one day of history lacks.
+	// drop, whose baseline waits for days to compare with that one day of history lacks: known (checked at 0), not
+	// passed yet.
 	var passed, drop int
 	if err := st.DB.QueryRow(`SELECT COUNT(DISTINCT rule), COUNT(DISTINCT CASE WHEN rule = 'requests-drop' THEN rule END)
-		FROM alert_rule`).Scan(&passed, &drop); err != nil || passed != 23 || drop != 0 {
+		FROM alert_rule WHERE checked_at > 0`).Scan(&passed, &drop); err != nil || passed != 23 || drop != 0 {
 		t.Errorf("rules passed: %d (the drop %d), %v", passed, drop, err)
 	}
 	reg, _ := sites.New(rows)
