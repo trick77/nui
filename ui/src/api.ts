@@ -189,7 +189,8 @@ export type Dim =
   | "endpoints"
   | "accounts"
   | "failures"
-  | "agents";
+  | "agents"
+  | "services";
 
 export type ListRow = {
   key: string;
@@ -212,6 +213,15 @@ export type ListRow = {
   failed?: number;
   p50?: number;
   p95?: number;
+  // Services, from today's bot list: the purpose as the list spells it
+  // ("ai-training"), the service behind an agent named otherwise, whether
+  // the purpose is only what the client declares (the service's addresses
+  // serve several), and the https host its clients name in Signature-Agent,
+  // unverified.
+  category?: string;
+  service?: string;
+  declared?: boolean;
+  says?: string;
 };
 
 export type List = {
@@ -223,6 +233,13 @@ export type List = {
   // A template's paths (within) only: they are raw events, which reach
   // back to here (null: raw covers the range).
   detail_since?: string | null;
+  // Services: the purpose groups of all rows in the range ("ai",
+  // "search"), what cat picks; absent without one.
+  groups?: string[];
+  // Where the figures begin, when that is within the range; the same of
+  // the comparison, whose rows then carry no change. null otherwise.
+  since?: string | null;
+  prev_since?: string | null;
 };
 
 export type StatusRow = { class: string; value: number; share: number };
@@ -315,6 +332,9 @@ export type Visitor = {
   trail_next: string;
   from: number;
   detail_since: string | null;
+  // The hosts its events name in Signature-Agent, at most three, the most
+  // frequent first: a claim nothing checks, never a signal.
+  says?: string[];
 };
 
 export type LogRow = {
@@ -637,6 +657,8 @@ export const api = {
       // filter.
       q?: string;
       sub?: string;
+      // The services' purpose group, one of an answer's groups.
+      cat?: string;
     },
     signal?: AbortSignal,
   ) =>
@@ -650,6 +672,7 @@ export const api = {
         within: p.within,
         q: p.q,
         sub: p.sub,
+        cat: p.cat,
       },
       signal,
     ),
@@ -730,10 +753,12 @@ export type LogFilter = {
   // "1": the calls among the events (an account's row counts those).
   calls?: string;
   // Exact, set by a click: an event's name (a script error's message), an
-  // endpoint, an account, an operation, a reason to fail.
+  // endpoint, an account, an operation, a reason to fail, a bot list name
+  // (its server requests).
   name?: string;
   endpoint?: string;
   account?: string;
   op?: string;
   failure?: string;
+  service?: string;
 };

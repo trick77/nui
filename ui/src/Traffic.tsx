@@ -1,14 +1,21 @@
 import { useState } from "react";
-import { api, type Classes, type ListRow, type Status } from "./api";
+import {
+  api,
+  type ClassKey,
+  type Classes,
+  type ListRow,
+  type Status,
+} from "./api";
 import { StackChart, Strip, type StripPart } from "./charts";
 import { ErrorDetail } from "./ErrorDetail";
 import { SEP, joinSep, num, pct } from "./format";
 import { type Loaded, useApi } from "./hooks";
-import { TopList, scopeKey } from "./lists";
+import { TopList, changeCol, scopeKey } from "./lists";
 import {
   AllClasses,
   CLASSES,
   CardHead,
+  classColor,
   Delta,
   Empty,
   ErrorBox,
@@ -180,8 +187,8 @@ const mono = (s: string) => (
 );
 
 // The server's view: requests per class, errors, probed paths, refused
-// requests by address. Shown only on a domain with a feed, always over
-// every class.
+// requests by address, known bots by service. Shown only on a domain with a
+// feed, always over every class.
 export function Traffic(props: { classes: Loaded<Classes> }) {
   return (
     <AllClasses>
@@ -298,6 +305,72 @@ function TrafficPanels({ classes }: { classes: Loaded<Classes> }) {
           empty="Nothing refused in this range."
         />
       </div>
+      <div className="mt-3">
+        <Services />
+      </div>
     </>
+  );
+}
+
+// A purpose group's tab: the bot list's word, "ai" in capitals.
+const groupLabel = (g: string) =>
+  g === "ai" ? "AI" : g.charAt(0).toUpperCase() + g.slice(1);
+
+const CLASS_OF_SUB: Record<string, ClassKey> = {
+  bot: "bot",
+  monitor: "monitor",
+};
+
+// The known bots and uptime probes by the bot list's name. What a row says
+// beyond the name is the list's today, and what its clients claim.
+function Services() {
+  const { scope, openLog } = useDash();
+  return (
+    <TopList
+      id="services-panel"
+      title="Known bots by service"
+      tabs={[{ key: "all", label: "All", dim: "services" }]}
+      groups={groupLabel}
+      cols={[
+        {
+          head: "Service",
+          cell: (r) => (
+            <>
+              <i
+                className="sw"
+                style={{ background: classColor(CLASS_OF_SUB[r.sub] ?? "bot") }}
+              />
+              {r.label}
+              {(r.service || r.category || r.says) && (
+                <span className="ml-1.5 text-[12px] text-muted">
+                  {joinSep([r.service, r.category])}
+                  {r.declared && (
+                    <span
+                      className="pill ml-1.5 !text-muted"
+                      title="The service's addresses serve several purposes; this one is what the client's user agent declares."
+                    >
+                      declared
+                    </span>
+                  )}
+                  {r.says && (
+                    <>
+                      {(r.service || r.category) && SEP}
+                      <span title="From the Signature-Agent header. Not verified.">
+                        says it is <span className="font-mono">{r.says}</span>
+                      </span>
+                    </>
+                  )}
+                </span>
+              )}
+            </>
+          ),
+        },
+        { head: "Requests", num: true, cell: (r) => num(r.value) },
+        { head: "Addresses", num: true, cell: (r) => num(r.second) },
+        ...(scope.cmp !== "off" ? [changeCol] : []),
+      ]}
+      onRow={(r) => openLog({ service: r.key })}
+      empty="No known bot or uptime probe in this range."
+    />
   );
 }

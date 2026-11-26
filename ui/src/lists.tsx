@@ -37,16 +37,37 @@ export const changeCol: Col = {
   cell: (r) => <Delta change={r.change} verdict={r.verdict} />,
 };
 
-export type ListTab = { key: string; label: string; dim: Dim; sub?: string };
+export type ListTab = {
+  key: string;
+  label: string;
+  dim: Dim;
+  sub?: string;
+  cat?: string;
+};
 
 export function scopeKey(name: string, extra: unknown = null): string {
   return `${name}|${JSON.stringify(extra)}`;
 }
 
+// Where an answer's figures begin, when within the range, and its
+// comparison's: "" when both cover theirs.
+function sinceNote(l: List): string {
+  return joinSep([
+    l.since && `figures since ${rawSince(l.since)}`,
+    l.prev_since && `comparison figures since ${rawSince(l.prev_since)}`,
+  ]);
+}
+
 export function useList(
   dim: Dim,
   sort: Sort,
-  opts: { sub?: string; within?: string; limit?: number; q?: string } = {},
+  opts: {
+    sub?: string;
+    cat?: string;
+    within?: string;
+    limit?: number;
+    q?: string;
+  } = {},
 ) {
   const { scope } = useDash();
   return useApi<List>(
@@ -66,6 +87,7 @@ export function TopList({
   label,
   onRow,
   expand,
+  groups,
   above,
   busy = false,
   empty,
@@ -76,6 +98,9 @@ export function TopList({
   title: string;
   sources?: ("browser" | "server")[];
   tabs: ListTab[];
+  // A tab after them per group the answer names (groups), labelled so: the
+  // first tab's list of that group (cat).
+  groups?: (group: string) => string;
   head?: ReactNode;
   // A table when cols are given, ranked bars otherwise.
   cols?: Col[];
@@ -90,9 +115,25 @@ export function TopList({
   const [tab, setTab] = useState(tabs[0].key);
   const [sort, setSort] = useState<Sort>("volume");
   const [all, setAll] = useState(false);
-  const t = tabs.find((x) => x.key === tab) ?? tabs[0];
-  const l = useList(t.dim, sort, { sub: t.sub });
+  // A group's key holds a colon, which no tab's or group's does.
+  const groupTab = (g: string): ListTab => ({
+    key: `cat:${g}`,
+    label: groups ? groups(g) : g,
+    dim: tabs[0].dim,
+    cat: g,
+  });
+  const t =
+    tabs.find((x) => x.key === tab) ??
+    (groups && tab.startsWith("cat:") ? groupTab(tab.slice(4)) : tabs[0]);
+  const l = useList(t.dim, sort, { sub: t.sub, cat: t.cat });
+  // A group this range or domain does not have: back to the first tab.
+  if (t.cat && l.data && !l.loading && !l.data.groups?.includes(t.cat))
+    setTab(tabs[0].key);
+  const shown = groups
+    ? [...tabs, ...(l.data?.groups ?? []).map(groupTab)]
+    : tabs;
   const compare = scope.cmp !== "off";
+  const note = l.data ? sinceNote(l.data) : "";
   return (
     <Panel id={id} label={title} className="card" busy={busy || l.loading}>
       <CardHead
@@ -101,10 +142,10 @@ export function TopList({
         right={
           <>
             {head}
-            {tabs.length > 1 && (
+            {shown.length > 1 && (
               <Tabs
                 label={`${title} view`}
-                options={tabs.map((x) => ({ key: x.key, label: x.label }))}
+                options={shown.map((x) => ({ key: x.key, label: x.label }))}
                 value={t.key}
                 onChange={setTab}
               />
@@ -112,7 +153,7 @@ export function TopList({
             {compare && (
               <span
                 className={
-                  tabs.length > 1 ? "border-l border-border pl-3.5" : ""
+                  shown.length > 1 ? "border-l border-border pl-3.5" : ""
                 }
               >
                 <Tabs
@@ -178,6 +219,9 @@ export function TopList({
             </button>
           )}
         </>
+      )}
+      {note && (
+        <p className="mx-0.5 mt-2.5 mb-0 text-[12px] text-muted">{note}</p>
       )}
       {all && (
         <AllRows
@@ -461,6 +505,7 @@ function AllRows({
   const dq = useDebounced(q.trim(), 250);
   const l = useList(tab.dim, sort, {
     sub: tab.sub,
+    cat: tab.cat,
     limit: ALL_LIMIT,
     q: dq || undefined,
   });
@@ -541,6 +586,7 @@ function AllRows({
               {num(l.data.rows.length)} of {num(l.data.total)}
               {l.data.total > l.data.rows.length &&
                 `${SEP}the first ${num(ALL_LIMIT)} are shown, search to narrow`}
+              {sinceNote(l.data) && `${SEP}${sinceNote(l.data)}`}
             </p>
           </div>
         )}

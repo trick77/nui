@@ -23,6 +23,7 @@ export const LOG_KEYS = [
   "account",
   "op",
   "failure",
+  "service",
 ] as const;
 
 export type Page = "dash" | "log" | "alerts";
@@ -136,8 +137,8 @@ export function resolveView(v: View, sites: readonly string[]): Shown | null {
 
 export const PRODUCT = "Trakk";
 
-// The tab names the domain shown as it is called and, on the log, the address or network it
-// follows or the log itself, on the alerts page that (without the domain when
+// The tab names the domain shown as it is called and, on the log, the address, network or
+// service it follows or the log itself, on the alerts page that (without the domain when
 // they are every site's): several tabs open side by side stay apart. Range,
 // audience and the other filters stay out, a tab has no room for them.
 export function tabTitle(site: string | null, v: View): string {
@@ -149,7 +150,7 @@ export function tabTitle(site: string | null, v: View): string {
   const parts = [PRODUCT, site];
   if (v.page === "log") {
     const asn = v.log.asn && `AS${v.log.asn.replace(/^as/i, "")}`;
-    parts.push(v.log.addr || asn || "Log");
+    parts.push(v.log.addr || asn || v.log.service || "Log");
   }
   return parts.join(SEP);
 }

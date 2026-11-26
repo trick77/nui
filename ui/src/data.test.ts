@@ -503,6 +503,8 @@ describe("state", () => {
     };
     const log = { ...dash, page: "log" as const, log: { addr: "192.0.2.1" } };
     expect(back(log)).toEqual(log);
+    const svc = { ...log, log: { service: "OAI-SearchBot", kind: "request" } };
+    expect(back(svc)).toEqual(svc);
     const alerts = { ...dash, page: "alerts" as const };
     expect(back(alerts)).toEqual(alerts);
     expect(back({ ...alerts, all: true })).toEqual({ ...alerts, all: true });
@@ -525,6 +527,9 @@ describe("state", () => {
       expect(tabTitle("a.example.com", { ...log, log: { asn } })).toBe(
         `Trakk${SEP}a.example.com${SEP}AS64500`,
       );
+    expect(
+      tabTitle("a.example.com", { ...log, log: { service: "GPTBot" } }),
+    ).toBe(`Trakk${SEP}a.example.com${SEP}GPTBot`);
     const alerts = { ...v, page: "alerts" as const };
     expect(tabTitle("a.example.com", alerts)).toBe(
       `Trakk${SEP}a.example.com${SEP}Alerts`,
@@ -663,6 +668,22 @@ describe("api client", () => {
     const l = await api.list(scope, { dim: "pages", limit: 3, sort: "change" });
     expect(l.rows).toHaveLength(3);
     expect(l.other?.count).toBe(5);
+    // The services' groups are every row's, whatever cat keeps; a group is
+    // a word, the backend refuses anything else.
+    const ai = await api.list(scope, { dim: "services", cat: "ai" });
+    expect(ai.groups).toEqual(["ai", "monitoring", "search"]);
+    expect(ai.rows.map((r) => r.key)).toEqual([
+      "GPTBot",
+      "OAI-SearchBot",
+      "ChatGPT-User",
+      "Perplexity",
+    ]);
+    await expect(
+      api.list(scope, { dim: "services", cat: "AI Search" }),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(api.list(noFeed, { dim: "services" })).rejects.toMatchObject({
+      status: 404,
+    });
     expect(await api.status(scope)).toMatchObject({ rows: expect.any(Array) });
     expect((await api.clients(scope)).browsers.length).toBeLessThanOrEqual(5);
     expect((await api.noteworthy(scope)).items.length).toBeLessThanOrEqual(5);

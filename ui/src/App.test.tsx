@@ -18,7 +18,7 @@ import {
   TRAIL_NEXT,
   fixtureFetch,
 } from "./fixtures";
-import { SEP, joinSep, pct } from "./format";
+import { SEP, joinSep, pct, rawSince } from "./format";
 import { VitalHint } from "./ui";
 
 let calls: string[] = [];
@@ -540,7 +540,7 @@ describe("dashboard on a domain with a server feed", () => {
     const traffic = calls.filter(
       (c) =>
         c.startsWith("/api/dash/status") ||
-        /dim=(probed|refused|errors)/.test(c),
+        /dim=(probed|refused|errors|services)/.test(c),
     );
     expect(traffic.length).toBeGreaterThan(0);
     expect(traffic.every((c) => c.includes("aud=all"))).toBe(true);
@@ -1711,6 +1711,256 @@ describe("script errors", () => {
   });
 });
 
+describe("known bots by service", () => {
+  const services = () => panel("Known bots by service");
+  const rowOf = async (name: string) => {
+    const p = await screen.findByRole("region", {
+      name: "Known bots by service",
+    });
+    return (await within(p).findByText(name)).closest("tr")!;
+  };
+  const servicesCall = () =>
+    new URL(calls.filter((c) => c.includes("dim=services")).at(-1)!, "http://x")
+      .searchParams;
+
+  it("names each one's service, purpose, declaration and claim", async () => {
+    start("/dashboard/?site=lens.example.com&aud=bots");
+    const gpt = await rowOf("GPTBot");
+    expect(
+      within(services())
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Service", "Requests", "Addresses", "Change"]);
+    // The name, then in a muted line what the bot list says of it.
+    expect(gpt.cells[0].textContent).toBe(
+      `GPTBotOpenAI${SEP}ai-trainingdeclared`,
+    );
+    expect(within(gpt).getByText("declared")).toHaveAttribute(
+      "title",
+      "The service's addresses serve several purposes; this one is what the client's user agent declares.",
+    );
+    expect(gpt).toHaveTextContent("1'240");
+    expect(gpt).toHaveTextContent("18");
+    const user = await rowOf("ChatGPT-User");
+    expect(within(user).getByText(/says it is/)).toHaveAttribute(
+      "title",
+      "From the Signature-Agent header. Not verified.",
+    );
+    expect(user.cells[0].textContent).toBe(
+      `ChatGPT-UserOpenAI${SEP}ai-assistantdeclared${SEP}says it is chatgpt.com`,
+    );
+    // Nothing declared, said, behind it or listed is nothing shown.
+    expect((await rowOf("Googlebot")).cells[0].textContent).toBe(
+      `GooglebotGoogle${SEP}search`,
+    );
+    expect((await rowOf("UptimeRobot")).cells[0].textContent).toBe(
+      "UptimeRobotmonitoring",
+    );
+    const none = await rowOf("Perplexity");
+    expect(none.cells[0].textContent).toBe("Perplexity");
+    expect(none.querySelector(".text-muted")).toBeNull();
+    // Each row in its class's colour, as the classes chart has them.
+    const sw = (r: HTMLElement) =>
+      r.querySelector<HTMLElement>("i.sw")!.style.background;
+    expect(sw(gpt)).toBe("var(--color-s2)");
+    expect(sw(await rowOf("UptimeRobot"))).toBe("var(--color-s3)");
+    expect(
+      within(services()).getByText(`Other${SEP}1`, asIs),
+    ).toBeInTheDocument();
+    // Traffic: every class, whatever the switch says.
+    expect(servicesCall().get("aud")).toBe("all");
+    expect(servicesCall().get("cat")).toBeNull();
+    // Its figures cover the range: no note.
+    expect(services().textContent).not.toMatch(/figures since/);
+  });
+
+  it("keeps a purpose group per tab, its full list and search too", async () => {
+    start();
+    await rowOf("GPTBot");
+    const tabs = within(services()).getByRole("group", {
+      name: "Known bots by service view",
+    });
+    expect(
+      within(tabs)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["All", "AI", "Monitoring", "Search"]);
+    fireEvent.click(within(tabs).getByRole("button", { name: "AI" }));
+    await waitFor(() => expect(servicesCall().get("cat")).toBe("ai"));
+    await waitFor(() =>
+      expect(within(services()).queryByText("Googlebot")).toBeNull(),
+    );
+    expect(within(services()).getByText("Perplexity")).toBeInTheDocument();
+    expect(within(tabs).getByRole("button", { name: "AI" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(
+      within(services()).getByRole("button", { name: "By change" }),
+    );
+    await waitFor(() => expect(servicesCall().get("sort")).toBe("change"));
+    expect(servicesCall().get("cat")).toBe("ai");
+    // The full list's search matches the service and the purpose too.
+    fireEvent.click(within(tabs).getByRole("button", { name: "All" }));
+    await within(services()).findByText("Googlebot");
+    fireEvent.click(
+      within(services()).getByRole("button", { name: /Show all 7/ }),
+    );
+    const dlg = screen.getByRole("dialog", {
+      name: `Known bots by service${SEP}All`,
+    });
+    await within(dlg).findByText("MJ12bot");
+    fireEvent.change(within(dlg).getByRole("textbox"), {
+      target: { value: "openai" },
+    });
+    await waitFor(() => expect(servicesCall().get("q")).toBe("openai"), {
+      timeout: 2000,
+    });
+    expect(servicesCall().get("limit")).toBe("500");
+    await waitFor(() => expect(within(dlg).queryByText("MJ12bot")).toBeNull());
+    expect(within(dlg).getAllByRole("row")).toHaveLength(4);
+    fireEvent.change(within(dlg).getByRole("textbox"), {
+      target: { value: "monitoring" },
+    });
+    expect(
+      await within(dlg).findByText("UptimeRobot", {}, { timeout: 2000 }),
+    ).toBeInTheDocument();
+    fireEvent.click(within(dlg).getByRole("button", { name: "Close" }));
+  });
+
+  it("goes back to All where the range has no such group", async () => {
+    start();
+    await rowOf("GPTBot");
+    fireEvent.click(
+      within(services()).getByRole("button", { name: "Monitoring" }),
+    );
+    await waitFor(() => expect(servicesCall().get("cat")).toBe("monitoring"));
+    await waitFor(() =>
+      expect(within(services()).queryByText("GPTBot")).toBeNull(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "24h" }));
+    await waitFor(() =>
+      expect(
+        within(services()).getByRole("button", { name: "All" }),
+      ).toHaveAttribute("aria-pressed", "true"),
+    );
+    expect(servicesCall().get("range")).toBe("24h");
+    expect(servicesCall().get("cat")).toBeNull();
+    await within(services()).findByText("GPTBot");
+    expect(
+      within(services()).queryByRole("button", { name: "Monitoring" }),
+    ).toBeNull();
+  });
+
+  it("shows all of a group, not of every one", async () => {
+    window.history.replaceState(null, "", "/dashboard/");
+    calls = [];
+    const fx = fixtureFetch();
+    // A group longer than the panel shows.
+    setFetcher(async (u, i) => {
+      calls.push(u);
+      const r = await fx(u, i);
+      if (!u.includes("dim=services") || !u.includes("cat=")) return r;
+      const body = await r.json();
+      body.total += 3;
+      return new Response(JSON.stringify(body), { status: r.status });
+    });
+    render(<App />);
+    await rowOf("GPTBot");
+    fireEvent.click(within(services()).getByRole("button", { name: "AI" }));
+    fireEvent.click(
+      await within(services()).findByRole("button", { name: /Show all 7/ }),
+    );
+    const dlg = screen.getByRole("dialog", {
+      name: `Known bots by service${SEP}AI`,
+    });
+    await within(dlg).findByText("Perplexity");
+    expect(servicesCall().get("cat")).toBe("ai");
+    expect(servicesCall().get("limit")).toBe("500");
+    expect(within(dlg).queryByText("Googlebot")).toBeNull();
+  });
+
+  it("says where its figures and its comparison's begin", async () => {
+    start("/dashboard/?site=lens.example.com&range=30d");
+    await rowOf("GPTBot");
+    const note = `figures since ${rawSince("2026-11-02T23:00:00Z")}${SEP}comparison figures since ${rawSince("2026-10-23T22:00:00Z")}`;
+    expect(within(services()).getByText(note, asIs)).toBeInTheDocument();
+    // The comparison holds no figures: no row has a change.
+    expect(services().querySelector(".delta")).toBeNull();
+    fireEvent.click(
+      within(services()).getByRole("button", { name: /Show all 7/ }),
+    );
+    const dlg = screen.getByRole("dialog");
+    await within(dlg).findByText("MJ12bot");
+    expect(dlg.textContent).toContain(`7 of 7${SEP}${note}`);
+  });
+
+  it("opens the log on a service's server requests", async () => {
+    start();
+    fireEvent.click(await rowOf("UptimeRobot"));
+    const log = await screen.findByRole("region", { name: "Log" });
+    expect(new URLSearchParams(window.location.search).get("service")).toBe(
+      "UptimeRobot",
+    );
+    await waitFor(() =>
+      expect(lastCall("/api/dash/log").get("service")).toBe("UptimeRobot"),
+    );
+    expect(within(log).getByText("Service UptimeRobot")).toBeInTheDocument();
+    expect(document.title).toBe(
+      ["Trakk", "lens.example.com", "UptimeRobot"].join(SEP),
+    );
+    await waitFor(() =>
+      expect(
+        within(log)
+          .getAllByRole("button", { name: /^\d/ })
+          .every((b) => b.textContent === "192.0.2.120"),
+      ).toBe(true),
+    );
+    fireEvent.click(
+      within(log).getByRole("button", { name: "Clear the service filter" }),
+    );
+    await waitFor(() =>
+      expect(lastCall("/api/dash/log").get("service")).toBeNull(),
+    );
+    expect(window.location.search).not.toContain("service=");
+  });
+
+  it("is an API's too, never a site's without a delivered feed", async () => {
+    const first = start("/dashboard/?site=api.example.com");
+    expect(await rowOf("GPTBot")).toBeInTheDocument();
+    first.unmount();
+    for (const site of ["console.example.com", "blog.example.org"]) {
+      const r = start(`/dashboard/?site=${site}`);
+      await screen.findByRole("heading", { name: "Visitors" });
+      await waitFor(() =>
+        expect(calls.some((c) => c.startsWith("/api/dash/list"))).toBe(true),
+      );
+      expect(
+        screen.queryByRole("region", { name: "Known bots by service" }),
+      ).toBeNull();
+      expect(calls.some((c) => c.includes("dim=services"))).toBe(false);
+      r.unmount();
+    }
+  });
+
+  it("shows who a visitor says it is, apart from its signals", async () => {
+    start();
+    const d = await screen.findByRole("region", { name: "Visitor" });
+    await within(d).findByText("Scraping attempt");
+    const says = within(d).getByText("Says it is");
+    expect(says.nextElementSibling).toHaveTextContent(
+      "chatgpt.com, agent.example.comSignature-Agent, not verified",
+    );
+    expect(within(d).getByText("Signals")).toBeInTheDocument();
+    // None claimed: no row.
+    fireEvent.click(
+      within(panel("Visitors by address")).getByText("203.0.113.42"),
+    );
+    await within(d).findByText("Person");
+    expect(within(d).queryByText("Says it is")).toBeNull();
+  });
+});
+
 describe("dashboard on a domain without a server feed", () => {
   it("drops everything only the feed can know", async () => {
     start("/dashboard/?site=console.example.com");
@@ -1747,7 +1997,7 @@ describe("dashboard on a domain without a server feed", () => {
       (c) =>
         c.startsWith("/api/dash/classes") ||
         c.startsWith("/api/dash/status") ||
-        /[?&]dim=(probed|refused)\b/.test(c),
+        /[?&]dim=(probed|refused|services)\b/.test(c),
     );
     expect(serverOnly).toEqual([]);
     expect(calls.some((c) => c.startsWith("/api/dash/list"))).toBe(true);

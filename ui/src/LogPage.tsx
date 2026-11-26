@@ -113,7 +113,14 @@ function Pick({
 }
 
 // The exact filters a click elsewhere sets.
-const EXACT = ["name", "endpoint", "account", "op", "failure"] as const;
+const EXACT = [
+  "name",
+  "endpoint",
+  "account",
+  "op",
+  "failure",
+  "service",
+] as const;
 
 // A filter set by a link, not typed: shown so it can be seen and dropped on
 // its own.

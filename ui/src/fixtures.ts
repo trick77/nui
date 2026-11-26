@@ -827,6 +827,42 @@ const LISTS: Record<string, ListRow[]> = {
     row("a91k2m4p", 1620, 6, { pct: 8 }, "good", { failed: 1.2 }),
     row("b03x7q1z", 730, 3, { pct: 40 }, "good", { failed: 14.5 }),
   ],
+  // The bot list's names: an agent with the service behind it, a purpose
+  // only declared where the service's addresses serve several, what its
+  // clients say in Signature-Agent.
+  services: [
+    row("Googlebot", 1904, 6, { pct: 4 }, "good", {
+      sub: "bot",
+      service: "Google",
+      category: "search",
+    }),
+    row("GPTBot", 1240, 18, { pct: 35 }, "good", {
+      sub: "bot",
+      service: "OpenAI",
+      category: "ai-training",
+      declared: true,
+    }),
+    row("UptimeRobot", 720, 12, { pct: 0 }, "flat", {
+      sub: "monitor",
+      category: "monitoring",
+    }),
+    row("OAI-SearchBot", 410, 7, { new: true }, "good", {
+      sub: "bot",
+      service: "OpenAI",
+      category: "ai-search",
+      declared: true,
+    }),
+    row("ChatGPT-User", 96, 31, { pct: -12 }, "bad", {
+      sub: "bot",
+      service: "OpenAI",
+      category: "ai-assistant",
+      declared: true,
+      says: "chatgpt.com",
+    }),
+    // A service whose agents differ in purpose but share its group.
+    row("Perplexity", 61, 5, { pct: 8 }, "good", { sub: "bot" }),
+    row("MJ12bot", 44, 3, { pct: -30 }, "bad", { sub: "bot" }),
+  ],
   agents: [
     row("lens-cli/2.0.1", 1480, 8, { pct: 6 }, "good", { failed: 3.1 }),
     row("python-httpx/0.28.1", 870, 5, { new: true }, "good", { failed: 9.4 }),
@@ -903,12 +939,34 @@ const SERVER_DIMS: Dim[] = [
   "accounts",
   "failures",
   "agents",
+  "services",
 ];
+
+// Each service's purpose group, as the backend keeps it beside the row:
+// its purpose's part before the first "-", for a service without one the
+// group all its purposes share.
+const SERVICE_GROUP: Record<string, string> = {
+  Googlebot: "search",
+  GPTBot: "ai",
+  UptimeRobot: "monitoring",
+  "OAI-SearchBot": "ai",
+  "ChatGPT-User": "ai",
+  Perplexity: "ai",
+};
+
+// Where the services' figures begin: the builder that keeps them came
+// later than 30 d and longer reach back, their comparisons hold none.
+const SERVICES_SINCE = "2026-11-02T23:00:00Z";
+const servicesSince = (range: string) =>
+  ["30d", "90d", "12mo"].includes(range)
+    ? { since: SERVICES_SINCE, prev_since: FROM[range] }
+    : { since: null, prev_since: null };
 
 function list(q: URLSearchParams, feed: boolean): List | null {
   const dim = q.get("dim") as Dim;
   const server = SERVER_DIMS.includes(dim);
   if (server && !feed) return null;
+  if (dim === "services") return services(q);
   const limit = Number(q.get("limit") || 6);
   const term = (q.get("q") || "").toLowerCase();
   const within = q.get("within");
@@ -960,6 +1018,53 @@ function list(q: URLSearchParams, feed: boolean): List | null {
     server,
     // A template's paths only, as the backend answers.
     ...(within ? { detail_since: detailSince(q.get("range")) } : {}),
+  };
+}
+
+// The services as the backend answers them: the groups over every row,
+// then the group (cat) and the search (name, service and purpose too), the
+// changes gone where the comparison holds no figures.
+function services(q: URLSearchParams): List {
+  const cat = q.get("cat") || "";
+  const range = q.get("range") || "7d";
+  const since = servicesSince(range);
+  const limit = Number(q.get("limit") || 6);
+  const term = (q.get("q") || "").toLowerCase();
+  // The probe was quiet the last 24 hours: no monitoring group there.
+  let rows = LISTS.services
+    .filter((r) => range !== "24h" || r.sub !== "monitor")
+    .map((r) =>
+      since.prev_since ? { ...r, change: null, verdict: "flat" as const } : r,
+    );
+  const groups = [
+    ...new Set(rows.map((r) => SERVICE_GROUP[r.key]).filter(Boolean)),
+  ].sort();
+  const total = sum(rows.map((r) => r.value));
+  if (cat) rows = rows.filter((r) => SERVICE_GROUP[r.key] === cat);
+  if (term)
+    rows = rows.filter((r) =>
+      [r.key, r.label, r.service, r.category].some((s) =>
+        s?.toLowerCase().includes(term),
+      ),
+    );
+  if (q.get("sort") === "change")
+    rows = [...rows].sort(
+      (a, b) =>
+        (b.change && "pct" in b.change ? b.change.pct : b.change ? 1e9 : -1) -
+        (a.change && "pct" in a.change ? a.change.pct : a.change ? 1e9 : -1),
+    );
+  rows = rows.map((r) => ({
+    ...r,
+    share: Math.round((r.value / (total || 1)) * 100),
+  }));
+  const rest = rows.slice(limit);
+  return {
+    rows: rows.slice(0, limit),
+    other: { count: rest.length, value: sum(rest.map((r) => r.value)) },
+    total: rows.length,
+    server: true,
+    groups,
+    ...since,
   };
 }
 
@@ -1311,6 +1416,8 @@ function visitor(key: string, feed: boolean, cursor: string): Visitor | null {
     trail_next: scrape || v.class === "api" || later ? "" : TRAIL_NEXT,
     from: Date.parse(FROM["7d"]),
     detail_since: DETAIL_SINCE,
+    // A claim nothing checks: the scraper names hosts it is not.
+    says: scrape ? ["chatgpt.com", "agent.example.com"] : [],
   };
 }
 
@@ -1408,6 +1515,13 @@ const CLIENT_NAME: Record<string, string> = {
   "2001:db8:4f2:1a00::7c": joinSep(["Firefox", "Windows"]),
 };
 
+// The bot list's name of an address's server requests, for the log's
+// service filter.
+const LOG_SERVICE: Record<string, string> = {
+  "192.0.2.120": "UptimeRobot",
+  "192.0.2.66": "Googlebot",
+};
+
 // Each address's AS number, for the log's asn filter.
 const LOG_ASN: Record<string, number> = {
   "192.0.2.120": 64512,
@@ -1490,6 +1604,12 @@ function log(q: URLSearchParams, feed: boolean, script: boolean): Log | null {
     );
   const op = q.get("op");
   if (op) rows = rows.filter((r) => r.what.includes(` ${op} → `));
+  // Its server requests, as the services list counts them.
+  const service = q.get("service");
+  if (service)
+    rows = rows.filter(
+      (r) => r.source === "server" && LOG_SERVICE[r.addr] === service,
+    );
   // Row i's id counts down from the newest.
   const id = (r: LogRow) => `${Date.parse(r.t)}.${48211 - rows.indexOf(r)}`;
   const cursor = q.get("cursor") || "";
@@ -2097,6 +2217,15 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
             })
           : json({ detail: `${site} has no server feed` }, 404);
       case "/api/dash/list": {
+        const cat = q.get("cat");
+        if (
+          cat &&
+          (q.get("dim") !== "services" || !/^[a-z][a-z0-9]{0,31}$/.test(cat))
+        )
+          return json(
+            { detail: "cat is a purpose group, for dim=services" },
+            400,
+          );
         const l = list(q, feed);
         if (l && opt.beyond && Number(q.get("limit")) >= 500)
           l.total += opt.beyond;

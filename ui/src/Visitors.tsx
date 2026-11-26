@@ -441,6 +441,19 @@ function VisitorDetail({
                   text={v.client}
                 />
               </dd>
+              {!!v.says?.length && (
+                <>
+                  <dt className="text-muted">Says it is</dt>
+                  <dd className="m-0">
+                    <span className="font-mono text-[12.5px] wrap-anywhere">
+                      {v.says.join(", ")}
+                    </span>
+                    <span className="block text-[12px] text-muted">
+                      Signature-Agent, not verified
+                    </span>
+                  </dd>
+                </>
+              )}
               <dt className="text-muted">Signals</dt>
               <dd className="m-0 grid gap-1">
                 {v.signals.length === 0
