@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
@@ -21,8 +23,9 @@ const (
 	// Version is the build code's version, stored per day. Raise it with any change to what a day's rows hold: the
 	// job then rebuilds every day whose raw still exists (older days keep what they were built with). 2: events'
 	// Other per sub, Other's address counts. 3: the API figures (endpoints, accounts, failures; the hours' failed,
-	// durations and accounts).
-	Version = 3
+	// durations and accounts). 4: what people experienced (vital.go; the hours' engaged and vitals, engaged and
+	// vital_*) and the known bots by service (services), named before the build (Options.Name).
+	Version = 4
 	// TopK is the entries a list part keeps per day: the dashboard's "Show all" (maxLimit).
 	TopK = 500
 	// otherKeysMax bounds an Other row's key hashes; past it the row says only how many keys it holds.
@@ -35,7 +38,8 @@ const (
 // Dims are the list dimensions agg_list holds. A rebuild clears these from the day, so a dimension dropped here
 // stays listed until its rows are gone.
 var Dims = []string{"pages", "entry", "events", "outbound", "referrers", "networks", "countries", "probed", "errors",
-	"status", "clients", "endpoints", "accounts", "failures", "agents"}
+	"status", "clients", "endpoints", "accounts", "failures", "agents", "services", "engaged", "vital_lcp", "vital_inp",
+	"vital_cls"}
 
 // Called reports whether a server request counts as a call of an endpoint: a 404 does not (a probe's and an
 // endpoint's own look alike, a route with placeholders catches both), nor does one refused without a route (a scanner's
@@ -74,7 +78,7 @@ var fullDims = map[string]bool{"countries": true, "status": true, "clients": tru
 
 // idByAddr count addresses under every audience: their ids are the address keys already, they store no addrs.
 var idByAddr = map[string]bool{"networks": true, "probed": true, "status": true, "endpoints": true, "accounts": true,
-	"failures": true, "agents": true}
+	"failures": true, "agents": true, "services": true}
 
 // otherBySub keep an Other row per sub: the dashboard filters them by it (events' sub=auto|custom).
 var otherBySub = map[string]bool{"events": true}
@@ -98,6 +102,8 @@ type Builder struct {
 	Store *store.Store
 	// K is the entries a list part keeps per day; 0 is TopK.
 	K int
+	// Name is Options.Name.
+	Name func(ctx context.Context, site, day int64) (int64, error)
 	// Test hooks: beforeRead runs between BeginAggDay and the read, afterRead between the read and the writes,
 	// beforeWrite sees the build about to be written.
 	beforeRead, afterRead func(site, day int64)
@@ -126,7 +132,8 @@ func (b *Builder) lock() func() {
 
 // BuildDay builds one site-day from its raw events and freezes it. It returns whether the day came out clean: false
 // when raw changed after the build's read (a write, or retention cutting the day), which leaves it dirty for the next
-// pass, or when a write cut short left rows nothing can rebuild. A day whose raw is gone is not rebuilt.
+// pass, or when a write cut short left rows nothing can rebuild. A day whose raw is gone is not rebuilt. A day with a
+// bot's or a probe's row is not written while Name has no bot list: an error wrapping classify.ErrNoBotList.
 func (b *Builder) BuildDay(ctx context.Context, site, day int64) (bool, error) {
 	defer b.lock()()
 	return b.buildDay(ctx, site, day)
@@ -155,6 +162,28 @@ func (b *Builder) buildDay(ctx context.Context, site, day int64) (bool, error) {
 	if b.beforeRead != nil {
 		b.beforeRead(site, day)
 	}
+	// The day's state before the naming: the dirty mark the naming sets is no change to the sessions the next day
+	// carries (RequeueNext).
+	days, err := st.AggDays(ctx, site, day, day)
+	if err != nil {
+		return false, err
+	}
+	was := days[day]
+	if !was.Raw {
+		return was.Dirty != store.AggWriting, st.ClearAggDirty(ctx, site, day)
+	}
+	// Named on every build, before the read: names refreshed on some days of a range only would split a service.
+	var named int64
+	noList := false
+	if b.Name != nil {
+		named, err = b.Name(ctx, site, day)
+		switch {
+		case errors.Is(err, classify.ErrNoBotList):
+			noList = true
+		case err != nil:
+			return false, err
+		}
+	}
 	d := newDayBuild(site, day)
 	pre, err := d.load(ctx, st)
 	if err != nil {
@@ -162,6 +191,10 @@ func (b *Builder) buildDay(ctx context.Context, site, day int64) (bool, error) {
 	}
 	if !pre.Raw {
 		return pre.Dirty != store.AggWriting, st.ClearAggDirty(ctx, site, day)
+	}
+	// Frozen without a list, its bots would never be named (the purge waits for a built day, Run reports the wait).
+	if noList && d.bots {
+		return false, fmt.Errorf("its bots wait for their names: %w", classify.ErrNoBotList)
 	}
 	if b.afterRead != nil {
 		b.afterRead(site, day)
@@ -174,8 +207,13 @@ func (b *Builder) buildDay(ctx context.Context, site, day int64) (bool, error) {
 	w.Version, w.Builder, w.Events = pre.Version, b.builder(), d.events
 	w.Carried, w.CarriedSaved = d.keep, d.keepSaved
 	// A first build, or one for a raw write (or after a write cut short), may change the next day's carried
-	// sessions; a rebuild for a new builder or for the day before does not change this day's raw.
-	w.RequeueNext = !pre.Frozen || pre.Dirty == store.AggRawChanged || pre.Dirty == store.AggWriting
+	// sessions; a rebuild for a new builder or for the day before does not change this day's raw, nor does a name.
+	// The read's state where the naming set no mark; where it did, the state before it (a raw write racing the
+	// naming is then taken for its mark).
+	changed := func(a store.AggDay) bool {
+		return !a.Frozen || a.Dirty == store.AggRawChanged || a.Dirty == store.AggWriting
+	}
+	w.RequeueNext = changed(was) || named == 0 && changed(pre)
 	if b.beforeWrite != nil {
 		b.beforeWrite(&w)
 	}
@@ -215,6 +253,8 @@ type hourAcc struct {
 	events, views, actions, starts, requests, refused, errors, failed int64
 	ids, addrs, server, callers, accounts                             set
 	durations                                                         Hist
+	engaged                                                           int64
+	vitals                                                            [len(Vitals)]Hist
 }
 
 type listKey struct {
@@ -299,6 +339,8 @@ type dayBuild struct {
 	keepSaved bool
 	clients   map[string][3]string
 	agents    map[string]string // classify.Client by user agent
+	// bots: a bot's or a probe's row, which only a bot list names (Builder.Name).
+	bots bool
 }
 
 func newDayBuild(site, day int64) *dayBuild {
@@ -364,8 +406,8 @@ func (d *dayBuild) prevSessions(ctx context.Context, q store.Queryer, noRaw, wri
 // read streams the day's rows once, in time order (id breaks a tie: the latest row is the one written last).
 func (d *dayBuild) read(ctx context.Context, db store.Queryer) error {
 	rows, err := query(ctx, db, `SELECT ts, source, kind, name, visitor, sid, ip, ip_key, ua, template, ref_host,
-		status, asn, country, cls, dur_ms, account, op, err, unrouted FROM event WHERE site_id = ? AND ts >= ? AND ts < ?
-		ORDER BY ts, id`,
+		status, asn, country, cls, dur_ms, account, op, err, unrouted, svc, `+VitalValueSQL+`, `+VitalVerSQL+`,
+		`+EngagedSQL+` FROM event WHERE site_id = ? AND ts >= ? AND ts < ? ORDER BY ts, id`,
 		d.site, d.day*dayMS, (d.day+1)*dayMS)
 	if err != nil {
 		return err
@@ -374,7 +416,8 @@ func (d *dayBuild) read(ctx context.Context, db store.Queryer) error {
 	var e raw
 	for rows.Next() {
 		if err := rows.Scan(&e.ts, &e.source, &e.kind, &e.name, &e.visitor, &e.sid, &e.ip, &e.ipKey, &e.ua, &e.tmpl,
-			&e.refHost, &e.status, &e.asn, &e.country, &e.cls, &e.dur, &e.account, &e.op, &e.err, &e.unrouted); err != nil {
+			&e.refHost, &e.status, &e.asn, &e.country, &e.cls, &e.dur, &e.account, &e.op, &e.err, &e.unrouted, &e.svc,
+			&e.value, &e.ver, &e.engaged); err != nil {
 			return err
 		}
 		d.add(&e)
@@ -432,8 +475,18 @@ func (d *dayBuild) add(e *raw) {
 	if isErr {
 		h.errors++
 	}
+	h.engaged += e.engaged
+	vital, units := -1, int64(0)
+	if e.kind == "vital" {
+		if i, u, ok := VitalUnits(e.name, e.ver, e.value); ok {
+			vital, units = i, u
+			h.vitals[i].Add(u, 1)
+		}
+	}
+	d.bots = d.bots || e.cls == store.ClsBot || e.cls == store.ClsMonitor
 
 	d.addLists(e, part, browser, server, action, isErr)
+	d.addExperience(e, part, vital, units)
 
 	ak := store.AggAddrKey{IPKey: e.ipKey, Part: part}
 	a := d.addrs[ak]
@@ -543,6 +596,17 @@ func (d *dayBuild) addLists(e *raw, part int, browser, server, action, isErr boo
 	if server && e.status > 0 {
 		d.entry("status", part, "", strconv.Itoa(e.status/100)+"xx", "", 1, 0, "", "")
 	}
+	if server && e.svc != "" {
+		sub := "bot"
+		if e.cls == store.ClsMonitor {
+			sub = "monitor"
+		}
+		var refused int64
+		if e.status >= 400 {
+			refused = 1
+		}
+		d.entry("services", part, "", e.svc, sub, 1, refused, e.ipKey, "")
+	}
 	// Clients: every client a visitor used that day (the dashboard's latest-client rule does not add up over days).
 	if vid != "" || addr != "" {
 		c, ok := d.clients[e.ua]
@@ -559,6 +623,26 @@ func (d *dayBuild) addLists(e *raw, part int, browser, server, action, isErr boo
 		d.entry("clients", part, "os", c[1], "", 0, 0, vid, addr)
 		d.entry("clients", part, "devices", c[2], "", 0, 0, vid, addr)
 		d.entry("clients", part, "ip_version", v, "", 0, 0, vid, addr)
+	}
+}
+
+// addExperience adds a person's row (part 1, class human: no dimension before these was people's only) to what
+// people experienced per page template: engaged (a the active ms, b the page views, so an average divides figures of
+// one builder) and a vital's dimension (a the samples, the histogram their units). vital is its index in Vitals, -1
+// for none.
+func (d *dayBuild) addExperience(e *raw, part, vital int, units int64) {
+	if part != 1 {
+		return
+	}
+	switch e.kind {
+	case "page_view":
+		d.entry("engaged", part, "", e.tmpl, "", 0, 1, e.visitor, "")
+	case "engagement":
+		d.entry("engaged", part, "", e.tmpl, "", e.engaged, 0, e.visitor, "")
+	case "vital":
+		if vital >= 0 && vitalDims[vital] != "" {
+			d.entry(vitalDims[vital], part, "", e.tmpl, "", 1, 0, e.visitor, "").durations.Add(units, 1)
+		}
 	}
 }
 
@@ -588,11 +672,15 @@ func (d *dayBuild) rows(k int) store.AggBuild {
 	out := store.AggBuild{Site: d.site, Day: d.day, Dims: Dims}
 	d.prev, d.clients = nil, nil
 	for hk, h := range d.hours {
-		out.Hours = append(out.Hours, store.AggHour{SiteID: d.site, Hour: hk.hour, Cls: hk.cls, Events: h.events,
+		row := store.AggHour{SiteID: d.site, Hour: hk.hour, Cls: hk.cls, Events: h.events,
 			Views: h.views, Actions: h.actions, Starts: h.starts, Requests: h.requests, Refused: h.refused,
 			Errors: h.errors, BrowserIDs: h.ids.sketch(), Addrs: h.addrs.sketch(), ServerAddrs: h.server.sketch(),
 			Failed: h.failed, Durations: h.durations.Marshal(), Callers: h.callers.sketch(),
-			Accounts: h.accounts.sketch()})
+			Accounts: h.accounts.sketch(), Engaged: h.engaged}
+		for i := range h.vitals {
+			row.Vitals[i] = h.vitals[i].Marshal()
+		}
+		out.Hours = append(out.Hours, row)
 	}
 	d.hours = nil
 	slices.SortFunc(out.Hours, func(a, b store.AggHour) int {

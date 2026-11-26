@@ -80,8 +80,13 @@ func (c *Classifier) name(ip, ua string, cls int) string {
 }
 
 // NameDay gives a site-day's events the names service gives them by their address, client and class, and takes the
-// name off any other class's. It returns the events changed: none on a day named already.
+// name off any other class's. It returns the events changed: none on a day named already. Without a bot list it names
+// nothing, ErrNoBotList: it would take every name off, and the aggregate build it runs before (agg.Options.Name)
+// freeze that.
 func (c *Classifier) NameDay(ctx context.Context, site, day int64) (int64, error) {
+	if b := c.bots(); b == nil || len(b.Providers) == 0 {
+		return 0, ErrNoBotList
+	}
 	return c.DB.NameSvcDay(ctx, site, day, c.name)
 }
 
@@ -99,8 +104,9 @@ var (
 	nameListWait = time.Hour
 )
 
-// errNoBotList is NameRaw's failure past nameListWait: one text, one condition however often it is tried.
-var errNoBotList = errors.New("no bot list loaded")
+// ErrNoBotList is NameDay's answer while no bot list is loaded, and NameRaw's failure past nameListWait: one text,
+// one condition however often it is tried.
+var ErrNoBotList = errors.New("no bot list loaded")
 
 // RunNames runs NameRaw until the stored events are named, each failure reported (job.failed, names) and tried again
 // after nameRetry: one busy database must not leave them unnamed until the next start, nor the days purged meanwhile
@@ -136,7 +142,7 @@ func (c *Classifier) NameRaw(ctx context.Context) error {
 		for deadline := time.Now().Add(nameListWait); b == nil || len(b.Providers) == 0; b = c.bots() {
 			wait := time.Until(deadline)
 			if wait <= 0 {
-				return errNoBotList
+				return ErrNoBotList
 			}
 			if !run.Sleep(ctx, min(nameListPoll, wait)) {
 				return ctx.Err()

@@ -297,7 +297,12 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 	afterRef(cls.RunNames)
 	// The aggregate job backfills every day with raw after an upgrade, then builds each day as it falls due. It waits
 	// for the reference data as the classifier does: the start's own reads first.
+	// A day is named before it is built: the names it froze would outlive its raw. -demo's history carries the world's
+	// names, which the refreshed bot list would take off every day the job builds.
 	aggOpts := agg.Options{Months: cfg.RetentionMonths, Report: board}
+	if mode != demoRun {
+		aggOpts.Name = cls.NameDay
+	}
 	afterRef(func(c context.Context) { agg.Run(c, st, aggOpts) })
 	// The watch job walks raw into its state per site (every day with raw after an upgrade, then each as it closes)
 	// and judges the open days on every wake. It waits as the aggregate job does.

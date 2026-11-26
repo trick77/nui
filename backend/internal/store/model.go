@@ -196,6 +196,8 @@ type AggHour struct {
 	Durations   []byte
 	Callers     []byte
 	Accounts    []byte
+	Engaged     int64
+	Vitals      [5][]byte // v_lcp, v_inp, v_cls, v_fcp, v_ttfb: agg.Vitals' order
 }
 
 // AggList is one list entry, or a part's Other row, for one site, dimension and UTC day.

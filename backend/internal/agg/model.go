@@ -13,4 +13,7 @@ type raw struct {
 	dur                                                   int64
 	account, op, err                                      string
 	unrouted                                              bool
+	svc                                                   string
+	value, ver                                            any   // VitalValueSQL, VitalVerSQL
+	engaged                                               int64 // EngagedSQL
 }

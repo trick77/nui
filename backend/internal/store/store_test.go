@@ -809,7 +809,7 @@ func TestUpgrade_0002(t *testing.T) {
 	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event`).Scan(&events); err != nil || events != 50 {
 		t.Errorf("events after upgrade = %d, %v", events, err)
 	}
-	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 11 {
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 12 {
 		t.Errorf("migrations = %d, %v", migrated, err)
 	}
 	// The events from before take their names later (classify.NameRaw): none yet.

@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/trick77/trakk/backend/internal/alert"
+	"github.com/trick77/trakk/backend/internal/classify"
 	"github.com/trick77/trakk/backend/internal/store"
 )
 
@@ -238,8 +240,26 @@ func TestBuildThrough_BuilderBump(t *testing.T) {
 	id := site(t, st)
 	d := anchor.UnixMilli()/dayMS - 3
 	insert(t, st, view(id, "192.0.2.1", "s1", d*dayMS+1000), view(id, "192.0.2.1", "s1", (d+1)*dayMS+1000))
+	// What a bump's rebuild keeps on both days: the experience, the hours' and the lists'.
+	for _, day := range []int64{d, d + 1} {
+		e := view(id, "192.0.2.1", "s1", day*dayMS+2000)
+		e.Kind, e.Props = "engagement", `{"p":{"ms":700}}`
+		v := view(id, "192.0.2.1", "s1", day*dayMS+3000)
+		v.Kind, v.Name, v.Props = "vital", "CLS", `{"p":{"name":"CLS","value":0.12,"v":2}}`
+		insert(t, st, e, v, store.Event{SiteID: id, TS: day*dayMS + 4000, Source: "server", Kind: "request",
+			IP: "192.0.2.2", IPKey: "192.0.2.2", Template: "/", Status: 200, Cls: store.ClsMonitor, Svc: "Examplecheck"})
+	}
 	if _, err := BuildThrough(t.Context(), st, anchor, TopK); err != nil {
 		t.Fatal(err)
+	}
+	var engaged, cls, services int
+	if err := st.DB.QueryRow(`SELECT SUM(engaged), COUNT(v_cls) FROM agg_hour`).Scan(&engaged, &cls); err != nil ||
+		engaged != 1400 || cls != 2 {
+		t.Fatalf("hours: engaged %d, CLS %d, %v", engaged, cls, err)
+	}
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM agg_list WHERE dim IN ('engaged', 'vital_cls', 'services')`).
+		Scan(&services); err != nil || services != 6 {
+		t.Fatalf("lists: %d, %v", services, err)
 	}
 	before := dump(t, st)
 	if _, err := st.DB.Exec(`UPDATE agg_day SET raw = 0 WHERE site_id = ? AND day = ?`, id, d); err != nil {
@@ -723,6 +743,103 @@ func TestCover(t *testing.T) {
 	j, started := recorder(st)
 	if did, err := j.b.buildIfNeeded(t.Context(), id, floor); err != nil || did || len(*started) != 0 {
 		t.Errorf("the job built a clean day again: %v %v %v", did, *started, err)
+	}
+}
+
+// reporterFunc is an alert.Reporter.
+type reporterFunc func(alert.Condition)
+
+func (f reporterFunc) Report(c alert.Condition) { f(c) }
+
+// A day with bots is never frozen unnamed: while the naming has no bot list, neither the job nor Cover writes it, its
+// raw stays, the job builds its other days and reports the wait as a failure; once a list is loaded it builds by
+// itself and the report clears. A day without bots builds as before.
+func TestRun_WaitsForBotList(t *testing.T) {
+	st := openStore(t)
+	id := site(t, st)
+	today := anchor.UnixMilli() / dayMS
+	bots, people := today-4, today-3
+	insert(t, st, view(id, "192.0.2.1", "s1", people*dayMS+1000), view(id, "192.0.2.1", "s0", bots*dayMS+1000),
+		store.Event{SiteID: id, TS: bots*dayMS + 2000, Source: "server", Kind: "request", IP: "192.0.2.50",
+			IPKey: "192.0.2.50", UA: "Examplebot/1", Template: "/", Status: 200, Cls: store.ClsBot})
+	var listed atomic.Bool
+	name := func(ctx context.Context, site, day int64) (int64, error) {
+		if !listed.Load() {
+			return 0, classify.ErrNoBotList
+		}
+		return st.NameSvcDay(ctx, site, day, func(_, _ string, cls int) string {
+			if cls == store.ClsBot {
+				return "Examplebot"
+			}
+			return ""
+		})
+	}
+	state := func(day int64) store.AggDay {
+		t.Helper()
+		days, err := st.AggDays(t.Context(), id, day, day)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return days[day]
+	}
+
+	cover := Cover(st, Options{Now: func() time.Time { return anchor }, Name: name})
+	if err := cover(t.Context(), id, bots); !errors.Is(err, classify.ErrNoBotList) || state(bots).Frozen {
+		t.Fatalf("Cover without a list: %v, %+v", err, state(bots))
+	}
+	var events int
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE ts >= ? AND ts < ?`, bots*dayMS, (bots+1)*dayMS).
+		Scan(&events); err != nil || events != 2 {
+		t.Errorf("raw of the waiting day: %d, %v", events, err)
+	}
+
+	var mu sync.Mutex
+	var reports []alert.Condition
+	report := reporterFunc(func(c alert.Condition) {
+		mu.Lock()
+		defer mu.Unlock()
+		reports = append(reports, c)
+	})
+	wait := func(open bool) alert.Condition {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			mu.Lock()
+			i := slices.IndexFunc(reports, func(c alert.Condition) bool { return c.Key == alert.JobAgg && c.Open == open })
+			var c alert.Condition
+			if i >= 0 {
+				c, reports = reports[i], nil
+			}
+			mu.Unlock()
+			if i >= 0 {
+				return c
+			}
+		}
+		t.Fatalf("no report open=%v", open)
+		return alert.Condition{}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		Run(ctx, st, Options{Every: 20 * time.Millisecond, Now: func() time.Time { return anchor },
+			Log: slog.New(slog.DiscardHandler), Report: report, Name: name})
+		close(done)
+	}()
+	defer func() { cancel(); <-done }()
+	if c := wait(true); !strings.Contains(c.Text, classify.ErrNoBotList.Error()) {
+		t.Errorf("report: %q", c.Text)
+	}
+	if !state(people).BuiltBy(Version) || state(bots).Frozen {
+		t.Errorf("without a list: people's day %+v, the bots' day %+v", state(people), state(bots))
+	}
+	listed.Store(true)
+	wait(false)
+	if !state(bots).BuiltBy(Version) {
+		t.Errorf("with a list: %+v", state(bots))
+	}
+	var svc string
+	if err := st.DB.QueryRow(`SELECT key FROM agg_list WHERE site_id = ? AND dim = 'services' AND day = ?`, id, bots).
+		Scan(&svc); err != nil || svc != "Examplebot" {
+		t.Errorf("services: %q, %v", svc, err)
 	}
 }
 

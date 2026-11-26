@@ -336,6 +336,20 @@ func TestNameDay(t *testing.T) {
 	if done, err := bare.st.SvcNamed(t.Context()); err != nil || !done {
 		t.Errorf("not marked once the list arrived: %v, %v", done, err)
 	}
+	// Nor does NameDay take a name off without a list, it says so: the aggregate build it runs before would freeze
+	// that.
+	bare.c.Ref = refdata.New(refdata.Options{Dir: t.TempDir()})
+	if err := bare.st.InsertEvents(t.Context(), []store.Event{{SiteID: bare.site.ID, TS: bare.now.UnixMilli(),
+		Source: "server", Kind: "request", IP: "192.0.2.1", IPKey: "192.0.2.1", UA: "Ranged/1", Cls: store.ClsBot,
+		Svc: "Ranged"}}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := bare.c.NameDay(t.Context(), bare.site.ID, bare.now.UnixMilli()/dayMS); !errors.Is(err, ErrNoBotList) || n != 0 {
+		t.Errorf("named without a bot list: %d, %v", n, err)
+	}
+	if got := clientNames(t, bare.st)["192.0.2.1 Ranged/1"]; got != "Ranged" {
+		t.Errorf("name without a bot list: %q", got)
+	}
 }
 
 // A failed naming is reported and tried again until it gets through, which clears the report.

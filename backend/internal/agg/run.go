@@ -3,6 +3,7 @@ package agg
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"github.com/trick77/ship/kit/run"
 
 	"github.com/trick77/trakk/backend/internal/alert"
+	"github.com/trick77/trakk/backend/internal/classify"
 	"github.com/trick77/trakk/backend/internal/store"
 )
 
@@ -44,6 +46,11 @@ type Options struct {
 	// Report takes each wake's outcome (job.failed, agg): a failure opens it, the next wake that gets through
 	// clears it.
 	Report alert.Reporter
+	// Name, when set, gives a site-day's events the bot list's names (event.svc) before every build reads them, and
+	// returns the events it changed (classify's NameDay). classify.ErrNoBotList while it has no list: a day with a
+	// bot's or a probe's row then waits unbuilt, reported as a failure, the job's other days built meanwhile. nil
+	// builds the names as stored.
+	Name func(ctx context.Context, site, day int64) (int64, error)
 }
 
 // ageFloor is the oldest day the job builds at now: the day after the one holding the age cutoff, 0 without one.
@@ -54,13 +61,14 @@ func ageFloor(now time.Time, months int) int64 { return store.AgeFloor(now, mont
 // the job's lock. A day the job would not build is left as it is: the cap then deletes none of its raw. One not due
 // yet is store.ErrNotDue, and the cap waits for it. The wait is bounded: the cap asks for days before its tail and
 // the day after each, and lastDue is at least the day before the tail at any time and the tail's first from 02:00
-// UTC on, so only the tail's first day is ever not due, and only from 00:00 to 02:00 (TestCover_WaitBounded).
+// UTC on, so only the tail's first day is ever not due, and only from 00:00 to 02:00 (TestCover_WaitBounded). A day
+// waiting for the bot list (Options.Name) is an error: the cap's round ends there, the raw stays.
 func Cover(st *store.Store, o Options) func(ctx context.Context, site, day int64) error {
 	now := o.Now
 	if now == nil {
 		now = time.Now
 	}
-	b := &Builder{Store: st, K: o.K}
+	b := &Builder{Store: st, K: o.K, Name: o.Name}
 	return func(ctx context.Context, site, day int64) error {
 		t := now()
 		if day > lastDue(t) {
@@ -91,7 +99,7 @@ func Run(ctx context.Context, st *store.Store, o Options) {
 	if o.Log == nil {
 		o.Log = slog.Default()
 	}
-	j := &job{b: &Builder{Store: st, K: o.K}, log: o.Log, yield: yield}
+	j := &job{b: &Builder{Store: st, K: o.K, Name: o.Name}, log: o.Log, yield: yield}
 	for wait := time.Duration(0); run.Sleep(ctx, wait); wait = o.Every {
 		start, now := time.Now(), o.Now()
 		j.floor = ageFloor(now, o.Months)
@@ -122,34 +130,50 @@ type job struct {
 }
 
 // passes runs passes until one builds nothing, at most limit (0: no limit; then a day that stays dirty is an error).
+// A day waiting for the bot list (pass) is its error once the passes end.
 func (j *job) passes(ctx context.Context, last int64, limit int) (int, error) {
 	total := 0
+	var waiting error
 	for i := 0; limit == 0 || i < limit; i++ {
 		n, err := j.pass(ctx, last)
 		total += n
-		if err != nil || n == 0 {
+		if errors.Is(err, classify.ErrNoBotList) {
+			waiting, err = err, nil
+		}
+		if err != nil {
 			return total, err
+		}
+		if n == 0 {
+			break
 		}
 		if limit == 0 && i == 100 {
 			return total, fmt.Errorf("aggregates still dirty after %d passes", i)
 		}
 	}
-	return total, nil
+	return total, waiting
 }
 
 type work struct{ site, day int64 }
 
 // pass builds, oldest day first, every site-day from the site's oldest raw day (the floor when later) to last without
-// a clean row of this builder. Days before keep what they hold.
+// a clean row of this builder. Days before keep what they hold. A day waiting for the bot list (Options.Name) is
+// passed over, the first one the pass's error once the rest are built: one missing list must not hold every day.
 func (j *job) pass(ctx context.Context, last int64) (int, error) {
 	todo, err := j.todo(ctx, last)
 	if err != nil || len(todo) == 0 {
 		return 0, err
 	}
 	built := 0
+	var waiting error
 	logged := time.Now()
 	for _, w := range todo {
 		did, err := j.b.buildIfNeeded(ctx, w.site, w.day)
+		if errors.Is(err, classify.ErrNoBotList) {
+			if waiting == nil {
+				waiting = fmt.Errorf("site %d day %d: %w", w.site, w.day, err)
+			}
+			continue
+		}
 		if err != nil {
 			return built, fmt.Errorf("site %d day %d: %w", w.site, w.day, err)
 		}
@@ -166,7 +190,7 @@ func (j *job) pass(ctx context.Context, last int64) (int, error) {
 			return built, ctx.Err()
 		}
 	}
-	return built, nil
+	return built, waiting
 }
 
 // todo lists the site-days to build, oldest first. A dirty day without raw has nothing to build from: its flag is

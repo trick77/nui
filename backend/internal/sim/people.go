@@ -360,17 +360,28 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 	}
 	errorProb := 1.0 / 60
 	scripted := per.scripted
+	// The visit's own stream for what the visit adds beside r's draws (an engagement of a hidden page), by its start to
+	// the nanosecond: r's sequence stays as it was, the rest of the visit with it.
+	vr := newRng(w.Seed, 30, int64(s.idx), pages[0].at.UnixNano())
+	vital := vitals(s, per, pages[0])
+	engage := func(i int, at time.Time) {
+		props := engagement(r, pages[i], per.prof, scripted)
+		if hidden, ok := hide(vr, pages[i], props, scripted); ok {
+			add(i, hidden.at, "engagement", "", hidden.props)
+		}
+		add(i, at, "engagement", "", props)
+	}
 	for i, pg := range pages {
 		if i == 0 {
 			add(i, pg.at, "session_start", "", nil)
 		} else {
 			// The engagement of the page being left, then the new view (an in-page navigation).
-			add(i-1, pg.at, "engagement", "", engagement(r, pages[i-1], per.prof, scripted))
+			engage(i-1, pg.at)
 		}
 		add(i, pg.at, "page_view", "", nil)
 		if i == 0 {
-			add(i, pg.at.Add(300*time.Millisecond), "vital", "", map[string]any{"name": "TTFB", "value": float64(80 + r.IntN(700))})
-			add(i, pg.at.Add(900*time.Millisecond), "vital", "", map[string]any{"name": "FCP", "value": float64(300 + r.IntN(2000))})
+			add(i, pg.at.Add(300*time.Millisecond), "vital", "", vital("TTFB", r.Float64()))
+			add(i, pg.at.Add(900*time.Millisecond), "vital", "", vital("FCP", r.Float64()))
 		}
 		span := pg.leave.Sub(pg.at)
 		at := func() time.Time { return pg.at.Add(time.Duration(r.Int64N(int64(span)))) }
@@ -404,12 +415,16 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 		}
 	}
 	last := pages[len(pages)-1]
-	add(len(pages)-1, last.leave, "engagement", "", engagement(r, last, per.prof, scripted))
-	add(len(pages)-1, last.leave, "vital", "", map[string]any{"name": "LCP", "value": float64(500 + r.IntN(3500))})
+	engage(len(pages)-1, last.leave)
+	// The vitals measured to the end go out as the visit leaves, for the landing page (trakk.ts).
+	add(0, last.leave, "vital", "", vital("LCP", r.Float64()))
 	if r.chance(0.6) {
-		add(len(pages)-1, last.leave, "vital", "", map[string]any{"name": "INP", "value": float64(40 + r.IntN(360))})
+		add(0, last.leave, "vital", "", vital("INP", r.Float64()))
 	}
-	add(len(pages)-1, last.leave, "vital", "", map[string]any{"name": "CLS", "value": math.Round(r.Float64()*0.3*1000) / 1000})
+	// WebKit measures no layout shift: drawn all the same, r's sequence is every browser's.
+	if cls := vital("CLS", r.Float64()); !webKit(per.prof) {
+		add(0, last.leave, "vital", "", cls)
+	}
 	// The script reports the hosts the page loaded scripts from once a document, on its first engagement.
 	for i := range evs {
 		if evs[i].e.k == "engagement" {
@@ -534,6 +549,59 @@ func engagement(r rng, pg page, pr *uaProfile, scripted bool) map[string]any {
 	}
 	return map[string]any{"ms": ms, "scroll": 20 + r.IntN(81), "inputs": in}
 }
+
+// hidden is an engagement sent while a page was hidden.
+type hidden struct {
+	at    time.Time
+	props map[string]any
+}
+
+// hide splits a page's engagement props in two, about one page in three: the page hidden a while (another tab), the
+// script sends what it measured so far and starts over; props keep the rest, sent as the page is left. Inputs are
+// halved, so only a page with two presses or more is split: a part without input would read as a silent page.
+func hide(r rng, pg page, props map[string]any, scripted bool) (hidden, bool) {
+	in := props["inputs"].(map[string]int)
+	if !r.chance(0.3) || !scripted && in["pointer"] < 2 {
+		return hidden{}, false
+	}
+	pct := int64(20 + r.IntN(61))
+	ms := props["ms"].(int64)
+	first := map[string]int{}
+	for k, n := range in {
+		first[k], in[k] = n/2, n-n/2
+	}
+	props["ms"] = ms - ms*pct/100
+	return hidden{at: pg.at.Add(pg.leave.Sub(pg.at) * time.Duration(pct) / 100),
+		props: map[string]any{"ms": ms * pct / 100, "scroll": props["scroll"].(int) / 2, "inputs": first}}, true
+}
+
+// vitalsVersion is the script's VITALS: the version every vital measured the standard way carries.
+const vitalsVersion = 2
+
+// vitalShapes are each vital's median on a page of speed 1 and its spread (log-normal σ).
+var vitalShapes = map[string][2]float64{"TTFB": {250, 0.6}, "FCP": {900, 0.5}, "LCP": {1600, 0.55},
+	"INP": {120, 0.7}, "CLS": {0.04, 1}}
+
+// vitals makes a visit's vital props from a uniform draw u, log-normal around the vital's median times the landing
+// page's speed, three decimals as the script rounds them. A visitor on a cached old script (one in twenty, by visitor
+// id: no draw) sends no v.
+func vitals(s *Site, per *person, landing page) func(name string, u float64) map[string]any {
+	speed := s.paths.speed(landing.path)
+	old := strHash(per.vid)%20 == 0
+	return func(name string, u float64) map[string]any {
+		sh := vitalShapes[name]
+		u = min(max(u, 1e-9), 1-1e-9)
+		v := sh[0] * speed * math.Exp(sh[1]*math.Sqrt2*math.Erfinv(2*u-1))
+		p := map[string]any{"name": name, "value": math.Round(v*1000) / 1000}
+		if !old {
+			p["v"] = vitalsVersion
+		}
+		return p
+	}
+}
+
+// webKit is a Safari engine's profile: it measures no layout shift.
+func webKit(pr *uaProfile) bool { return !pr.chromium && !strings.Contains(pr.ua, "Firefox") }
 
 // gpu is the WebGL vendor and renderer a profile's browser reports (the script's gl); scripted: headless, no GPU.
 func (pr *uaProfile) gpu(scripted bool) [2]string {

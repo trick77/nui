@@ -23,8 +23,27 @@ type pathGen struct {
 	lookup bool
 }
 
-// pageShape is one rule's pattern, filled on demand.
-type pageShape struct{ pattern string }
+// pageShape is one rule's pattern, filled on demand; re matches the paths it fills.
+type pageShape struct {
+	pattern string
+	re      *regexp.Regexp
+}
+
+func newPageShape(pattern string) pageShape {
+	var b strings.Builder
+	last := 0
+	for _, m := range placeholderRE.FindAllStringSubmatchIndex(pattern, -1) {
+		b.WriteString(regexp.QuoteMeta(pattern[last:m[0]]))
+		if pattern[m[2]:m[3]] == "any" {
+			b.WriteString(`.+`)
+		} else {
+			b.WriteString(`[^/]+`)
+		}
+		last = m[1]
+	}
+	b.WriteString(regexp.QuoteMeta(pattern[last:]))
+	return pageShape{pattern: pattern, re: regexp.MustCompile(`^` + b.String() + `$`)}
+}
 
 // Placeholder values. Lookup targets are documentation addresses and networks too; the first of each list is the
 // most asked for.
@@ -57,7 +76,7 @@ func newPathGen(s *Site) *pathGen {
 			}
 		case fileLike(r.Pattern):
 		default:
-			g.pages = append(g.pages, pageShape{r.Pattern})
+			g.pages = append(g.pages, newPageShape(r.Pattern))
 			w := 2.0
 			switch {
 			case r.Pattern == "/":
@@ -73,7 +92,7 @@ func newPathGen(s *Site) *pathGen {
 	}
 	if len(g.pages) == 0 {
 		for i, p := range blogPages {
-			g.pages = append(g.pages, pageShape{p})
+			g.pages = append(g.pages, newPageShape(p))
 			g.weights = append(g.weights, map[bool]float64{true: 2, false: 1}[i == 0 || strings.HasPrefix(p, "/blog/")])
 		}
 	}
@@ -102,6 +121,18 @@ func fileLike(p string) bool {
 // page draws a page path.
 func (g *pathGen) page(r rng) string {
 	return g.fill(g.pages[r.weighted(g.weights)].pattern, r)
+}
+
+// speed is how slow a page of path loads, by the rule it was made from: a factor from 0.6 to 2 on the vitals.
+func (g *pathGen) speed(path string) float64 {
+	shape := path
+	for _, p := range g.pages {
+		if p.re.MatchString(path) {
+			shape = p.pattern
+			break
+		}
+	}
+	return 0.6 + float64(strHash(shape)%1000)/1000*1.4
 }
 
 // spikePage is the page a news post links: the lookup site's most asked address, or the first page.

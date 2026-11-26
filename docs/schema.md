@@ -141,6 +141,12 @@ Go types:
 | `durations` | BLOB | yes |  |  |
 | `callers` | BLOB | yes |  |  |
 | `accounts` | BLOB | yes |  |  |
+| `engaged` | INTEGER | no | `0` |  |
+| `v_lcp` | BLOB | yes |  |  |
+| `v_inp` | BLOB | yes |  |  |
+| `v_cls` | BLOB | yes |  |  |
+| `v_fcp` | BLOB | yes |  |  |
+| `v_ttfb` | BLOB | yes |  |  |
 
 Foreign keys:
 
@@ -592,6 +598,12 @@ erDiagram
         BLOB durations
         BLOB callers
         BLOB accounts
+        INTEGER engaged
+        BLOB v_lcp
+        BLOB v_inp
+        BLOB v_cls
+        BLOB v_fcp
+        BLOB v_ttfb
     }
     agg_list {
         INTEGER site_id PK, FK
