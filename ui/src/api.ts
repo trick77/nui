@@ -67,6 +67,7 @@ export type Period = Frame & {
 
 export type TileKey =
   | "visitors"
+  | "visits"
   | "views"
   | "events"
   | "requests"

@@ -402,9 +402,9 @@ func expectBaseline(w *World, _ *Scenario) []Expectation {
 		if s.Silent || s.Kind == "api" || !s.Script {
 			continue
 		}
-		out = append(out, Expectation{Says: s.Domain + ": Overview shows visitors and page views",
+		out = append(out, Expectation{Says: s.Domain + ": Overview shows visitors, visits and page views",
 			Endpoint: "overview", Params: params(s.Domain, "7d"), Check: func(b map[string]any) error {
-				for _, k := range []string{"visitors", "views"} {
+				for _, k := range []string{"visitors", "visits", "views"} {
 					var sum float64
 					for _, v := range tileSeries(b, k) {
 						sum += v

@@ -34,8 +34,9 @@ func audCls(aud string) func(cls int) bool {
 // statement's snapshot (nothing added then).
 func (s *Server) bucketHours(ctx context.Context, site int64, aud string, from, to time.Time, sl slotting,
 	out []bucketStats) (bool, error) {
-	rows, err := s.query(ctx, `SELECT d.ok, t.hour, t.cls, t.views, t.actions, t.requests, t.errors, t.browser_ids, t.addrs`+
-		aggFrom("agg_hour", "t.hour >= ?3 AND t.hour < ?4"), site, ms(from)/dayMS, ms(from)/hourMS, ms(to)/hourMS)
+	rows, err := s.query(ctx, `SELECT d.ok, t.hour, t.cls, t.views, t.starts, t.actions, t.requests, t.errors,
+		t.browser_ids, t.addrs`+aggFrom("agg_hour", "t.hour >= ?3 AND t.hour < ?4"), site, ms(from)/dayMS,
+		ms(from)/hourMS, ms(to)/hourMS)
 	if err != nil {
 		return false, err
 	}
@@ -45,9 +46,9 @@ func (s *Server) bucketHours(ctx context.Context, site int64, aud string, from, 
 	ok := false
 	for rows.Next() {
 		var hour, cls sql.NullInt64
-		var views, actions, requests, errs sql.NullInt64
+		var views, starts, actions, requests, errs sql.NullInt64
 		var ids, addrs []byte
-		if err := rows.Scan(&ok, &hour, &cls, &views, &actions, &requests, &errs, &ids, &addrs); err != nil {
+		if err := rows.Scan(&ok, &hour, &cls, &views, &starts, &actions, &requests, &errs, &ids, &addrs); err != nil {
 			return false, err
 		}
 		if !ok {
@@ -66,6 +67,7 @@ func (s *Server) bucketHours(ctx context.Context, site int64, aud string, from, 
 			continue
 		}
 		add.views += float64(views.Int64)
+		add.starts += float64(starts.Int64)
 		add.events += float64(actions.Int64)
 		add.requests += float64(requests.Int64)
 		add.errors += float64(errs.Int64)
@@ -89,6 +91,7 @@ func (s *Server) bucketHours(ctx context.Context, site int64, aud string, from, 
 // add adds o's figures to b.
 func (b *bucketStats) add(o *bucketStats) {
 	b.views += o.views
+	b.starts += o.starts
 	b.events += o.events
 	b.requests += o.requests
 	b.unknown += o.unknown
@@ -106,6 +109,7 @@ func (s *Server) bucketPiece(ctx context.Context, site int64, aud string, from, 
 	args := append(sl.args(), site, ms(from), ms(to))
 	if err := s.each(ctx, `SELECT `+cellSQL+` AS cell,
 		SUM(`+cond+` AND kind = 'page_view'),
+		SUM(`+cond+` AND kind = 'session_start'),
 		SUM(`+cond+` AND source = 'browser' AND `+eventKinds+`),
 		SUM(`+cond+` AND source = 'server'),
 		SUM(source = 'server' AND cls IN (0, 4)),
@@ -113,12 +117,13 @@ func (s *Server) bucketPiece(ctx context.Context, site int64, aud string, from, 
 		SUM(`+cond+` AND (kind = 'js_error' OR (source = 'server' AND status >= 500)))
 		FROM event WHERE site_id = ? AND ts >= ? AND ts < ? GROUP BY cell`, args, func(rows *sql.Rows) error {
 		var cell int64
-		var views, events, requests, unknown, allReq, errs float64
-		if err := rows.Scan(&cell, &views, &events, &requests, &unknown, &allReq, &errs); err != nil {
+		var views, starts, events, requests, unknown, allReq, errs float64
+		if err := rows.Scan(&cell, &views, &starts, &events, &requests, &unknown, &allReq, &errs); err != nil {
 			return err
 		}
 		b := &out[sl.slot(cell)]
 		b.views += views
+		b.starts += starts
 		b.events += events
 		b.requests += requests
 		b.unknown += unknown
@@ -245,6 +250,7 @@ func allRequests(b bucketStats) float64 { return b.allReq }
 
 var tileDefs = []tileDef{
 	{key: "visitors", label: "Unique visitors", kind: "sum", distinct: func(b *bucketStats) *uniq { return &b.visitors }},
+	{key: "visits", label: "Visits", kind: "sum", of: func(b bucketStats) float64 { return b.starts }},
 	{key: "views", label: "Page views", kind: "sum", of: func(b bucketStats) float64 { return b.views }},
 	{key: "events", label: "Events", kind: "sum", of: func(b bucketStats) float64 { return b.events }},
 	{key: "requests", label: "Requests", kind: "sum", server: true, of: func(b bucketStats) float64 { return b.requests }},

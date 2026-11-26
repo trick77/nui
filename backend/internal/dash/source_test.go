@@ -218,6 +218,10 @@ func TestSources_Hourly(t *testing.T) {
 					delete(raw, "live")
 					delete(got, "live")
 					agree(t, ep+" "+where, raw, got, looseTiles)
+					// Session starts in the hours: two answers of none would agree as well.
+					if ep == "overview" && aud == "all" && num64(tiles(t, raw)["visits"]["value"]) == 0 {
+						t.Errorf("%s: no visits", where)
+					}
 					// 24h begins and ends inside an hour, Kolkata's 7d on the half hour: read raw, under every source.
 					offGrain := c.rng == "24h" || c.tz == "Asia/Kolkata" && c.rng == "7d"
 					if (n.agg == 0 && !offGrain) || n.raw != 0 || (n.off != 0 && !offGrain) {

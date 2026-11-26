@@ -12,7 +12,12 @@ import { type Panel, type Watch, type WatchHost, setFetcher } from "./api";
 import { jumpRange } from "./AlertsPage";
 import App from "./App";
 import { MainChart, StackChart, scaleLines } from "./charts";
-import { type FixtureOptions, TRAIL_NEXT, fixtureFetch } from "./fixtures";
+import {
+  type FixtureOptions,
+  SITES,
+  TRAIL_NEXT,
+  fixtureFetch,
+} from "./fixtures";
 import { SEP, joinSep, pct } from "./format";
 import { VitalHint } from "./ui";
 
@@ -407,7 +412,7 @@ describe("dashboard on a domain with a server feed", () => {
       .concat(
         within(panel("Overview")).getAllByRole("button", { pressed: true }),
       );
-    expect(tiles).toHaveLength(6);
+    expect(tiles).toHaveLength(7);
     expect(document.querySelector(".topbar")?.textContent).toContain(
       `7 humans online${SEP}3 automated`,
     );
@@ -1199,6 +1204,35 @@ describe("dashboard on a domain with a server feed", () => {
     await waitFor(() => expect(reload).toHaveBeenCalled());
     expect(calls).toContain("/api/auth/logout");
     vi.unstubAllGlobals();
+  });
+});
+
+// index.css lays out five and seven tiles with every row filled; any other
+// count falls back to auto-fit and can leave a lone tile.
+describe("the tile row", () => {
+  const ROWS = [
+    ["a website with a feed", "lens.example.com", 7, "seven"],
+    ["a website without one", "console.example.com", 5, "five"],
+    ["a website nothing has reached yet", "blog.example.org", 5, "five"],
+    ["an API", "api.example.com", 5, "five"],
+  ] as const;
+
+  it("has a layout for every fixture domain", () => {
+    expect(ROWS.map((r) => r[1]).sort()).toEqual(
+      SITES.map((s) => s.site).sort(),
+    );
+  });
+
+  it.each(ROWS)("fills every row on %s", async (_, site, n, layout) => {
+    start(`/dashboard/?site=${site}`);
+    const ov = await screen.findByRole("region", { name: "Overview" });
+    const row = await waitFor(() => {
+      const r = ov.querySelector(".tiles");
+      expect(r).not.toBeNull();
+      return r!;
+    });
+    expect(row.querySelectorAll(".tile")).toHaveLength(n);
+    expect(row.className).toBe(`tiles ${layout}`);
   });
 });
 

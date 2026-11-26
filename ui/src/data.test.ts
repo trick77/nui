@@ -557,6 +557,7 @@ describe("api client", () => {
     const o = await api.overview(scope);
     expect(o.tiles.map((t) => t.key)).toEqual([
       "visitors",
+      "visits",
       "views",
       "events",
       "requests",
