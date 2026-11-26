@@ -30,6 +30,13 @@ export type Col<R = ListRow> = {
   show?: (rows: R[]) => boolean;
 };
 
+// A row's change against the comparison period.
+export const changeCol: Col = {
+  head: "Change",
+  num: true,
+  cell: (r) => <Delta change={r.change} verdict={r.verdict} />,
+};
+
 export type ListTab = { key: string; label: string; dim: Dim; sub?: string };
 
 export function scopeKey(name: string, extra: unknown = null): string {
@@ -40,11 +47,10 @@ export function useList(
   dim: Dim,
   sort: Sort,
   opts: { sub?: string; within?: string; limit?: number; q?: string } = {},
-  enabled = true,
 ) {
   const { scope } = useDash();
   return useApi<List>(
-    enabled ? scopeKey("list", { scope, dim, sort, ...opts }) : null,
+    scopeKey("list", { scope, dim, sort, ...opts }),
     (s) => api.list(scope, { dim, sort, ...opts }, s),
     scope.site,
   );
@@ -63,7 +69,6 @@ export function TopList({
   above,
   busy = false,
   empty,
-  className = "",
 }: {
   // Something above the list (busy) is loading too.
   busy?: boolean;
@@ -80,7 +85,6 @@ export function TopList({
   expand?: boolean;
   above?: ReactNode;
   empty: string;
-  className?: string;
 }) {
   const { scope } = useDash();
   const [tab, setTab] = useState(tabs[0].key);
@@ -90,12 +94,7 @@ export function TopList({
   const l = useList(t.dim, sort, { sub: t.sub });
   const compare = scope.cmp !== "off";
   return (
-    <Panel
-      id={id}
-      label={title}
-      className={`card ${className}`}
-      busy={busy || l.loading}
-    >
+    <Panel id={id} label={title} className="card" busy={busy || l.loading}>
       <CardHead
         title={title}
         sources={sources}
@@ -476,11 +475,7 @@ function AllRows({
     { head: "Name", cell: (r) => (label ? label(r) : r.label) },
     { head: "Count", num: true, cell: (r) => num(r.value) },
     { head: "Share", num: true, cell: (r) => pct(r.share) },
-    {
-      head: "Change",
-      num: true,
-      cell: (r) => <Delta change={r.change} verdict={r.verdict} />,
-    },
+    changeCol,
   ];
   return (
     <div

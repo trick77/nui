@@ -2,8 +2,8 @@ import type { ReactNode } from "react";
 import type { ListRow, Watch } from "./api";
 import { num, pct } from "./format";
 import type { Loaded } from "./hooks";
-import { type Col, TopList } from "./lists";
-import { AllClasses, Delta, SectionHead, useDash } from "./ui";
+import { type Col, TopList, changeCol } from "./lists";
+import { AllClasses, SectionHead, useDash } from "./ui";
 import { ScriptHosts } from "./Watch";
 
 // A site's calls: server requests but 404s and refusals without a route, per endpoint (route and
@@ -15,11 +15,6 @@ const mono = (s: string) => (
 );
 const ms = (x?: number) => (x == null ? "–" : `${num(x)} ms`);
 
-const change: Col = {
-  head: "Change",
-  num: true,
-  cell: (r) => <Delta change={r.change} verdict={r.verdict} />,
-};
 const failed: Col = {
   head: "Failed",
   num: true,
@@ -39,7 +34,7 @@ const addresses: Col = {
 };
 
 function useChange(): Col[] {
-  return useDash().scope.cmp !== "off" ? [change] : [];
+  return useDash().scope.cmp !== "off" ? [changeCol] : [];
 }
 
 function EndpointsPanel({ head }: { head?: ReactNode }) {

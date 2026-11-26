@@ -15,11 +15,6 @@ export const AUD_NOTE: Record<Audience, string> = {
   humans: "Humans only.",
   bots: "Bots only: API clients, known bots, uptime probes and unknown automation.",
 };
-const AUD_WORD: Record<Audience, string> = {
-  all: "all",
-  humans: "humans",
-  bots: "bots",
-};
 
 function TileValue({ t }: { t: Tile }) {
   return (
@@ -112,7 +107,7 @@ export function OverviewSection({
                   <h3 className="m-0 text-[15px] font-medium">
                     {sel.label} per {f.slot}
                     {SEP}
-                    {AUD_WORD[aud]}
+                    {aud}
                   </h3>
                   <div className="legend ml-auto">
                     <span>

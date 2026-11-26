@@ -251,19 +251,23 @@ export function SectionHead({
   );
 }
 
-export function Seg<T extends string>({
-  label,
-  options,
-  value,
-  onChange,
-}: {
+type Choice<T extends string> = {
   label: string;
   options: { key: T; label: string }[];
   value: T;
   onChange: (v: T) => void;
-}) {
+};
+
+// One of a few options, as buttons: Seg and Tabs differ in their look only.
+function Choices<T extends string>({
+  look,
+  label,
+  options,
+  value,
+  onChange,
+}: Choice<T> & { look: "seg" | "tabs" }) {
   return (
-    <div className="seg" role="group" aria-label={label}>
+    <div className={look} role="group" aria-label={label}>
       {options.map((o) => (
         <button
           key={o.key}
@@ -278,31 +282,12 @@ export function Seg<T extends string>({
   );
 }
 
-export function Tabs<T extends string>({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string;
-  options: { key: T; label: string }[];
-  value: T;
-  onChange: (v: T) => void;
-}) {
-  return (
-    <div className="tabs" role="group" aria-label={label}>
-      {options.map((o) => (
-        <button
-          key={o.key}
-          type="button"
-          aria-pressed={o.key === value}
-          onClick={() => onChange(o.key)}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
+export function Seg<T extends string>(p: Choice<T>) {
+  return <Choices look="seg" {...p} />;
+}
+
+export function Tabs<T extends string>(p: Choice<T>) {
+  return <Choices look="tabs" {...p} />;
 }
 
 // A change in the backend's verdict colour; the arrow follows the sign.
