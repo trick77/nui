@@ -734,17 +734,14 @@ const SHADE = [
 export function BarRows({
   rows,
   other,
-  otherLabel,
 }: {
   rows: BarRow[];
   other?: { count: number; value: number } | null;
-  otherLabel?: string;
 }) {
   const max = Math.max(1, ...rows.map((r) => r.value), other?.value ?? 0);
-  const all = [...rows];
   return (
     <div className="bl">
-      {all.map((r, i) => (
+      {rows.map((r, i) => (
         <div
           key={i}
           className={`r ${r.onClick ? "click" : ""}`}
@@ -788,12 +785,10 @@ export function BarRows({
               width: `${(other.value / max) * 100}%`,
               background: "var(--color-other)",
               opacity: 0.45,
-              animationDelay: `${all.length * 50}ms`,
+              animationDelay: `${rows.length * 50}ms`,
             }}
           />
-          <span className="text-muted">
-            {otherLabel ?? `Other${SEP}${num(other.count)}`}
-          </span>
+          <span className="text-muted">{`Other${SEP}${num(other.count)}`}</span>
           <span className="val">
             {num(other.value)}
             <b />

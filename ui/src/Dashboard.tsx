@@ -26,6 +26,7 @@ import { Origin } from "./Origin";
 import { OverviewSection } from "./Overview";
 import {
   AUDIENCES,
+  COMPARES,
   PRODUCT,
   RANGES,
   basePath,
@@ -532,7 +533,7 @@ function FilterBar({
       {dash && (
         <Seg
           label="Compare"
-          options={(["prev", "yoy", "off"] as Compare[]).map((c) => ({
+          options={COMPARES.map((c) => ({
             key: c,
             label: CMP_LABEL[c],
           }))}

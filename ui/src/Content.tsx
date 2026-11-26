@@ -2,19 +2,14 @@ import { Endpoints } from "./Calls";
 import type { ListRow, Watch } from "./api";
 import { num, pct } from "./format";
 import type { Loaded } from "./hooks";
-import { type Col, TopList } from "./lists";
+import { type Col, TopList, changeCol } from "./lists";
 import { NetworksPanel } from "./Origin";
-import { Delta, SectionHead, useDash } from "./ui";
+import { SectionHead, useDash } from "./ui";
 import { ScriptHosts } from "./Watch";
 
 const mono = (s: string) => (
   <span className="font-mono text-[12.5px] wrap-anywhere">{s}</span>
 );
-const change: Col = {
-  head: "Change",
-  num: true,
-  cell: (r) => <Delta change={r.change} verdict={r.verdict} />,
-};
 
 export function Content({ watch }: { watch: Loaded<Watch> }) {
   const { feed, openLog, scope } = useDash();
@@ -31,7 +26,7 @@ export function Content({ watch }: { watch: Loaded<Watch> }) {
       cell: (r) => pct(r.entry),
       show: (rows) => rows.some((r) => r.entry != null),
     },
-    ...(cmp ? [change] : []),
+    ...(cmp ? [changeCol] : []),
   ];
   const eventCols: Col[] = [
     {
@@ -47,7 +42,7 @@ export function Content({ watch }: { watch: Loaded<Watch> }) {
     },
     { head: "Count", num: true, cell: (r) => num(r.value) },
     { head: "Visitors", num: true, cell: (r) => num(r.second) },
-    ...(cmp ? [change] : []),
+    ...(cmp ? [changeCol] : []),
   ];
   return (
     <>
