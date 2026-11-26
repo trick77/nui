@@ -149,7 +149,8 @@ func (c *Classifier) log() *slog.Logger {
 	return slog.Default()
 }
 
-// Enrich fills an event's network, country and first class, in the batch writer before the insert.
+// Enrich fills an event's network, country, first class and the bot list's name for it, in the batch writer before
+// the insert.
 func (c *Classifier) Enrich(e *store.Event) {
 	a, err := netip.ParseAddr(e.IP)
 	if err != nil {
@@ -188,6 +189,7 @@ func (c *Classifier) Enrich(e *store.Event) {
 	default:
 		e.Cls = k.cls
 	}
+	e.Svc = c.service(a, e.UA, e.Cls)
 }
 
 // instant is the class an event gets before the pass sees its actor: the bot list by address (authoritative lists
@@ -385,7 +387,7 @@ func (c *Classifier) passSite(ctx context.Context, s *sites.Site, after, upto, s
 		d := c.Decide(a, fd)
 		c.setRecheck(m, d.pending)
 		if err := c.DB.SetActorClass(ctx, store.ActorClass{SiteID: s.ID, IPKey: m.key, Day: m.day, Class: d.class,
-			Reasons: d.reasons, Rest: d.rest}, d.byUA); err != nil {
+			Reasons: d.reasons, Rest: d.rest, Name: c.name}, d.byUA); err != nil {
 			return nil, err
 		}
 		if m.day == today {

@@ -533,6 +533,231 @@ func TestRawWritesMarkAggDirty(t *testing.T) {
 	}
 }
 
+// A pass that changes only a name stamps it and marks the built day, in the class's transaction; a name never stays
+// on a class that takes none; the same pass again changes nothing.
+func TestSetActorClass_NameOnly(t *testing.T) {
+	st := open(t)
+	id := seed(t, st)
+	day := int64(20_000)
+	write(t, st, AggBuild{Site: id, Day: day, Builder: 1})
+	ev := func(ua string, cls int, svc string) Event {
+		return Event{SiteID: id, TS: day*dayMS + 5000, Source: "server", Kind: "request", IP: "192.0.2.1",
+			IPKey: "192.0.2.1", UA: ua, Cls: cls, Svc: svc}
+	}
+	if err := st.InsertEvents(t.Context(), []Event{ev("Ranged/1", ClsBot, ""), ev("Ranged/1", ClsBot, ""),
+		ev("Probe/1", ClsMonitor, ""), ev("curl/8", ClsUnknown, "Stale")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.Exec(`UPDATE agg_day SET dirty = 0`); err != nil {
+		t.Fatal(err)
+	}
+	version := func() int64 {
+		t.Helper()
+		days, err := st.AggDays(t.Context(), id, day, day)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return days[day].Version
+	}
+	byUA := map[string]string{"Probe/1": "monitor", "curl/8": "unknown"}
+	set := func(ranged string) {
+		t.Helper()
+		// Every class named by the rule: the store keeps a name off a class that takes none.
+		name := func(ip, ua string, _ int) string {
+			if ip != "192.0.2.1" {
+				t.Errorf("named by %s", ip)
+			}
+			return map[string]string{"Probe/1": "Probe", "Ranged/1": ranged, "curl/8": "Curl"}[ua]
+		}
+		if err := st.SetActorClass(t.Context(), ActorClass{SiteID: id, IPKey: "192.0.2.1", Day: day, Class: "bot",
+			Name: name}, byUA); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names := func() string {
+		t.Helper()
+		var got string
+		if err := st.DB.QueryRow(`SELECT group_concat(ua || '=' || svc, ',') FROM (SELECT ua, svc FROM event
+			ORDER BY ua, svc)`).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	v := version()
+	set("Ranged")
+	if got := names(); got != "Probe/1=Probe,Ranged/1=Ranged,Ranged/1=Ranged,curl/8=" {
+		t.Errorf("names = %s", got)
+	}
+	if got := version(); got != v+1 {
+		t.Errorf("names only: version %d, want %d", got, v+1)
+	}
+	set("Ranged")
+	if got := version(); got != v+1 {
+		t.Errorf("the same names again moved the version to %d", got)
+	}
+	set("Ranged-Images")
+	if got, n := names(), version(); got != "Probe/1=Probe,Ranged/1=Ranged-Images,Ranged/1=Ranged-Images,curl/8=" ||
+		n != v+2 {
+		t.Errorf("renamed: %s, version %d", got, n)
+	}
+	// Without a rule the class is stamped and the names stay.
+	if err := st.SetActorClass(t.Context(), ActorClass{SiteID: id, IPKey: "192.0.2.1", Day: day, Class: "bot"},
+		byUA); err != nil {
+		t.Fatal(err)
+	}
+	if got, n := names(), version(); got != "Probe/1=Probe,Ranged/1=Ranged-Images,Ranged/1=Ranged-Images,curl/8=" ||
+		n != v+2 {
+		t.Errorf("no rule: %s, version %d", got, n)
+	}
+}
+
+// svcRig is a built day, its version bumped once by each transaction that renames, its events named by their user
+// agents: "Crawler/7" is "Crawler".
+type svcRig struct {
+	st  *Store
+	id  int64
+	day int64
+}
+
+func newSvcRig(t *testing.T) svcRig {
+	t.Helper()
+	st := open(t)
+	r := svcRig{st: st, id: seed(t, st), day: 20_000}
+	write(t, st, AggBuild{Site: r.id, Day: r.day, Builder: 1})
+	return r
+}
+
+func (r svcRig) ev(i int, ip, ua string, cls int) Event {
+	return Event{SiteID: r.id, TS: r.day*dayMS + int64(i), Source: "server", Kind: "request", IP: ip, IPKey: ip,
+		UA: ua, Cls: cls}
+}
+
+func (r svcRig) version(t *testing.T) int64 {
+	t.Helper()
+	days, err := r.st.AggDays(t.Context(), r.id, r.day, r.day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return days[r.day].Version
+}
+
+// name runs NameSvcDay by the user agents' names, the renaming statements counted.
+func (r svcRig) name(t *testing.T) (n int64, renames int, err error) {
+	t.Helper()
+	byUA := func(_, ua string, _ int) string { return strings.SplitN(ua, "/", 2)[0] }
+	for _, q := range traced(t, r.st, func() { n, err = r.st.NameSvcDay(t.Context(), r.id, r.day, byUA) }) {
+		if strings.HasPrefix(q, "UPDATE event SET svc") {
+			renames++
+		}
+	}
+	return n, renames, err
+}
+
+// misnamed counts the events whose name is not their user agent's, none for a class that takes none.
+func (r svcRig) misnamed(t *testing.T) int {
+	t.Helper()
+	var wrong int
+	if err := r.st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE svc != CASE WHEN cls IN (2, 3)
+		THEN substr(ua, 1, instr(ua, '/') - 1) ELSE '' END`).Scan(&wrong); err != nil {
+		t.Fatal(err)
+	}
+	return wrong
+}
+
+// NameSvcDay renames a day's groups in batches: an actor's groups in one statement, svcScans statements to a
+// transaction, a group past the batch cut over two, one version bump each; a day named already changes nothing.
+func TestNameSvcDay_Batches(t *testing.T) {
+	r := newSvcRig(t)
+	actors := 4 * svcScans
+	var evs []Event
+	for i := range actors * 3 / 2 { // half the actors with two groups of one event, each taking the one name
+		evs = append(evs, r.ev(i, fmt.Sprintf("192.0.2.%d", i%actors), fmt.Sprintf("Crawler/%d", i), ClsBot))
+	}
+	for i := range svcBatch + 100 { // one group past a batch
+		evs = append(evs, r.ev(i, "198.51.100.1", "Big/1", ClsMonitor))
+	}
+	stray := r.ev(9, "203.0.113.1", "curl/8", ClsUnknown)
+	stray.Svc = "Stale"
+	evs = append(evs, stray)
+	if err := r.st.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	v := r.version(t)
+	n, renames, err := r.name(t)
+	if err != nil || n != int64(len(evs)) {
+		t.Fatalf("named %d of %d, %v", n, len(evs), err)
+	}
+	// One statement an actor, the big one's twice.
+	if want := actors + 2 + 1; renames != want {
+		t.Errorf("%d renaming statements, want %d", renames, want)
+	}
+	// The actors svcScans a transaction, then svcBatch of the big group's, then its rest and the stray name.
+	if got, want := r.version(t)-v, int64(actors/svcScans+2); got != want {
+		t.Errorf("%d transactions, want %d", got, want)
+	}
+	if wrong := r.misnamed(t); wrong != 0 {
+		t.Errorf("%d misnamed", wrong)
+	}
+	v = r.version(t)
+	if n, _, err := r.name(t); err != nil || n != 0 || r.version(t) != v {
+		t.Errorf("named again: %d, %v, version %d to %d", n, err, v, r.version(t))
+	}
+}
+
+// An actor's many groups take one statement per svcTuples of them, not one each: every statement reads the
+// actor's day.
+func TestNameSvcDay_OneActor(t *testing.T) {
+	r := newSvcRig(t)
+	var evs []Event
+	for i := range 2*svcTuples + 50 {
+		evs = append(evs, r.ev(i, "192.0.2.1", fmt.Sprintf("Rotating/%d", i), ClsBot))
+	}
+	if err := r.st.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	v := r.version(t)
+	n, renames, err := r.name(t)
+	if err != nil || n != int64(len(evs)) || renames != 3 {
+		t.Fatalf("named %d of %d in %d statements, %v", n, len(evs), renames, err)
+	}
+	if got := r.version(t) - v; got != 1 {
+		t.Errorf("%d transactions, want 1", got)
+	}
+	if wrong := r.misnamed(t); wrong != 0 {
+		t.Errorf("%d misnamed", wrong)
+	}
+}
+
+// A rename whose commit fails changed nothing, and says so.
+func TestNameSvcDay_CommitFails(t *testing.T) {
+	r := newSvcRig(t)
+	if err := r.st.InsertEvents(t.Context(), []Event{r.ev(1, "192.0.2.1", "Crawler/1", ClsBot),
+		r.ev(2, "192.0.2.2", "Crawler/2", ClsBot)}); err != nil {
+		t.Fatal(err)
+	}
+	// A deferred foreign key fails at the commit, after every statement went through.
+	var fk bool
+	if err := r.st.DB.QueryRow(`PRAGMA foreign_keys`).Scan(&fk); err != nil || !fk {
+		t.Fatalf("foreign keys %v, %v", fk, err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE held_parent (id INTEGER PRIMARY KEY)`,
+		`CREATE TABLE held (p INTEGER REFERENCES held_parent (id) DEFERRABLE INITIALLY DEFERRED)`,
+		`CREATE TRIGGER held AFTER UPDATE OF svc ON event BEGIN INSERT INTO held VALUES (1); END`,
+	} {
+		if _, err := r.st.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v := r.version(t)
+	if n, _, err := r.name(t); err == nil || n != 0 {
+		t.Errorf("a failed commit: %d, %v", n, err)
+	}
+	if wrong := r.misnamed(t); wrong != 2 || r.version(t) != v {
+		t.Errorf("%d unnamed of 2, version %d to %d", wrong, v, r.version(t))
+	}
+}
+
 // seedOld is seed on a database an old version left: 0001's columns, not SyncSites, whose statement names later ones.
 func seedOld(t *testing.T, db *sql.DB) int64 {
 	t.Helper()
@@ -584,8 +809,13 @@ func TestUpgrade_0002(t *testing.T) {
 	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event`).Scan(&events); err != nil || events != 50 {
 		t.Errorf("events after upgrade = %d, %v", events, err)
 	}
-	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 10 {
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrated); err != nil || migrated != 11 {
 		t.Errorf("migrations = %d, %v", migrated, err)
+	}
+	// The events from before take their names later (classify.NameRaw): none yet.
+	var named int
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE svc != ''`).Scan(&named); err != nil || named != 0 {
+		t.Errorf("named after upgrade = %d, %v", named, err)
 	}
 	// The site from before the upgrade has no order and no name, and takes them under its id.
 	sites, err := st.Sites(t.Context())

@@ -452,6 +452,33 @@ func TestGrowthStopsAtTheAnchor(t *testing.T) {
 	}
 }
 
+// Written into an empty database, the history is named already; into one with events, the server names those.
+func TestBackfill_Named(t *testing.T) {
+	w := testWorld(t, 0.02, "baseline")
+	st := testStore(t, w)
+	if _, err := Backfill(t.Context(), st, w, BackfillOptions{Days: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if named, err := st.SvcNamed(t.Context()); err != nil || !named {
+		t.Errorf("a fresh history not marked named: %v, %v", named, err)
+	}
+	st = testStore(t, w)
+	sites, err := st.Sites(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertEvents(t.Context(), []store.Event{{SiteID: sites[w.Sites[0].Domain].ID, TS: 1,
+		Source: "server", Kind: "request", IP: "192.0.2.1", IPKey: "192.0.2.1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Backfill(t.Context(), st, w, BackfillOptions{Days: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if named, err := st.SvcNamed(t.Context()); err != nil || named {
+		t.Errorf("a history beside older events marked named: %v, %v", named, err)
+	}
+}
+
 // A small scale is a handful of events, fast.
 func TestSmallScale(t *testing.T) {
 	start := time.Now()

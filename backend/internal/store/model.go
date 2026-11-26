@@ -72,7 +72,20 @@ type Event struct {
 	Err      string // why it failed when the status does not say, as the product names it
 	Unrouted bool   // the product's router matched nothing: the template is the path's
 	Cls      int
-	Props    string
+	// Svc is the bot list's name of a bot's or a probe's client (cls 2 or 3): its agent's, else its service's; ""
+	// on every other class.
+	Svc   string
+	Props string
+}
+
+// SvcGroup is a site-day's events of one address, client, class and name (event.svc): what the naming reads and
+// renames (SetActorClass, NameSvcDay).
+//
+// Table: event
+type SvcGroup struct {
+	IPKey, IP, UA string
+	Cls           int
+	Svc           string
 }
 
 // rowOverhead approximates what a row takes beyond its text: the integer columns, the record header and the two
@@ -84,7 +97,7 @@ const rowOverhead = 96
 func (e *Event) Size() int {
 	return rowOverhead + len(e.Source) + len(e.Kind) + len(e.Name) + len(e.Visitor) + len(e.SID) + len(e.IP) +
 		2*len(e.IPKey) + len(e.UA) + len(e.Path) + len(e.Template) + len(e.URL) + len(e.Ref) + len(e.RefHost) +
-		len(e.Method) + len(e.Country) + len(e.Account) + len(e.Op) + len(e.Err) + len(e.Props)
+		len(e.Method) + len(e.Country) + len(e.Account) + len(e.Op) + len(e.Err) + len(e.Svc) + len(e.Props)
 }
 
 // IngestStat is one site's collector counters for one hour.
@@ -114,7 +127,14 @@ type ActorClass struct {
 	// events written as an API client's keep that: nobody weighed their client against the account; and with people's
 	// as the rest, a program's (no "Mozilla/" user agent) written as unknown. No column.
 	Rest string
+	// Name names the actor-day's events once their classes are stamped (event.svc), per address, client and class as
+	// the write does: the clients nobody weighed too. nil names nothing. No column.
+	Name SvcNamer
 }
+
+// SvcNamer is the bot list's name (event.svc) of a client's events by their address, user agent and class: one rule
+// (classify's) for the write, the pass and the days stored before. "" for a class that takes none.
+type SvcNamer func(ip, ua string, cls int) string
 
 // Briefing is the model's cached briefing for a site and range.
 //
@@ -247,7 +267,8 @@ type AggCarried struct {
 	Carried int64
 }
 
-// AggMeta is one marker of the background jobs: raw_purge_armed_at, the first start of the release that purges raw.
+// AggMeta is one marker of the background jobs: raw_purge_armed_at, the first start of the release that purges raw;
+// svc_named, when the events written before event.svc were named.
 //
 // Table: agg_meta
 type AggMeta struct {

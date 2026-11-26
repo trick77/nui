@@ -207,6 +207,14 @@ func Backfill(ctx context.Context, st *store.Store, w *World, o BackfillOptions)
 	if err != nil {
 		return b.stats, err
 	}
+	// A history written into an empty database carries its names, the writer's and the pass's, by the world's bot
+	// list: the server's naming of the stored events (classify.NameRaw) would walk every day again, and with the
+	// downloaded list (-demo with the refresh on) strip the world's bots of theirs. One into a database with events
+	// leaves it to that naming: those may predate the names.
+	var fresh bool
+	if err := st.DB.QueryRowContext(ctx, `SELECT NOT EXISTS (SELECT 1 FROM event)`).Scan(&fresh); err != nil {
+		return b.stats, err
+	}
 	defer func() {
 		// A write the writer gave up on is only counted: a history with a hole is no fixture.
 		after, derr := dropped()
@@ -232,6 +240,11 @@ func Backfill(ctx context.Context, st *store.Store, w *World, o BackfillOptions)
 		}
 		b.log.Info("Simulated day written", "day", t.Format(time.DateOnly), "events", b.stats.Events)
 		t = next
+	}
+	if fresh {
+		if err := st.MarkSvcNamed(ctx, time.Now()); err != nil {
+			return b.stats, err
+		}
 	}
 	b.stats.Elapsed = time.Since(start)
 	return b.stats, nil

@@ -293,6 +293,8 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 		})
 	}
 	afterRef(cls.Run)
+	// The events stored before they carried the bot list's names: named once by the classifier's rule, beside its pass.
+	afterRef(cls.RunNames)
 	// The aggregate job backfills every day with raw after an upgrade, then builds each day as it falls due. It waits
 	// for the reference data as the classifier does: the start's own reads first.
 	aggOpts := agg.Options{Months: cfg.RetentionMonths, Report: board}

@@ -44,11 +44,12 @@ const (
 	JobPurge     = "purge"     // the raw purge
 	JobRefdata   = "refdata"   // the reference data refresh
 	JobClassify  = "classify"  // the classifier's pass
+	JobNames     = "names"     // the bot list's names stamped on the events stored before they carried them
 	JobWriter    = "writer"    // the event writer
 )
 
 // Jobs are the job names, in a fixed order.
-var Jobs = []string{JobAgg, JobRetention, JobPurge, JobRefdata, JobClassify, JobWriter}
+var Jobs = []string{JobAgg, JobRetention, JobPurge, JobRefdata, JobClassify, JobNames, JobWriter}
 
 // The instance's own condition kinds the jobs report (their catalogue ids).
 const (

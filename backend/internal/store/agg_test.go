@@ -312,9 +312,19 @@ func TestAggPlans(t *testing.T) {
 		if err := st.InsertEvents(ctx, []Event{ev(day)}); err != nil {
 			t.Fatal(err)
 		}
-		if err := st.SetActorClass(ctx, ActorClass{SiteID: id, IPKey: "192.0.2.1", Day: day, Class: "bot"},
-			map[string]string{"a": "bot"}); err != nil {
+		if err := st.SetActorClass(ctx, ActorClass{SiteID: id, IPKey: "192.0.2.1", Day: day, Class: "bot",
+			Name: func(string, string, int) string { return "A" }}, map[string]string{"a": "bot"}); err != nil {
 			t.Fatal(err)
+		}
+		if n, err := st.NameSvcDay(ctx, id, day, func(string, string, int) string { return "C" }); err != nil ||
+			n != 2 {
+			t.Fatalf("renamed %d, %v", n, err)
+		}
+		if err := st.MarkSvcNamed(ctx, now); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := st.SvcNamed(ctx); err != nil || !ok {
+			t.Fatalf("named %v, %v", ok, err)
 		}
 		if _, _, err := st.OldestEventDay(ctx, id); err != nil {
 			t.Fatal(err)
@@ -375,6 +385,10 @@ func TestAggPlans(t *testing.T) {
 		"UPDATE agg_day SET dirty = 3",                                   // the write's mark
 		"UPDATE agg_day SET dirty = 0 WHERE site_id = 1 AND day >=",      // ClearAggDirtyBefore
 		"UPDATE event SET cls",                                           // SetActorClass
+		"ip_key = '192.0.2.1' AND (cls IN (2, 3) OR svc != '')",          // its names' read
+		"UPDATE event SET svc = 'A' WHERE site_id = 1 AND ip_key =",      // its names
+		"SELECT ip_key, ip, ua, cls, svc FROM event",                     // NameSvcDay's read
+		"UPDATE event SET svc = 'C' WHERE id IN",                         // its rename
 		"DELETE FROM agg_addr WHERE site_id = 1 AND (day, ip_key, part)", // age retention
 		"DELETE FROM agg_addr WHERE site_id = 1 AND day =",               // a chunk of a day: write, cap
 		"DELETE FROM agg_list WHERE", "DELETE FROM agg_hour WHERE", "SELECT MIN(day) FROM agg_addr",

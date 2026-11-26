@@ -188,7 +188,7 @@ Checks:
 
 Go types:
 
-- `store.AggMeta` (internal/store): AggMeta is one marker of the background jobs: raw_purge_armed_at, the first start of the release that purges raw.
+- `store.AggMeta` (internal/store): AggMeta is one marker of the background jobs: raw_purge_armed_at, the first start of the release that purges raw; svc_named, when the events written before event.svc were named.
 
 | Column | Type | Null | Default | PK |
 | --- | --- | --- | --- | --- |
@@ -278,6 +278,7 @@ Go types:
 - `classify.uaDay` (internal/classify): uaDay is one user agent's part of an actor's day, sums over its events: the pass weighs every client of a shared address on its own.
 - `dash.actor` (internal/dash): actor is one address key's events summed over a range.
 - `store.Event` (internal/store): Event is one row the batch writer inserts: a browser event or a server request.
+- `store.SvcGroup` (internal/store): SvcGroup is a site-day's events of one address, client, class and name (event.svc): what the naming reads and renames (SetActorClass, NameSvcDay).
 
 | Column | Type | Null | Default | PK |
 | --- | --- | --- | --- | --- |
@@ -308,6 +309,7 @@ Go types:
 | `op` | TEXT | no | `''` |  |
 | `err` | TEXT | no | `''` |  |
 | `unrouted` | INTEGER | no | `0` |  |
+| `svc` | TEXT | no | `''` |  |
 
 Foreign keys:
 
@@ -680,6 +682,7 @@ erDiagram
         TEXT op
         TEXT err
         INTEGER unrouted
+        TEXT svc
     }
     ingest_stat {
         INTEGER site_id PK

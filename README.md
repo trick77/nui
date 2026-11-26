@@ -306,7 +306,7 @@ jobs failing, a figure leaving its usual level. The dashboard lists them (`GET /
 | `trend.visitors`, `trend.calls`, `trend.failed`, `trend.auto_share` | `min` (20 visitors, 100 calls, 100 calls in both periods; none for `auto_share`), `change` (20 %, 20 %, 5 pp, 5 pp), `direction` (`up`, `down`, `both`) |
 | `source.silent` | `after` (required), `source` (`browser`, `server`; both) |
 | `collector.refused`, `collector.dropped`, `collector.unknown_domain` | `min` (1), `window` (`1h`, counted by the whole hour) |
-| `job.failed` | `jobs`: `agg`, `retention`, `purge`, `refdata`, `classify`, `writer` (all) |
+| `job.failed` | `jobs`: `agg`, `retention`, `purge`, `refdata`, `classify`, `names`, `writer` (all) |
 | `db.size_cap`, `llm.budget` | none |
 | `level.requests`, `level.visitors`, `level.failed` (% of an API's calls), `level.p95` (an API's ms) | `window` (required, at most `24h`) and one or more of `min`, `max`, `factor`, `drop` (%), all of them together: `factor` or `drop`, never both, and `min` not above `max` (a file asking either is a fault); `baseline` (`days`: the 7 days before, `weekday`: that weekday of the 4 weeks before), `floor` (20), `calls` (100, `level.failed` only) |
 | `level.errors` (% of the visitors who had a script error) | `window` (required, at most `24h`), `min` (required; above 0, at most 100), `factor`, `baseline` (as above, `days`), `visitors` affected at least (3), `origins` as in `error.new` (all but `extension`) |

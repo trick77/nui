@@ -7,8 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/trick77/ship/kit/run"
 )
 
 // SyncSites makes the site table match the configured sites: new domains are inserted, known ones updated and
@@ -61,7 +65,7 @@ func (s *Store) Sites(ctx context.Context) (map[string]Site, error) {
 }
 
 const eventColumns = `site_id, ts, source, kind, name, visitor, sid, ip, ip_key, ua, path, template, url, ref,
-	ref_host, method, status, dur_ms, asn, country, account, op, err, unrouted, cls, props`
+	ref_host, method, status, dur_ms, asn, country, account, op, err, unrouted, cls, svc, props`
 
 // InsertEvents writes one batch in one transaction: the batch writer's only statement.
 func (s *Store) InsertEvents(ctx context.Context, events []Event) error {
@@ -74,7 +78,7 @@ func (s *Store) InsertEvents(ctx context.Context, events []Event) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO event (`+eventColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -87,7 +91,7 @@ func (s *Store) InsertEvents(ctx context.Context, events []Event) error {
 		}
 		if _, err := stmt.ExecContext(ctx, e.SiteID, e.TS, e.Source, e.Kind, e.Name, e.Visitor, e.SID, e.IP,
 			e.IPKey, e.UA, e.Path, e.Template, e.URL, e.Ref, e.RefHost, e.Method, e.Status, e.DurMS, e.ASN,
-			e.Country, e.Account, e.Op, e.Err, e.Unrouted, e.Cls, props); err != nil {
+			e.Country, e.Account, e.Op, e.Err, e.Unrouted, e.Cls, e.Svc, props); err != nil {
 			return err
 		}
 		days[[2]int64{e.SiteID, e.TS / dayMS}] = true
@@ -161,8 +165,9 @@ func (s *Store) ActorClasses(ctx context.Context, siteID, day int64) (map[string
 	return out, rows.Err()
 }
 
-// SetActorClass stores an actor-day's class and stamps it on that actor-day's events, in one short transaction.
-// byUA are the user agents whose events get a class of their own (a curl request behind an address of people).
+// SetActorClass stores an actor-day's class and stamps it on that actor-day's events, their names after it (a.Name,
+// nameActor), in one short transaction. byUA are the user agents whose events get a class of their own (a curl request
+// behind an address of people).
 func (s *Store) SetActorClass(ctx context.Context, a ActorClass, byUA map[string]string) error {
 	reasons, err := json.Marshal(nonNil(a.Reasons))
 	if err != nil {
@@ -208,6 +213,13 @@ func (s *Store) SetActorClass(ctx context.Context, a ActorClass, byUA map[string
 		n, _ := res.RowsAffected()
 		changed += n
 	}
+	if a.Name != nil {
+		n, err := nameActor(ctx, tx, a)
+		if err != nil {
+			return err
+		}
+		changed += n
+	}
 	// Most passes restamp nothing: the day's aggregates stand then.
 	if changed > 0 {
 		if err := markAggDirty(ctx, tx, a.SiteID, a.Day); err != nil {
@@ -215,6 +227,194 @@ func (s *Store) SetActorClass(ctx context.Context, a ActorClass, byUA map[string
 		}
 	}
 	return tx.Commit()
+}
+
+// svcFor is the name a group's events take: name's for a bot's or a probe's (ClsBot, ClsMonitor), none for any other
+// class.
+func svcFor(name SvcNamer, g SvcGroup) string {
+	if g.Cls != ClsBot && g.Cls != ClsMonitor {
+		return ""
+	}
+	return name(g.IP, g.UA, g.Cls)
+}
+
+// svcGroups reads a site-day's events that hold a name or may take one (a bot's, a probe's), grouped, the one actor's
+// of ipKey when given: one statement over the day, read whole before any write.
+func svcGroups(ctx context.Context, q Queryer, siteID, day int64, ipKey ...string) ([]SvcGroup, error) {
+	actor, args := "", []any{siteID, day * dayMS, (day + 1) * dayMS}
+	if len(ipKey) > 0 {
+		actor, args = "AND ip_key = ?", append(args, ipKey[0])
+	}
+	rows, err := q.QueryContext(ctx, `SELECT ip_key, ip, ua, cls, svc FROM event WHERE site_id = ? AND ts >= ? AND ts < ?
+		`+actor+` AND (cls IN (2, 3) OR svc != '') GROUP BY ip_key, ip, ua, cls, svc`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []SvcGroup
+	for rows.Next() {
+		var g SvcGroup
+		if err := rows.Scan(&g.IPKey, &g.IP, &g.UA, &g.Cls, &g.Svc); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// svcTuples is the groups one renaming statement names, four values bound each.
+const svcTuples = 200
+
+// svcIn is the condition on n groups' events: their address, client, class and name, four values bound each.
+func svcIn(n int) string {
+	row := "(" + placeholders(4) + ")"
+	return "(ip, ua, cls, svc) IN (VALUES " + strings.TrimSuffix(strings.Repeat(row+", ", n), ", ") + ")"
+}
+
+// svcRename is groups of one actor-day that take one name, svcTuples at most: one statement's, which reads the
+// actor-day once.
+type svcRename struct {
+	ipKey, to string
+	keys      []any // each group's ip, ua, cls, svc
+}
+
+// svcRenames are the statements that give groups the names name gives them: an actor's groups taking one name
+// together, svcTuples a statement, those named so already left out.
+func svcRenames(name SvcNamer, groups []SvcGroup) []svcRename {
+	type rename struct {
+		SvcGroup
+		to string
+	}
+	var rs []rename
+	for _, g := range groups {
+		if to := svcFor(name, g); to != g.Svc {
+			rs = append(rs, rename{g, to})
+		}
+	}
+	slices.SortStableFunc(rs, func(a, b rename) int {
+		return cmp.Or(strings.Compare(a.IPKey, b.IPKey), strings.Compare(a.to, b.to))
+	})
+	var todo []svcRename
+	for _, r := range rs {
+		k := len(todo) - 1
+		if k < 0 || todo[k].ipKey != r.IPKey || todo[k].to != r.to || len(todo[k].keys) == 4*svcTuples {
+			todo, k = append(todo, svcRename{ipKey: r.IPKey, to: r.to}), k+1
+		}
+		todo[k].keys = append(todo[k].keys, r.IP, r.UA, r.Cls, r.Svc)
+	}
+	return todo
+}
+
+// nameActor names an actor-day's events by a.Name once their classes are stamped (SetActorClass), per address, client
+// and class: one read of the actor-day, then a statement per name given (svcTuples groups each), on the rows whose
+// name differs only. A pass that names nothing new changes nothing.
+func nameActor(ctx context.Context, tx *sql.Tx, a ActorClass) (int64, error) {
+	groups, err := svcGroups(ctx, tx, a.SiteID, a.Day, a.IPKey)
+	if err != nil {
+		return 0, err
+	}
+	from := a.Day * dayMS
+	var changed int64
+	for _, r := range svcRenames(a.Name, groups) {
+		//nolint:gosec // only placeholders are spliced in; values are bound
+		res, err := tx.ExecContext(ctx, `UPDATE event SET svc = ? WHERE site_id = ? AND ip_key = ? AND ts >= ?
+			AND ts < ? AND `+svcIn(len(r.keys)/4),
+			slices.Concat([]any{r.to, a.SiteID, a.IPKey, from, from + dayMS}, r.keys)...)
+		if err != nil {
+			return 0, err
+		}
+		k, _ := res.RowsAffected()
+		changed += k
+	}
+	return changed, nil
+}
+
+// svcBatch and svcScans bound one of NameSvcDay's transactions: the events it changes and its statements, each a read
+// of an actor-day (one whose groups were restamped meanwhile changes none, but reads all the same).
+const (
+	svcBatch = 500
+	svcScans = 50
+)
+
+// NameSvcDay gives a site-day's events the names name gives them by their address, client and class, and takes the
+// name off any other class's: one read of the day, then a statement per actor and name (svcRenames) in batches,
+// svcBatch events and svcScans statements a transaction at most with one dirty mark each, the writer's turn at the
+// lock between two. Only events still as read: a pass that restamped one meanwhile has named it by the same rule. It
+// returns the events changed: none on a day named already.
+func (s *Store) NameSvcDay(ctx context.Context, siteID, day int64, name SvcNamer) (int64, error) {
+	groups, err := svcGroups(ctx, s.DB, siteID, day)
+	if err != nil {
+		return 0, err
+	}
+	todo := svcRenames(name, groups)
+	var total int64
+	for i := 0; len(todo) > 0; i++ {
+		if i > 0 && !run.Sleep(ctx, retentionYield) {
+			return total, ctx.Err()
+		}
+		n, done, err := s.renameBatch(ctx, siteID, day, todo)
+		if err != nil {
+			return total, err
+		}
+		total += n
+		todo = todo[done:]
+	}
+	return total, nil
+}
+
+// renameBatch runs the first of todo in one transaction, svcScans statements and svcBatch events at most: it returns
+// the events changed and the statements done, none of either when the commit fails. A statement cut short goes on in
+// the next: the events it renamed are no longer as read.
+func (s *Store) renameBatch(ctx context.Context, siteID, day int64, todo []svcRename) (int64, int, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var changed int64
+	done := 0
+	for _, r := range todo[:min(len(todo), svcScans)] {
+		budget := svcBatch - changed
+		//nolint:gosec // only placeholders are spliced in; values are bound
+		res, err := tx.ExecContext(ctx, `UPDATE event SET svc = ? WHERE id IN (SELECT id FROM event WHERE site_id = ?
+			AND ip_key = ? AND ts >= ? AND ts < ? AND `+svcIn(len(r.keys)/4)+` LIMIT ?)`,
+			slices.Concat([]any{r.to, siteID, r.ipKey, day * dayMS, (day + 1) * dayMS}, r.keys, []any{budget})...)
+		if err != nil {
+			return 0, 0, err
+		}
+		n, _ := res.RowsAffected()
+		changed += n
+		if n == budget {
+			break
+		}
+		done++
+	}
+	if changed > 0 {
+		if err := markAggDirty(ctx, tx, siteID, day); err != nil {
+			return 0, 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return changed, done, nil
+}
+
+// metaSvcNamed is agg_meta's key for when the events written before event.svc were named, unix ms.
+const metaSvcNamed = "svc_named"
+
+// SvcNamed reports whether the events written before event.svc are named (MarkSvcNamed).
+func (s *Store) SvcNamed(ctx context.Context) (bool, error) {
+	var ok bool
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM agg_meta WHERE key = ?)`, metaSvcNamed).Scan(&ok)
+	return ok, err
+}
+
+// MarkSvcNamed records that the events written before event.svc are named: a restart names them no more.
+func (s *Store) MarkSvcNamed(ctx context.Context, now time.Time) error {
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO agg_meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING`,
+		metaSvcNamed, strconv.FormatInt(now.UnixMilli(), 10))
+	return err
 }
 
 const dayMS = int64(24 * time.Hour / time.Millisecond)

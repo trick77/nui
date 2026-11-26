@@ -17,7 +17,8 @@ import (
 )
 
 const crawlers = `{"services":{
- "Googlebot":{"ipv4":["66.249.64.0/19"],"ip_list_authoritative":true,"user_agent_patterns":["*Googlebot*"]},
+ "Googlebot":{"ipv4":["66.249.64.0/19"],"ip_list_authoritative":true,"user_agent_patterns":["*Googlebot*"],
+   "agents":[{"name":"Googlebot-Image","pattern":"*Googlebot-Image*","purpose":"search"}]},
  "Bingbot":{"ipv4":["157.55.39.0/24"],"ip_list_authoritative":false,"user_agent_patterns":["*bingbot*"],
    "rdns_patterns":["*.search.msn.com"]},
  "UAOnly":{"user_agent_patterns":["*SomeCrawler*"]}}}`
@@ -197,6 +198,20 @@ func TestPass(t *testing.T) {
 	}
 	if len(r.c.recheck) != 0 {
 		t.Errorf("rechecks left: %v", r.c.recheck)
+	}
+	// A known bot's and probe's events carry the list's name, a refuted claim's and everyone else's none.
+	names := eventNames(t, r.st)
+	for key, want := range map[string]string{"66.249.66.1": "Googlebot", "157.55.39.1": "Bingbot",
+		"157.55.39.4": "Bingbot", "69.162.124.230": "UptimeRobot", "198.51.100.20": "UAOnly"} {
+		if names[key] != want {
+			t.Errorf("%s named %q, want %q", key, names[key], want)
+		}
+		delete(names, key)
+	}
+	for key, n := range names {
+		if n != "" {
+			t.Errorf("%s named %q", key, n)
+		}
 	}
 	// The pass stamped the events, and new events of a known actor get the class at once.
 	var pending int
@@ -1189,19 +1204,22 @@ func TestInstant(t *testing.T) {
 	for _, tt := range []struct {
 		ip, ua string
 		want   int
+		svc    string
 	}{
-		{"66.249.66.1", browserUA, store.ClsBot},
-		{"69.162.124.230", "x", store.ClsMonitor},
-		{"157.55.39.2", browserUA, store.ClsPending}, // non-authoritative: the pass decides
-		{"192.0.2.1", "SomeCrawler/2", store.ClsBot},
-		{"192.0.2.1", "python-requests/2.32", store.ClsUnknown},
-		{"192.0.2.1", "", store.ClsUnknown},
-		{"192.0.2.1", browserUA, store.ClsPending},
+		{"66.249.66.1", browserUA, store.ClsBot, "Googlebot"},
+		{"66.249.66.1", "Mozilla/5.0 (compatible; Googlebot-Image/1.0)", store.ClsBot, "Googlebot-Image"},
+		{"69.162.124.230", "x", store.ClsMonitor, "UptimeRobot"},
+		{"157.55.39.2", browserUA, store.ClsPending, ""}, // non-authoritative: the pass decides
+		{"157.55.39.2", "Mozilla/5.0 (compatible; bingbot/2.0)", store.ClsUnknown, ""},
+		{"192.0.2.1", "SomeCrawler/2", store.ClsBot, "UAOnly"},
+		{"192.0.2.1", "python-requests/2.32", store.ClsUnknown, ""},
+		{"192.0.2.1", "", store.ClsUnknown, ""},
+		{"192.0.2.1", browserUA, store.ClsPending, ""},
 	} {
 		e := store.Event{IP: tt.ip, UA: tt.ua, IPKey: tt.ip}
 		r.c.Enrich(&e)
-		if e.Cls != tt.want {
-			t.Errorf("%s %q = %d, want %d", tt.ip, tt.ua, e.Cls, tt.want)
+		if e.Cls != tt.want || e.Svc != tt.svc {
+			t.Errorf("%s %q = %d %q, want %d %q", tt.ip, tt.ua, e.Cls, e.Svc, tt.want, tt.svc)
 		}
 	}
 	// A beacon from a browser shows a person at once, unless the browser is scripted or a list names the client.

@@ -288,7 +288,7 @@ func (e *Engine) instance(ctx context.Context, now time.Time, r alert.Rule) ([]a
 // jobNames are the jobs as a message names them.
 var jobNames = map[string]string{alert.JobAgg: "aggregate build", alert.JobRetention: "retention",
 	alert.JobPurge: "raw purge", alert.JobRefdata: "reference data refresh", alert.JobClassify: "classifier",
-	alert.JobWriter: "event writer"}
+	alert.JobNames: "naming of the stored events", alert.JobWriter: "event writer"}
 
 func conditionOccurrence(c alert.Condition) alert.Occurrence {
 	o := alert.Occurrence{Key: c.Key, Detail: alert.Line(alert.Scrub(c.Text), 300),
