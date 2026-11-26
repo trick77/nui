@@ -206,6 +206,9 @@ otherwise, the limits are:
 | `url`, `ref`, `src`, `href` values; an event's `url` | 2048 bytes |
 | Every other string, `title`, `n`, `vid`, `sid` | 512 bytes |
 | An event's `p` | 4 KiB as sent; maps 64 keys of at most 64 bytes, arrays 50 items, 8 levels |
+| A `vital`'s `p` (a field may be left out or null, `name` only without `value` and `v`) | `name` TTFB, FCP, LCP, INP or CLS; `value` a number 0-10^12; `v` a whole number 1-255 |
+| An `engagement`'s `p` (a field may be left out or null) | `ms` a whole number within ±10^15; `scroll` a number 0-100 |
+| Either `p`'s keys | none of the above in another case (`Value`, `MS`) |
 | `ctx` without `url` and `ref`, as stored | 4 KiB |
 | An event's own row, as stored | 16 KiB (the batch's context and headers aside) |
 | A batch's rows, as stored | 64 KiB |

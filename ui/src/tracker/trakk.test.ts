@@ -3036,6 +3036,49 @@ function overLimit(key: string, v: unknown, depth: number): string | null {
   }
   return null;
 }
+// A vital's and an engagement's fields (checkKind): left out or null pass, but
+// a vital's value or v needs its name; a field's key in another case is
+// refused (Go's EqualFold: "ſ" is an "s" too).
+const VITAL_NAMES = new Set(["TTFB", "FCP", "LCP", "INP", "CLS"]);
+function kindProblems(k: string, p: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const fields =
+    k === "vital"
+      ? ["name", "value", "v"]
+      : k === "engagement"
+        ? ["ms", "scroll"]
+        : [];
+  for (const key of Object.keys(p)) {
+    const f = key.replace(/ſ/g, "s").toLowerCase();
+    if (key !== f && fields.includes(f)) out.push(k + "." + key);
+  }
+  const num = (f: string, lo: number, hi: number, whole = false) => {
+    const v = p[f];
+    if (
+      v != null &&
+      (typeof v !== "number" ||
+        v < lo ||
+        v > hi ||
+        (whole && !Number.isInteger(v)))
+    )
+      out.push(k + "." + f);
+  };
+  if (k === "vital") {
+    const n = p.name;
+    if (
+      n != null
+        ? typeof n !== "string" || !VITAL_NAMES.has(n)
+        : p.value != null || p.v != null
+    )
+      out.push("vital.name");
+    num("value", 0, 1e12);
+    num("v", 1, 255, true);
+  } else if (k === "engagement") {
+    num("ms", -1e15, 1e15, true);
+    num("scroll", 0, 100);
+  }
+  return out;
+}
 // Go's url.Parse refuses a bad escape in the path or the fragment.
 const badEscape = (u: string) =>
   /%(?![0-9a-f]{2})/i.test(u.replace(/\?[^#]*/, ""));
@@ -3058,6 +3101,7 @@ function batchProblems(raw: string): string[] {
     if (bytes(JSON.stringify(e.p)) > 4096) out.push(e.k + ".p size");
     const p = overLimit("p", e.p, 0);
     if (p) out.push(e.k + "." + p);
+    if (e.p) out.push(...kindProblems(e.k, e.p));
   }
   // The context as stored, without the URL and referrer (own columns).
   const ctx = Object.fromEntries(
@@ -3544,6 +3588,92 @@ describe("collector limits", () => {
     expect(bytes(form.p.action as string)).toBeLessThanOrEqual(512);
     expect(JSON.parse(raws[0]).vid).toMatch(/^[0-9a-f]{32}$/);
     expect(JSON.parse(raws[0]).sid).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it("never builds a vital or an engagement the collector refuses", async () => {
+    const po = observers();
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    boot();
+    po.emit("paint", [{ ...FCP, startTime: 300.1234 }]);
+    po.emit("largest-contentful-paint", [{ startTime: 1234.5678 }]);
+    po.emit("layout-shift", [shift(400, 0.0123), shift(500, 0.2)]);
+    po.emit("event", [{ startTime: 900, interactionId: 7, duration: 56.5 }]);
+    document.dispatchEvent(new Event("pointerdown"));
+    vi.advanceTimersByTime(1500);
+    hide();
+    // Shown again, then the wall clock set back while the page is active: a
+    // negative time.
+    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("keydown"));
+    vi.setSystemTime(Date.now() - 60_000);
+    hide();
+    await vi.advanceTimersByTimeAsync(LIMITS.flushAfterMs);
+    const raws = fetchMock.mock.calls.map(
+      (c) => (c[1] as RequestInit).body as string,
+    );
+    const sent = raws.flatMap((r) => JSON.parse(r).events as Body["events"]);
+    expect(
+      new Set(sent.filter((e) => e.k === "vital").map((e) => e.p.name)),
+    ).toEqual(new Set(["FCP", "LCP", "INP", "CLS"]));
+    const ms = sent.filter((e) => e.k === "engagement").map((e) => e.p.ms);
+    expect(ms).toHaveLength(2);
+    expect(ms[1]).toBeLessThan(0);
+    for (const r of raws) expect(batchProblems(r)).toEqual([]);
+  });
+
+  it("knows the shapes the collector refuses for a vital or an engagement", () => {
+    const body = (k: string, p: unknown) =>
+      JSON.stringify({
+        v: 1,
+        site: location.hostname,
+        vid: "",
+        sid: "",
+        ctx: { url: location.href },
+        events: [{ k, p }],
+      });
+    for (const [k, p] of [
+      ["vital", { name: "LCP", value: 1.5, v: 2 }],
+      ["vital", { name: null, value: null, v: null }],
+      ["vital", { dropped: true }],
+      ["engagement", { ms: -30, scroll: 12.5, inputs: {} }],
+      ["engagement", { ms: null, scroll: null }],
+      ["engagement", { dropped: true }],
+      ["vital", { name: "LCP", value: 1e12 }],
+      ["engagement", { ms: 1e15, scroll: 100 }],
+      ["engagement", { ms: -1e15 }],
+      // Script hosts are values, never keys beside ms.
+      [
+        "engagement",
+        { ms: 1, scripts: ["MS", "Scroll"], inputs: { Scroll: 1 } },
+      ],
+    ] as const)
+      expect(batchProblems(body(k, p))).toEqual([]);
+    for (const [k, p, want] of [
+      ["vital", { name: "FID", value: 1 }, "vital.name"],
+      ["vital", { name: 1, value: 1 }, "vital.name"],
+      ["vital", { value: 1 }, "vital.name"],
+      ["vital", { v: 2 }, "vital.name"],
+      ["vital", { name: null, value: 1 }, "vital.name"],
+      ["vital", { name: "LCP", value: 1, VALUE: "x" }, "vital.VALUE"],
+      ["vital", { name: "LCP", value: -1 }, "vital.value"],
+      ["vital", { name: "LCP", value: 1e12 + 1 }, "vital.value"],
+      ["vital", { name: "LCP", value: 1e308 }, "vital.value"],
+      ["vital", { name: "LCP", value: "1" }, "vital.value"],
+      ["vital", { name: "LCP", value: 1, v: 0 }, "vital.v"],
+      ["vital", { name: "LCP", value: 1, v: 256 }, "vital.v"],
+      ["vital", { name: "LCP", value: 1, v: 2.5 }, "vital.v"],
+      ["vital", { name: "LCP", value: 1, v: "2" }, "vital.v"],
+      ["engagement", { ms: 1.5 }, "engagement.ms"],
+      ["engagement", { ms: "10" }, "engagement.ms"],
+      ["engagement", { ms: 10, scroll: -1 }, "engagement.scroll"],
+      ["engagement", { ms: 1e15 + 1 }, "engagement.ms"],
+      ["engagement", { ms: -1e15 - 1 }, "engagement.ms"],
+      ["engagement", { ms: 9e18 }, "engagement.ms"],
+      ["engagement", { ms: 10, scroll: 100.5 }, "engagement.scroll"],
+      ["engagement", { MS: 1.5 }, "engagement.MS"],
+      ["engagement", { ms: 10, ſcroll: -1 }, "engagement.ſcroll"],
+    ] as const)
+      expect(batchProblems(body(k, p))).toEqual([want]);
   });
 });
 

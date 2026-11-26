@@ -257,6 +257,98 @@ func TestBrowser_Hostile(t *testing.T) {
 	}
 }
 
+// A vital's and an engagement's fields in a shape no script sent refuse the batch, as does a field's key in another
+// case; left out, null or the props' dropped placeholder pass, as does any other key.
+func TestBrowser_KindFields(t *testing.T) {
+	r := newRig(t, 0, true)
+	site := r.siteID(domain)
+	accepted, refused := 0, 0
+	for i, tt := range []struct {
+		kind, p string
+		ok      bool
+	}{
+		{"vital", `{"name":"LCP","value":1234.5,"v":2}`, true},
+		{"vital", `{"name":"CLS","value":0}`, true},
+		{"vital", `{"name":"TTFB","value":80,"v":1}`, true},
+		{"vital", `{"name":"INP","value":40,"v":255}`, true},
+		{"vital", `{"name":"FCP","value":null,"v":null}`, true},
+		{"vital", `{"name":null}`, true},
+		{"vital", `{}`, true},
+		{"vital", `{"dropped":true}`, true},
+		{"vital", `null`, true},
+		{"vital", `{"name":"LCP","value":1,"v":2,"other":"x"}`, true},
+		{"vital", `{"name":"LCP","value":1e12}`, true},
+		{"vital", `{"name":"LCP","value":1000000000001}`, false},
+		{"vital", `{"name":"LCP","value":1e308}`, false},
+		{"vital", `{"value":1}`, false},
+		{"vital", `{"v":2}`, false},
+		{"vital", `{"name":null,"value":1,"v":2}`, false},
+		{"vital", `{"name":"LCP","value":1,"VALUE":"x"}`, false},
+		{"vital", `{"Name":"x","value":1}`, false},
+		{"vital", `{"name":"LCP","V":"x"}`, false},
+		{"vital", `{"name":"FID","value":1}`, false},
+		{"vital", `{"name":"lcp","value":1}`, false},
+		{"vital", `{"name":1,"value":1}`, false},
+		{"vital", `{"name":"LCP","value":-1}`, false},
+		{"vital", `{"name":"LCP","value":"x"}`, false},
+		{"vital", `{"name":"LCP","value":"12"}`, false},
+		{"vital", `{"name":"LCP","value":true}`, false},
+		{"vital", `{"name":"LCP","value":[1]}`, false},
+		{"vital", `{"name":"LCP","value":1,"v":0}`, false},
+		{"vital", `{"name":"LCP","value":1,"v":256}`, false},
+		{"vital", `{"name":"LCP","value":1,"v":2.5}`, false},
+		{"vital", `{"name":"LCP","value":1,"v":-2}`, false},
+		{"vital", `{"name":"LCP","value":1,"v":"2"}`, false},
+		{"engagement", `{"ms":1200,"scroll":100,"inputs":{"key":2},"scripts":["cdn.example.org"]}`, true},
+		{"engagement", `{"ms":0,"scroll":0}`, true},
+		{"engagement", `{"ms":-30,"scroll":12}`, true},
+		{"engagement", `{"ms":1e3,"scroll":12.5}`, true},
+		{"engagement", `{"ms":null,"scroll":null,"inputs":null}`, true},
+		{"engagement", `{"inputs":{"pointer":1}}`, true},
+		{"engagement", `{"dropped":true}`, true},
+		{"engagement", `{"ms":1e15,"scroll":100}`, true},
+		{"engagement", `{"ms":-1e15}`, true},
+		// Script hosts are values, never keys beside ms.
+		{"engagement", `{"ms":1,"scripts":["MS","Scroll"],"inputs":{"Scroll":1}}`, true},
+		{"engagement", `{"ms":1000000000000001}`, false},
+		{"engagement", `{"ms":-1000000000000001}`, false},
+		{"engagement", `{"ms":9e18}`, false},
+		{"engagement", `{"ms":10,"scroll":100.5}`, false},
+		{"engagement", `{"ms":10,"scroll":1e308}`, false},
+		{"engagement", `{"MS":1.5}`, false},
+		{"engagement", `{"ms":10,"Scroll":-1}`, false},
+		{"engagement", `{"ms":10,"ſcroll":-1}`, false},
+		{"engagement", `{"ms":1.5,"scroll":10}`, false},
+		{"engagement", `{"ms":"1200"}`, false},
+		{"engagement", `{"ms":true}`, false},
+		{"engagement", `{"ms":10,"scroll":-1}`, false},
+		{"engagement", `{"ms":10,"scroll":"50"}`, false},
+		{"engagement", `{"ms":10,"scroll":{}}`, false},
+		// Other kinds keep their fields as they are.
+		{"custom", `{"name":"FID","value":"x","ms":1.5,"scroll":-1,"MS":1e308}`, true},
+	} {
+		ev := `"k":"` + tt.kind + `","p":` + tt.p
+		if tt.kind == "custom" {
+			ev = `"k":"custom","n":"c","p":` + tt.p
+		}
+		body := strings.Replace(batch(domain, 1, ""), `"k":"page_view","p":{}`, ev, 1)
+		want := http.StatusNoContent
+		if tt.ok {
+			accepted++
+		} else {
+			want = http.StatusBadRequest
+			refused++
+		}
+		// An address each: every request pays a token.
+		if w := r.browser(body, fmt.Sprintf("198.51.100.%d", 100+i), ""); w.Code != want {
+			t.Errorf("%s %s: status %d, want %d", tt.kind, tt.p, w.Code, want)
+		}
+	}
+	if s := r.stat(t, site); s.Accepted != int64(accepted) || s.Rejected != int64(refused) {
+		t.Errorf("stat %+v, want %d accepted, %d rejected", s, accepted, refused)
+	}
+}
+
 func TestBrowser_Flooding(t *testing.T) {
 	r := newRig(t, 0, true)
 	site := r.siteID(domain)

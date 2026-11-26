@@ -5,7 +5,8 @@ For whoever adds Trakk to another product, an agent included. A product sends on
 - **Browser script**: page views, clicks, forms, errors and web vitals of the people on its pages.
 - **Server feed**: every request its backend serves, so bots, probes and API callers show up too.
 
-The collector's limits are in the [README](README.md#browser-script); this page says what to build.
+The collector's limits are in the [README](README.md#browser-script), a `vital`'s and an `engagement`'s field shapes,
+bounds and key case included (outside them a 400); this page says what to build.
 
 WordPress: nothing to build, [trakk-wordpress](https://github.com/trick77/trakk-wordpress) sends both. It alone takes
 its values from a settings page instead of the environment ([Settings](#settings)).

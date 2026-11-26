@@ -421,6 +421,9 @@ func (c *Collector) browserEvents(site *sites.Site, b *browserBatch, r *http.Req
 			if err := checkValue("p", p, 0); err != nil {
 				return nil, 0, err
 			}
+			if err := checkKind(e.K, p); err != nil {
+				return nil, 0, err
+			}
 		}
 		evURL := pageURL
 		if e.URL != "" {
@@ -542,6 +545,62 @@ func checkValue(key string, v any, depth int) error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// vitalNames are the vitals the script measures.
+var vitalNames = map[string]bool{"TTFB": true, "FCP": true, "LCP": true, "INP": true, "CLS": true}
+
+// checkKind refuses a vital's or an engagement's field in a shape no script ever sent: they are summed for good. A
+// field left out or null passes (the script sends {"dropped":true} for props over their budget), as does every
+// other key, but a vital's value or v needs its name. The bounds keep a sum finite; ms has no sign rule: the script
+// adds wall-clock deltas, a clock set back makes it negative. A key that is a field's but for case is refused:
+// decoding into a struct takes it for the field.
+func checkKind(kind string, p map[string]any) error {
+	var fields []string
+	switch kind {
+	case "vital":
+		fields = []string{"name", "value", "v"}
+	case "engagement":
+		fields = []string{"ms", "scroll"}
+	default:
+		return nil
+	}
+	for k := range p {
+		for _, f := range fields {
+			if k != f && strings.EqualFold(k, f) {
+				return fmt.Errorf("%s key %q", kind, k)
+			}
+		}
+	}
+	num := func(k string, lo, hi float64, whole bool) error {
+		v, ok := p[k]
+		if !ok || v == nil {
+			return nil
+		}
+		f, ok := v.(float64)
+		if !ok || f < lo || f > hi || whole && f != math.Trunc(f) {
+			return fmt.Errorf("%s %s", kind, k)
+		}
+		return nil
+	}
+	if kind == "engagement" {
+		if err := num("ms", -1e15, 1e15, true); err != nil {
+			return err
+		}
+		// Every script clamps it to 100.
+		return num("scroll", 0, 100, false)
+	}
+	if err := num("value", 0, 1e12, false); err != nil {
+		return err
+	}
+	if err := num("v", 1, 255, true); err != nil {
+		return err
+	}
+	name, ok := p["name"].(string)
+	if p["name"] != nil && (!ok || !vitalNames[name]) || name == "" && (p["value"] != nil || p["v"] != nil) {
+		return errors.New("vital name")
 	}
 	return nil
 }
