@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/trick77/ship/kit/env"
 	"github.com/trick77/ship/kit/logging"
@@ -141,6 +142,11 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 	case n > MaxAdminTokenBytes:
 		// Longer would start a service whose sign-in answers every attempt 413.
 		r.Fail("BACKEND_ADMIN_TOKEN is longer than %d bytes", MaxAdminTokenBytes)
+	}
+	// A scheme or a path starts fine and breaks the OIDC redirect and the alerts' links at first use. A port stays:
+	// both take it, only the compose file's Traefik Host rule never matches one.
+	if strings.ContainsFunc(cfg.PublicFQDN, func(c rune) bool { return unicode.IsSpace(c) || c == '/' }) {
+		r.Fail("PUBLIC_FQDN is a host name only, no scheme or path (trakk.example.com)")
 	}
 	if cfg.AuthDisabled && cfg.PublicFQDN != "" {
 		r.Fail("BACKEND_AUTH_DISABLED is for local development: it is refused with PUBLIC_FQDN set")

@@ -127,6 +127,27 @@ func TestLoadConfig_Faults(t *testing.T) {
 	}
 }
 
+// PUBLIC_FQDN is a bare host: anything else would start and break the OIDC redirect and the alerts' links.
+func TestLoadConfig_PublicFQDN(t *testing.T) {
+	token := strings.Repeat("t", MinAdminTokenBytes)
+	for _, v := range []string{"https://trakk.example.com", "trakk.example.com/dashboard", "trakk.example.com/",
+		"trakk .example.com", "trakk.example.com\tx"} {
+		_, err := LoadConfig(lookup(map[string]string{"PUBLIC_FQDN": v, "BACKEND_ADMIN_TOKEN": token}))
+		if err == nil || !strings.Contains(err.Error(), "PUBLIC_FQDN is a host name only") {
+			t.Errorf("%q: %v", v, err)
+		}
+	}
+	cfg, err := LoadConfig(lookup(map[string]string{"PUBLIC_FQDN": "trakk.example.com", "BACKEND_ADMIN_TOKEN": token}))
+	if err != nil || cfg.OIDCRedirectURL != "https://trakk.example.com/api/auth/callback" {
+		t.Errorf("plain host: %q, %v", cfg.OIDCRedirectURL, err)
+	}
+	// A port is part of where the service is reached.
+	cfg, err = LoadConfig(lookup(map[string]string{"PUBLIC_FQDN": "trakk.example.com:8443", "BACKEND_ADMIN_TOKEN": token}))
+	if err != nil || cfg.OIDCRedirectURL != "https://trakk.example.com:8443/api/auth/callback" {
+		t.Errorf("host with a port: %q, %v", cfg.OIDCRedirectURL, err)
+	}
+}
+
 // TestEnvExample keeps .env.example complete: every variable the config reads, and llmwire's key, has a line.
 func TestEnvExample(t *testing.T) {
 	read := map[string]bool{}
