@@ -815,6 +815,11 @@ func deleteEventsTx(ctx context.Context, tx *sql.Tx, where string, args ...any) 
 		n++
 		days[[2]int64{site, ts / dayMS}] = true
 	}
+	// The DELETE runs in Next: its failure (a full disk, as the cap frees space) is Err's, and Close after it is nil.
+	// Unchecked, a delete that failed read as one that found nothing left.
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
 	if err := rows.Close(); err != nil {
 		return 0, err
 	}
@@ -930,11 +935,16 @@ func (s *Store) RunRetention(ctx context.Context, o RetentionOptions) {
 		var deleted int64
 		var errs []error
 		if now := o.Now(); now.Sub(lastAge) >= 24*time.Hour {
-			lastAge = now
 			n, err := s.PruneAge(ctx, now.AddDate(0, -o.Months, 0))
 			deleted, errs = deleted+n, append(errs, err)
-			n, err = s.PruneAlerts(ctx, now.AddDate(0, 0, -AlertHistoryDays))
-			deleted, errs = deleted+n, append(errs, err)
+			m, aerr := s.PruneAlerts(ctx, now.AddDate(0, 0, -AlertHistoryDays))
+			deleted, errs = deleted+m, append(errs, aerr)
+			// A failed one is tried again in an hour, not a day later with its report cleared in between; not next
+			// round either, which a vacuum with pages left starts at once.
+			lastAge = now
+			if err != nil || aerr != nil {
+				lastAge = now.Add(-23 * time.Hour)
+			}
 		}
 		// Every check: a site waiting for the job goes on minutes after it built the day, not a day later.
 		start := time.Now()

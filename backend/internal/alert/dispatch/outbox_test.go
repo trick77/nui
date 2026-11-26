@@ -138,3 +138,18 @@ func TestOutboxNotStarved(t *testing.T) {
 		t.Fatalf("the late row %+v", last)
 	}
 }
+
+// A message's link is to every site among its alerts, those past the listed lines too.
+func TestRenderLinksEverySite(t *testing.T) {
+	r := newRig(t, `{`+ops+`, "rules": [{"name": "jobs", "on": "job.failed"}]}`)
+	site := r.e.o.Sites.All()[0].ID
+	var items []*store.Alert
+	for range maxLines {
+		items = append(items, &store.Alert{SiteID: site, Severity: "low"})
+	}
+	_, one, _ := r.e.render(items)
+	_, two, _ := r.e.render(append(items, &store.Alert{SiteID: site + 1000, Severity: "low"}))
+	if strings.HasSuffix(one, "?all=1") || !strings.HasSuffix(two, "?all=1") {
+		t.Errorf("links: one site %q, two sites %q", one[max(0, len(one)-60):], two[max(0, len(two)-60):])
+	}
+}

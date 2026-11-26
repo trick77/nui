@@ -294,7 +294,11 @@ func (s *Service) call(ctx context.Context, site int64, schemaName string, schem
 			book.OutputTokens = *t
 		}
 	}
-	if berr := s.st.AddUsage(ctx, book); berr != nil {
+	// A call the shutdown cut was sent all the same: booked past the cancelled context, for as long as a writer
+	// may queue behind retention.
+	bctx, bcancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer bcancel()
+	if berr := s.st.AddUsage(bctx, book); berr != nil {
 		s.o.Log.Warn("Model usage not booked", logging.Err(berr))
 	}
 	if err != nil {
