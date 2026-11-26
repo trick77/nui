@@ -120,6 +120,11 @@ func (d *Data) installBots(b *Bots) {
 	d.bots.Store(b)
 	d.o.Log.Info("Bot list loaded", "services", len(b.Providers))
 	d.logRejected("bot list", b.Rejected)
+	// Info, not Warn: an agent left out costs a name, never an address.
+	if r := b.RejectedAgents; r.Count > 0 {
+		d.o.Log.Info("Bot list agents left out: of no use, a name taken, another purpose or a second listing",
+			"count", r.Count, "first", strings.Join(r.First, ", "))
+	}
 }
 
 func (d *Data) installNetworks(n *Networks) {

@@ -31,7 +31,49 @@ type Provider struct {
 	HasRanges bool
 	// Ranges are the addresses the list carries, the refused ones left out.
 	Ranges []netip.Prefix
+	// Agents are the user-agent tokens the vendor declares within the service, each with the purpose it declares for
+	// it. They tell apart what one service's addresses do; which service a user agent names is user_agent_patterns'.
+	// nil when there are none, or none was kept.
+	Agents []Agent
 	ua     []uaPattern
+	// agentUA are the agents' patterns in list order, those that name none included.
+	agentUA []agentUA
+}
+
+// agentUA is one agent pattern and its agent's index in Agents, -1 for one that names none: its agent's left out, or
+// it is a repeat of the agent's name declaring another purpose.
+type agentUA struct {
+	ua    uaPattern
+	agent int
+}
+
+// Agent is one user-agent token a service declares.
+type Agent struct {
+	Name string
+	// Purpose is the vendor's word for what the agent does ("ai-training", "ai-search"), as the list spells it: no
+	// closed list, "" when it declares none usable.
+	Purpose string
+}
+
+// Agent is the agent whose pattern matches ua, the longest pattern's, as ByUA decides between services; of two kept
+// agents' patterns of one length the first listed. None when the longest is a pattern that names none, also when a
+// kept agent's pattern of that length matches too, whatever the order: a shorter pattern's or a sibling's agent would
+// be a guess.
+func (p *Provider) Agent(ua string) (Agent, bool) {
+	if p == nil {
+		return Agent{}, false
+	}
+	best, length := -1, 0
+	for _, u := range p.agentUA {
+		if u.ua.length < length || (u.ua.length == length && (best < 0 || u.agent >= 0)) || !u.ua.re.MatchString(ua) {
+			continue
+		}
+		best, length = u.agent, u.ua.length
+	}
+	if best < 0 {
+		return Agent{}, false
+	}
+	return p.Agents[best], true
 }
 
 // uaPattern is one user-agent glob and how much of a user agent it states: its length without the wildcards.
@@ -60,6 +102,35 @@ type Bots struct {
 	Updated time.Time
 	// Rejected is what was left out as implausibly broad or unreadable.
 	Rejected Rejected
+	// RejectedAgents is what of the agents was left out: of no use, of a name taken, a repeat of another purpose, of a
+	// service's second listing. Apart from Rejected: agents never crowd a refused range out of its first few.
+	RejectedAgents Rejected
+	names          map[string]Named
+}
+
+// Named is what a service's or an agent's name stands for.
+type Named struct {
+	// Service is the service's name, the agent's service for an agent.
+	Service string
+	Class   string
+	// Purpose is the agent's, for a service the one all of its agents in both listings share, "" when they differ or
+	// there are none.
+	Purpose string
+	// Declared is whether the service's agents differ in purpose, those of both listings and those left out counted:
+	// the purpose then rests on the user agent alone, the address list cannot tell them apart.
+	Declared bool
+	// Agent is whether the name is an agent's. An agent named like its own service is the agent.
+	Agent bool
+}
+
+// ByName is what a service's or an agent's name stands for, spelled exactly as the list's first spelling: services
+// are known by their exact name throughout. An agent named like a name before it but for case is no other name.
+func (b *Bots) ByName(name string) (Named, bool) {
+	if b == nil {
+		return Named{}, false
+	}
+	n, ok := b.names[name]
+	return n, ok
 }
 
 // ByIP are the providers whose ranges hold a, the narrowest range first, for the same range the one listed last (a
