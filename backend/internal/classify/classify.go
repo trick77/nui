@@ -494,7 +494,7 @@ const signedRequest = `(account != '' AND status > 0 AND status NOT IN (401, 403
 
 // actorDay reads an actor's day per user agent, the most frequent first.
 func (c *Classifier) actorDay(ctx context.Context, site int64, key string, day int64) (actorDay, error) {
-	a := actorDay{key: key}
+	var a actorDay
 	rows, err := c.DB.DB.QueryContext(ctx, `SELECT ua, COUNT(*),
 		SUM(source = 'browser'), SUM(source = 'server'),
 		SUM(source = 'server' AND name = 'document'), SUM(source = 'server' AND `+pageRequest+`),
@@ -507,10 +507,10 @@ func (c *Classifier) actorDay(ctx context.Context, site int64, key string, day i
 		SUM(source = 'server' AND props NOT LIKE '%"sf_mode"%'),
 		SUM(source = 'server' AND props NOT LIKE '%"lang"%'),
 		SUM(source = 'server' AND props NOT LIKE '%"sf_site"%'),
-		SUM(kind = 'engagement'), SUM(kind = 'page_view'),
+		SUM(kind = 'engagement'),
 		COALESCE(MIN(CASE WHEN source = 'server' THEN ts END), 0),
 		COALESCE(MAX(CASE WHEN source = 'server' THEN ts END), 0),
-		MIN(ip), MAX(asn)
+		MIN(ip)
 		FROM event WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ?
 		GROUP BY ua ORDER BY COUNT(*) DESC, ua LIMIT ?`,
 		site, key, day*dayMS, (day+1)*dayMS, maxUAs)
@@ -521,16 +521,13 @@ func (c *Classifier) actorDay(ctx context.Context, site int64, key string, day i
 	for rows.Next() {
 		var g uaDay
 		var ip string
-		var asn int64
 		if err := rows.Scan(&g.ua, &g.n, &g.browser, &g.server, &g.docs, &g.pages, &g.assets, &g.delivered, &g.authed,
-			&g.refused, &g.webdriver, &g.noFetch, &g.noLang, &g.noSite, &g.engaged, &g.pageView, &g.first, &g.last,
-			&ip, &asn); err != nil {
+			&g.refused, &g.webdriver, &g.noFetch, &g.noLang, &g.noSite, &g.engaged, &g.first, &g.last, &ip); err != nil {
 			return a, err
 		}
 		if a.ip == "" {
 			a.ip = ip
 		}
-		a.asn = max(a.asn, asn)
 		a.uas = append(a.uas, g)
 	}
 	return a, rows.Err()
@@ -947,7 +944,6 @@ func addDay(a, b uaDay) uaDay {
 	a.engaged += b.engaged
 	a.active += b.active
 	a.probes = a.probes.more(b.probes)
-	a.pageView += b.pageView
 	if a.first == 0 || (b.first != 0 && b.first < a.first) {
 		a.first = b.first
 	}
