@@ -4,7 +4,7 @@
 // cuts; the UI only draws what it was given.
 
 import { type ReactNode, useEffect, useState } from "react";
-import { api, type Dim, type List, type ListRow } from "./api";
+import { api, type Dim, type List, type ListRow, listScope } from "./api";
 import { BarRows } from "./charts";
 import { SEP, changeText, joinSep, num, pct, rawSince } from "./format";
 import { useApi, useDebounced } from "./hooks";
@@ -43,19 +43,37 @@ export type ListTab = {
   dim: Dim;
   sub?: string;
   cat?: string;
+  // The tab's own columns, in place of the list's.
+  cols?: Col[];
+  // Ranked by volume only: no order switch.
+  volumeOnly?: boolean;
+  // What the head says beside the tabs while this one is picked.
+  head?: ReactNode;
 };
 
 export function scopeKey(name: string, extra: unknown = null): string {
   return `${name}|${JSON.stringify(extra)}`;
 }
 
+type Since = Pick<List, "since" | "prev_since">;
+
 // Where an answer's figures begin, when within the range, and its
 // comparison's: "" when both cover theirs.
-function sinceNote(l: List): string {
+function sinceNote(l: Since): string {
   return joinSep([
     l.since && `figures since ${rawSince(l.since)}`,
-    l.prev_since && `comparison figures since ${rawSince(l.prev_since)}`,
+    // Up to the comparison's end or short of it: the answer does not say
+    // which.
+    l.prev_since &&
+      `the comparison has no figures before ${rawSince(l.prev_since)}`,
   ]);
+}
+
+// sinceNote under a card, nothing when it is "".
+export function SinceNote({ of }: { of: Since | null }) {
+  const note = of ? sinceNote(of) : "";
+  if (!note) return null;
+  return <p className="mx-0.5 mt-2.5 mb-0 text-[12px] text-muted">{note}</p>;
 }
 
 export function useList(
@@ -71,7 +89,7 @@ export function useList(
 ) {
   const { scope } = useDash();
   return useApi<List>(
-    scopeKey("list", { scope, dim, sort, ...opts }),
+    scopeKey("list", { scope: listScope(scope, dim), dim, sort, ...opts }),
     (s) => api.list(scope, { dim, sort, ...opts }, s),
     scope.site,
   );
@@ -115,6 +133,7 @@ export function TopList({
   const [tab, setTab] = useState(tabs[0].key);
   const [sort, setSort] = useState<Sort>("volume");
   const [all, setAll] = useState(false);
+  const [known, setKnown] = useState<string[]>([]);
   // A group's key holds a colon, which no tab's or group's does.
   const groupTab = (g: string): ListTab => ({
     key: `cat:${g}`,
@@ -125,15 +144,33 @@ export function TopList({
   const t =
     tabs.find((x) => x.key === tab) ??
     (groups && tab.startsWith("cat:") ? groupTab(tab.slice(4)) : tabs[0]);
-  const l = useList(t.dim, sort, { sub: t.sub, cat: t.cat });
-  // A group this range or domain does not have: back to the first tab.
-  if (t.cat && l.data && !l.loading && !l.data.groups?.includes(t.cat))
-    setTab(tabs[0].key);
+  // The order picked stays for the tabs that have one.
+  const order = t.volumeOnly ? "volume" : sort;
+  const shownCols = t.cols ?? cols;
+  const fetched = useList(t.dim, order, { sub: t.sub, cat: t.cat });
+  // Another dim's answer, kept while this tab's loads, is not drawn: its
+  // rows would sit under this tab's columns.
+  const [dataDim, setDataDim] = useState(t.dim);
+  if (fetched.data && !fetched.loading && dataDim !== t.dim) setDataDim(t.dim);
+  const l =
+    fetched.loading && dataDim !== t.dim ? { ...fetched, data: null } : fetched;
+  // A group the last answer does not have: back to the first tab, without
+  // asking for the group first where the answer kept while loading tells.
+  if (t.cat && l.data && !l.data.groups?.includes(t.cat)) setTab(tabs[0].key);
+  // The groups last answered: the bar stays while another domain's answer
+  // loads or a request fails, the group picked in it.
+  const answered = l.data && (l.data.groups ?? []);
+  if (answered && answered.join() !== known.join()) setKnown(answered);
+  const bar = answered ?? known;
   const shown = groups
-    ? [...tabs, ...(l.data?.groups ?? []).map(groupTab)]
+    ? [
+        ...tabs,
+        ...(t.cat && !bar.includes(t.cat) ? [...bar, t.cat].sort() : bar).map(
+          groupTab,
+        ),
+      ]
     : tabs;
   const compare = scope.cmp !== "off";
-  const note = l.data ? sinceNote(l.data) : "";
   return (
     <Panel id={id} label={title} className="card" busy={busy || l.loading}>
       <CardHead
@@ -142,6 +179,7 @@ export function TopList({
         right={
           <>
             {head}
+            {t.head}
             {shown.length > 1 && (
               <Tabs
                 label={`${title} view`}
@@ -150,7 +188,7 @@ export function TopList({
                 onChange={setTab}
               />
             )}
-            {compare && (
+            {compare && !t.volumeOnly && !l.data?.prev_since && (
               <span
                 className={
                   shown.length > 1 ? "border-l border-border pl-3.5" : ""
@@ -173,19 +211,22 @@ export function TopList({
       {above}
       {l.error ? (
         <ErrorBox error={l.error} />
-      ) : !l.data ? (
+      ) : !l.data || (l.loading && !l.data.rows.length) ? (
         <Skeleton h={180} />
       ) : !l.data.rows.length ? (
         <Empty>{empty}</Empty>
       ) : (
         <>
-          {cols ? (
+          {shownCols ? (
             <RowsTable
+              // A row left open is not another tab's.
+              key={t.key}
               list={l.data}
-              cols={cols}
+              cols={shownCols}
               onRow={onRow}
-              expand={expand ? t.dim : undefined}
-              sort={sort}
+              // A tab of its own shape opens no row.
+              expand={expand && !t.volumeOnly ? t.dim : undefined}
+              sort={order}
             />
           ) : (
             <BarRows
@@ -220,14 +261,12 @@ export function TopList({
           )}
         </>
       )}
-      {note && (
-        <p className="mx-0.5 mt-2.5 mb-0 text-[12px] text-muted">{note}</p>
-      )}
+      <SinceNote of={l.data} />
       {all && (
         <AllRows
           title={t.label === title ? title : `${title}${SEP}${t.label}`}
           tab={t}
-          cols={cols}
+          cols={shownCols}
           label={label}
           // What a row opens is behind the dialog, or on another page.
           onRow={
@@ -237,7 +276,7 @@ export function TopList({
               onRow(r);
             })
           }
-          initialSort={sort}
+          initialSort={order}
           onClose={() => setAll(false)}
         />
       )}
@@ -259,7 +298,11 @@ function RowsTable({
   sort: Sort;
 }) {
   const [open, setOpen] = useState<string | null>(null);
-  const cols = allCols.filter((c) => !c.show || c.show(list.rows));
+  // A comparison without figures (prev_since) leaves every change null.
+  const cols = allCols.filter(
+    (c) =>
+      (!c.show || c.show(list.rows)) && !(list.prev_since && c === changeCol),
+  );
   return (
     <table className="t">
       <TableHead cols={cols} />
@@ -503,7 +546,7 @@ function AllRows({
   const [sort, setSort] = useState<Sort>(initialSort);
   const [q, setQ] = useState("");
   const dq = useDebounced(q.trim(), 250);
-  const l = useList(tab.dim, sort, {
+  const l = useList(tab.dim, tab.volumeOnly ? "volume" : sort, {
     sub: tab.sub,
     cat: tab.cat,
     limit: ALL_LIMIT,
@@ -539,17 +582,19 @@ function AllRows({
           title={title}
           right={
             <>
-              {scope.cmp !== "off" && (
-                <Tabs
-                  label="Order"
-                  options={[
-                    { key: "volume" as Sort, label: "By volume" },
-                    { key: "change" as Sort, label: "By change" },
-                  ]}
-                  value={sort}
-                  onChange={setSort}
-                />
-              )}
+              {scope.cmp !== "off" &&
+                !tab.volumeOnly &&
+                !l.data?.prev_since && (
+                  <Tabs
+                    label="Order"
+                    options={[
+                      { key: "volume" as Sort, label: "By volume" },
+                      { key: "change" as Sort, label: "By change" },
+                    ]}
+                    value={sort}
+                    onChange={setSort}
+                  />
+                )}
               <input
                 className="field w-[230px]"
                 name="search"

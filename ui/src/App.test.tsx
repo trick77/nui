@@ -1739,6 +1739,10 @@ describe("known bots by service", () => {
       "title",
       "The service's addresses serve several purposes; this one is what the client's user agent declares.",
     );
+    // A border that holds on the hovered row's background.
+    expect(within(gpt).getByText("declared")).toHaveClass(
+      "!border-elevated-border",
+    );
     expect(gpt).toHaveTextContent("1'240");
     expect(gpt).toHaveTextContent("18");
     const user = await rowOf("ChatGPT-User");
@@ -1748,6 +1752,11 @@ describe("known bots by service", () => {
     );
     expect(user.cells[0].textContent).toBe(
       `ChatGPT-UserOpenAI${SEP}ai-assistantdeclared${SEP}says it is chatgpt.com`,
+    );
+    // A long host breaks anywhere rather than widen the table.
+    expect(within(user).getByText("chatgpt.com")).toHaveClass(
+      "font-mono",
+      "wrap-anywhere",
     );
     // Nothing declared, said, behind it or listed is nothing shown.
     expect((await rowOf("Googlebot")).cells[0].textContent).toBe(
@@ -1828,8 +1837,8 @@ describe("known bots by service", () => {
     fireEvent.click(within(dlg).getByRole("button", { name: "Close" }));
   });
 
-  it("goes back to All where the range has no such group", async () => {
-    start();
+  it("goes back to All where the range has no such group, never empty meanwhile", async () => {
+    startHeld("/dashboard/");
     await rowOf("GPTBot");
     fireEvent.click(
       within(services()).getByRole("button", { name: "Monitoring" }),
@@ -1838,18 +1847,89 @@ describe("known bots by service", () => {
     await waitFor(() =>
       expect(within(services()).queryByText("GPTBot")).toBeNull(),
     );
+    hold.match = (u) => u.includes("dim=services");
     fireEvent.click(screen.getByRole("button", { name: "24h" }));
-    await waitFor(() =>
-      expect(
-        within(services()).getByRole("button", { name: "All" }),
-      ).toHaveAttribute("aria-pressed", "true"),
-    );
+    // The group's answer for 24 h names no such group: All is asked for.
+    await hold.release();
+    await waitFor(() => expect(servicesCall().get("cat")).toBeNull());
     expect(servicesCall().get("range")).toBe("24h");
-    expect(servicesCall().get("cat")).toBeNull();
+    expect(
+      within(services()).getByRole("button", { name: "All" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    // The group's empty answer never stands in for All's.
+    expect(
+      within(services()).queryByText(
+        "No known bot or uptime probe in this range.",
+      ),
+    ).toBeNull();
+    expect(within(services()).getByLabelText("Loading")).toBeInTheDocument();
+    hold.match = null;
+    await hold.release();
     await within(services()).findByText("GPTBot");
     expect(
       within(services()).queryByRole("button", { name: "Monitoring" }),
     ).toBeNull();
+  });
+
+  it("keeps its tabs when a request fails and while another domain's loads", async () => {
+    window.history.replaceState(null, "", "/dashboard/");
+    calls = [];
+    hold.match = null;
+    hold.waiting = [];
+    const fx = fixtureFetch();
+    let fail = false;
+    setFetcher((u, i) => {
+      calls.push(u);
+      if (fail && u.includes("dim=services"))
+        return Promise.resolve(
+          new Response(JSON.stringify({ detail: "fixture failure" }), {
+            status: 500,
+          }),
+        );
+      if (!hold.match?.(u)) return fx(u, i);
+      return new Promise<Response>((res, rej) =>
+        hold.waiting.push({ u, go: () => fx(u, i).then(res, rej) }),
+      );
+    });
+    render(<App />);
+    await rowOf("GPTBot");
+    const tabs = () =>
+      within(
+        within(services()).getByRole("group", {
+          name: "Known bots by service view",
+        }),
+      )
+        .getAllByRole("button")
+        .map((b) => b.textContent);
+    const all = ["All", "AI", "Monitoring", "Search"];
+    expect(tabs()).toEqual(all);
+    fail = true;
+    fireEvent.click(within(services()).getByRole("button", { name: "AI" }));
+    expect(
+      await within(services()).findByText(/Could not load/),
+    ).toBeInTheDocument();
+    expect(tabs()).toEqual(all);
+    expect(
+      within(services()).getByRole("button", { name: "AI" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    // The way back to All.
+    fail = false;
+    fireEvent.click(within(services()).getByRole("button", { name: "All" }));
+    await within(services()).findByText("Googlebot");
+    // Another domain's answer on its way: the bar stays.
+    hold.match = (u) => u.includes("site=api.example.com");
+    fireEvent.change(screen.getByRole("combobox", { name: "Domain" }), {
+      target: { value: "api.example.com" },
+    });
+    await waitFor(() =>
+      expect(hold.waiting.some((w) => w.u.includes("dim=services"))).toBe(true),
+    );
+    expect(within(services()).queryByText("Googlebot")).toBeNull();
+    expect(tabs()).toEqual(all);
+    hold.match = null;
+    await hold.release();
+    await within(services()).findByText("Googlebot");
+    expect(tabs()).toEqual(all);
   });
 
   it("shows all of a group, not of every one", async () => {
@@ -1883,16 +1963,43 @@ describe("known bots by service", () => {
   it("says where its figures and its comparison's begin", async () => {
     start("/dashboard/?site=lens.example.com&range=30d");
     await rowOf("GPTBot");
-    const note = `figures since ${rawSince("2026-11-02T23:00:00Z")}${SEP}comparison figures since ${rawSince("2026-10-23T22:00:00Z")}`;
+    const note = `figures since ${rawSince("2026-11-02T23:00:00Z")}${SEP}the comparison has no figures before ${rawSince("2026-10-23T22:00:00Z")}`;
     expect(within(services()).getByText(note, asIs)).toBeInTheDocument();
-    // The comparison holds no figures: no row has a change.
+    // The comparison holds no figures: no change column, nothing to order by.
     expect(services().querySelector(".delta")).toBeNull();
+    const heads = (el: HTMLElement) =>
+      within(el)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent);
+    expect(heads(services())).toEqual(["Service", "Requests", "Addresses"]);
+    expect(
+      within(services()).queryByRole("button", { name: "By change" }),
+    ).toBeNull();
     fireEvent.click(
       within(services()).getByRole("button", { name: /Show all 7/ }),
     );
     const dlg = screen.getByRole("dialog");
     await within(dlg).findByText("MJ12bot");
     expect(dlg.textContent).toContain(`7 of 7${SEP}${note}`);
+    expect(heads(dlg)).toEqual(["Service", "Requests", "Addresses"]);
+    expect(within(dlg).queryByRole("button", { name: "By change" })).toBeNull();
+  });
+
+  it("notes an API list's comparison without figures too", async () => {
+    start("/dashboard/?site=api.example.com&range=12mo");
+    const ep = await screen.findByRole("region", { name: "Endpoints" });
+    expect(
+      await within(ep).findByText(
+        `the comparison has no figures before ${rawSince("2025-03-31T22:00:00Z")}`,
+        asIs,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(ep)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).not.toContain("Change");
+    expect(within(ep).queryByRole("button", { name: "By change" })).toBeNull();
   });
 
   it("opens the log on a service's server requests", async () => {
@@ -1958,6 +2065,377 @@ describe("known bots by service", () => {
     );
     await within(d).findByText("Person");
     expect(within(d).queryByText("Says it is")).toBeNull();
+  });
+});
+
+describe("page experience", () => {
+  const exp = () => panel("Page experience");
+  const rowIn = async (name: string, of: string) =>
+    (
+      await within(await screen.findByRole("region", { name: of })).findByText(
+        name,
+      )
+    ).closest("tr")!;
+  const rowOf = (name: string) => rowIn(name, "Page experience");
+  const expCalls = () =>
+    calls.filter((c) => c.startsWith("/api/dash/experience"));
+  const pages = () => panel("Pages");
+  const pagesRow = (key: string) => rowIn(key, "Pages");
+
+  it("shows people's engaged time and vitals, rated, with their changes", async () => {
+    start();
+    const lcp = await rowOf("LCP");
+    expect(
+      within(exp())
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Vital", "75th", "Rating", "Samples", "Change"]);
+    // Under All the panel says whose figures they are; it asks for people's.
+    expect(within(exp()).getByText("people only")).toBeInTheDocument();
+    expect(lastCall("/api/dash/experience").get("aud")).toBe("humans");
+    const engaged = within(exp()).getByText("Engaged time per visit");
+    expect(engaged).toHaveTextContent("2 min 5 s");
+    // No verdict comes with the engaged change.
+    expect(within(engaged).getByText("↑ 6 %")).toHaveClass("delta", "flat");
+    expect(lcp).toHaveTextContent("2'140 ms");
+    expect(within(lcp).getByText("good")).toHaveClass("text-online");
+    expect(lcp).toHaveTextContent("1'620");
+    expect(within(lcp).getByText("↑ 8 %")).toHaveClass("delta", "bad");
+    const inp = await rowOf("INP");
+    expect(inp).toHaveTextContent("312 ms");
+    expect(within(inp).getByText("needs improvement")).toHaveClass(
+      "text-ochre",
+    );
+    expect(within(inp).getByText("↓ 12 %")).toHaveClass("delta", "good");
+    // CLS: a score to two decimals, up from a p75 of 0 without a percentage.
+    const cls = await rowOf("CLS");
+    expect(cls).toHaveTextContent("0.13");
+    expect(within(cls).getByText("↑ from 0.00")).toHaveClass("delta", "bad");
+    const ttfb = await rowOf("TTFB");
+    expect(within(ttfb).getByText("poor")).toHaveClass("text-danger-ink");
+    // No samples: no figure, no rating.
+    const fcp = await rowOf("FCP");
+    expect(fcp.cells[1].textContent).toBe("–");
+    expect(fcp.cells[2].textContent).toBe("");
+    expect(fcp.cells[3].textContent).toBe("0");
+    // In the response's order, each with its explanation.
+    expect(
+      within(exp())
+        .getAllByRole("button", { name: /^What is/ })
+        .map((b) => b.getAttribute("aria-label")),
+    ).toEqual(["LCP", "INP", "CLS", "FCP", "TTFB"].map((n) => `What is ${n}?`));
+    const hint = within(lcp).getByRole("button", { name: "What is LCP?" });
+    const pop = document.getElementById(hint.getAttribute("popovertarget")!)!;
+    within(pop).getByText(`LCP${SEP}Largest Contentful Paint`, asIs);
+    expect(pop).toHaveTextContent("Good up to 2.5 s, poor over 4 s.");
+    // Its figures cover the range: no note.
+    expect(exp().textContent).not.toMatch(/figures since/);
+    expect(
+      screen.getByRole("heading", { name: "Content", level: 2 }).parentElement!
+        .textContent,
+    ).toMatch(/^ContentWhat people look at, how the pages load for them, /);
+  });
+
+  it("keeps its answer across All and Humans, and drops the change with the comparison off", async () => {
+    start();
+    await rowOf("LCP");
+    const asked = expCalls().length;
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Audience" })).getByRole(
+        "button",
+        { name: "Humans" },
+      ),
+    );
+    await waitFor(() =>
+      expect(lastCall("/api/dash/overview").get("aud")).toBe("humans"),
+    );
+    await waitFor(() =>
+      expect(within(exp()).queryByText("people only")).toBeNull(),
+    );
+    expect(expCalls()).toHaveLength(asked);
+    fireEvent.click(screen.getByRole("button", { name: "off" }));
+    await waitFor(() =>
+      expect(lastCall("/api/dash/experience").get("cmp")).toBe("off"),
+    );
+    await waitFor(() =>
+      expect(
+        within(exp())
+          .getAllByRole("columnheader")
+          .map((h) => h.textContent),
+      ).toEqual(["Vital", "75th", "Rating", "Samples"]),
+    );
+    expect(exp().querySelector(".delta")).toBeNull();
+  });
+
+  it("says where its figures begin, without a change column of blanks before", async () => {
+    start("/dashboard/?site=lens.example.com&range=30d");
+    await rowOf("LCP");
+    expect(
+      within(exp()).getByText(
+        `figures since ${rawSince("2026-11-02T23:00:00Z")}`,
+      ),
+    ).toBeInTheDocument();
+    // The comparison lies before them: no figure to compare with.
+    expect(
+      within(exp())
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Vital", "75th", "Rating", "Samples"]);
+  });
+
+  it("drops the change column where a gap leaves no change beside the prior figures", async () => {
+    window.history.replaceState(null, "", "/dashboard/");
+    calls = [];
+    const fx = fixtureFetch();
+    setFetcher(async (u, i) => {
+      calls.push(u);
+      const r = await fx(u, i);
+      if (!u.startsWith("/api/dash/experience")) return r;
+      const body = await r.json();
+      body.engaged_change = null;
+      for (const v of body.vitals)
+        Object.assign(v, { change: null, verdict: "flat" });
+      return new Response(JSON.stringify(body), { status: r.status });
+    });
+    render(<App />);
+    await rowOf("LCP");
+    expect(
+      within(exp())
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Vital", "75th", "Rating", "Samples"]);
+  });
+
+  it("says that the vitals need the current script, and when no one visited", async () => {
+    window.history.replaceState(null, "", "/dashboard/");
+    calls = [];
+    const fx = fixtureFetch();
+    // Visits by an older script: engaged time, no vital.
+    setFetcher(async (u, i) => {
+      calls.push(u);
+      const r = await fx(u, i);
+      if (!u.startsWith("/api/dash/experience")) return r;
+      const body = await r.json();
+      for (const v of body.vitals)
+        Object.assign(v, { p75: null, n: 0, prev: null, change: null });
+      return new Response(JSON.stringify(body), { status: r.status });
+    });
+    const first = render(<App />);
+    const p = await screen.findByRole("region", { name: "Page experience" });
+    expect(
+      await within(p).findByText(
+        "No web vitals in this range: only the current script sends them.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(p).getByText("Engaged time per visit")).toHaveTextContent(
+      "2 min 5 s",
+    );
+    expect(within(p).queryByRole("table")).toBeNull();
+    first.unmount();
+    // No visit by a person: nothing about scripts.
+    start("/dashboard/?site=blog.example.org");
+    expect(
+      await within(
+        await screen.findByRole("region", { name: "Page experience" }),
+      ).findByText("No visits by people in this range yet."),
+    ).toBeInTheDocument();
+    expect(exp().textContent).not.toMatch(/script/);
+    expect(within(exp()).queryByRole("table")).toBeNull();
+  });
+
+  it("is people's: never under Bots, never on an API", async () => {
+    const first = start("/dashboard/?site=lens.example.com&aud=bots");
+    await within(
+      await screen.findByRole("region", { name: "Pages" }),
+    ).findByText("/AS:n");
+    expect(
+      screen.queryByRole("region", { name: "Page experience" }),
+    ).toBeNull();
+    expect(
+      within(pages()).queryByRole("button", { name: "Experience" }),
+    ).toBeNull();
+    expect(expCalls()).toEqual([]);
+    expect(calls.some((c) => c.includes("dim=experience"))).toBe(false);
+    // Nor does the section's lead promise it.
+    expect(
+      screen.getByRole("heading", { name: "Content", level: 2 }).parentElement!
+        .textContent,
+    ).toMatch(/^ContentWhat people look at, where they came from/);
+    first.unmount();
+    start("/dashboard/?site=api.example.com");
+    await screen.findByRole("region", { name: "Endpoints" });
+    await waitFor(() =>
+      expect(calls.some((c) => c.startsWith("/api/dash/list"))).toBe(true),
+    );
+    expect(
+      screen.queryByRole("region", { name: "Page experience" }),
+    ).toBeNull();
+    expect(expCalls()).toEqual([]);
+    expect(calls.some((c) => c.includes("dim=experience"))).toBe(false);
+  });
+
+  it("draws no other tab's rows under its columns, and opens none of its own", async () => {
+    startHeld("/dashboard/");
+    await pagesRow("/AS:n");
+    fireEvent.click(
+      within(pages()).getByRole("button", { name: "Open /AS:n" }),
+    );
+    await within(pages()).findByText("/AS15169");
+    hold.match = (u) => u.includes("dim=experience&");
+    fireEvent.click(
+      within(pages()).getByRole("button", { name: "Experience" }),
+    );
+    // Top's rows wait for nothing: a skeleton until the tab's own come.
+    expect(within(pages()).queryByRole("table")).toBeNull();
+    expect(within(pages()).getByLabelText("Loading")).toBeInTheDocument();
+    await hold.release();
+    await pagesRow("/:ipv4");
+    expect(
+      within(pages())
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Page", "Views", "Engaged", "LCP", "INP", "CLS"]);
+    expect(
+      within(pages()).queryByRole("button", { name: /^Open / }),
+    ).toBeNull();
+    expect(within(pages()).queryByText("/AS15169")).toBeNull();
+    expect(
+      calls.some((c) => c.includes("dim=experience&") && c.includes("within=")),
+    ).toBe(false);
+    // Back on Top, the row left open is closed.
+    hold.match = null;
+    fireEvent.click(within(pages()).getByRole("button", { name: "Top" }));
+    expect(
+      await within(pages()).findByRole("button", { name: "Open /AS:n" }),
+    ).toHaveAttribute("aria-expanded", "false");
+    expect(within(pages()).queryByText("/AS15169")).toBeNull();
+  });
+
+  it("is a tab of the Pages list: by views only, dashes where a page has no figure", async () => {
+    start();
+    await pagesRow("/AS:n");
+    const dimCall = (dim: string) =>
+      new URL(
+        calls.filter((c) => c.includes(`dim=${dim}&`)).at(-1)!,
+        "http://x",
+      ).searchParams;
+    const heads = () =>
+      within(pages())
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent);
+    // An order picked on another tab is not this tab's, and stays for that one.
+    fireEvent.click(within(pages()).getByRole("button", { name: "By change" }));
+    await waitFor(() => expect(dimCall("pages").get("sort")).toBe("change"));
+    fireEvent.click(
+      within(pages()).getByRole("button", { name: "Experience" }),
+    );
+    const listCall = () => dimCall("experience");
+    await waitFor(() =>
+      expect(heads()).toEqual([
+        "Page",
+        "Views",
+        "Engaged",
+        "LCP",
+        "INP",
+        "CLS",
+      ]),
+    );
+    expect(listCall().get("sort")).toBe("volume");
+    expect(listCall().get("limit")).toBe("6");
+    // People's figures beside Top's everyone's: said under All, asked so.
+    expect(within(pages()).getByText("people only")).toBeInTheDocument();
+    expect(listCall().get("aud")).toBe("humans");
+    const cidr = await pagesRow("/:cidr");
+    expect(
+      within(pages()).queryByRole("group", { name: "Pages order" }),
+    ).toBeNull();
+    expect(cidr.cells[1].textContent).toBe("260");
+    for (const c of [...cidr.cells].slice(2)) {
+      expect(c.textContent).toBe("–");
+      expect(c.firstElementChild).toHaveClass("text-muted");
+    }
+    const home = await pagesRow("/");
+    expect(home.cells[2].textContent).toBe("48 s");
+    // The rating in words too, not by colour alone; LCP's cell counts the
+    // loads.
+    const lcp = home.cells[3].firstElementChild as HTMLElement;
+    expect(lcp).toHaveClass("text-online");
+    expect(lcp).toHaveAttribute("title", `good${SEP}1'702 loads`);
+    expect(lcp.textContent).toBe("1'980 ms good");
+    expect(within(lcp).getByText("good")).toHaveClass("sr-only");
+    expect(home.cells[4].firstElementChild).toHaveAttribute("title", "good");
+    // Too few loads: muted, unrated.
+    const about = await pagesRow("/about");
+    for (const c of [...about.cells].slice(3)) {
+      expect(c.firstElementChild).toHaveClass("text-muted");
+      expect(c.querySelector(".sr-only")).toBeNull();
+    }
+    expect(about.cells[3].firstElementChild).toHaveAttribute(
+      "title",
+      `too few loads to rate${SEP}7 loads`,
+    );
+    expect(about.cells[4].firstElementChild).toHaveAttribute(
+      "title",
+      "too few loads to rate",
+    );
+    // A vital's cell: its figure, its rating's ink.
+    const vitalIn = (r: HTMLTableRowElement, i: number) =>
+      r.cells[i].firstElementChild!;
+    expect(vitalIn(home, 5)).toHaveClass("text-online");
+    expect(vitalIn(home, 5).textContent).toBe("0.04 good");
+    const as = await pagesRow("/AS:n");
+    expect(vitalIn(as, 3)).toHaveClass("text-ochre");
+    expect(vitalIn(as, 3).textContent).toBe("2'710 ms needs improvement");
+    const ipv4 = await pagesRow("/:ipv4");
+    expect(vitalIn(ipv4, 4)).toHaveClass("text-danger-ink");
+    expect(vitalIn(ipv4, 4).textContent).toBe("620 ms poor");
+    expect(vitalIn(ipv4, 5)).toHaveClass("text-danger-ink");
+    expect(vitalIn(ipv4, 5).textContent).toBe("0.31 poor");
+    expect(within(pages()).getByText(`Other${SEP}2`, asIs)).toBeInTheDocument();
+    // Show all and search, still by views.
+    fireEvent.click(
+      within(pages()).getByRole("button", { name: /Show all 8/ }),
+    );
+    const dlg = screen.getByRole("dialog", { name: `Pages${SEP}Experience` });
+    await within(dlg).findByText("/:ipv6");
+    expect(within(dlg).queryByRole("group", { name: "Order" })).toBeNull();
+    expect(listCall().get("limit")).toBe("500");
+    fireEvent.change(within(dlg).getByRole("textbox"), {
+      target: { value: "ipv" },
+    });
+    await waitFor(() => expect(listCall().get("q")).toBe("ipv"), {
+      timeout: 2000,
+    });
+    expect(listCall().get("sort")).toBe("volume");
+    await waitFor(() => expect(within(dlg).queryByText("/AS:n")).toBeNull());
+    expect(within(dlg).getAllByRole("row")).toHaveLength(3);
+    fireEvent.click(within(dlg).getByRole("button", { name: "Close" }));
+    // Humans: the same answer, nothing asked anew, nothing to say.
+    const asked = calls.filter((c) => c.includes("dim=experience&")).length;
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Audience" })).getByRole(
+        "button",
+        { name: "Humans" },
+      ),
+    );
+    await waitFor(() =>
+      expect(lastCall("/api/dash/overview").get("aud")).toBe("humans"),
+    );
+    await waitFor(() =>
+      expect(within(pages()).queryByText("people only")).toBeNull(),
+    );
+    expect(within(pages()).getByText("/:ipv4")).toBeInTheDocument();
+    expect(calls.filter((c) => c.includes("dim=experience&"))).toHaveLength(
+      asked,
+    );
+    // Back on Top, the order picked there.
+    fireEvent.click(within(pages()).getByRole("button", { name: "Top" }));
+    await waitFor(() =>
+      expect(
+        within(pages()).getByRole("button", { name: "By change" }),
+      ).toHaveAttribute("aria-pressed", "true"),
+    );
+    expect(dimCall("pages").get("sort")).toBe("change");
   });
 });
 

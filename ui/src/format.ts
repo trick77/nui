@@ -177,7 +177,31 @@ export function countryName(cc: string): string {
 
 export function seconds(s: number | null | undefined): string {
   if (s == null) return "–";
-  if (s < 60) return `${num(s, s < 10 && s !== Math.round(s) ? 1 : 0)} s`;
+  if (s < 60) {
+    // The digits of the value as shown: 9.96 is "10 s", not "10.0 s".
+    const t = Math.round(s * 10) / 10;
+    return `${num(t, t < 10 && t !== Math.round(t) ? 1 : 0)} s`;
+  }
   if (s < 3600) return `${num(s / 60, 0)} min`;
   return `${num(s / 3600, 1)} h`;
+}
+
+// A duration in milliseconds as minutes and seconds, in seconds()' units:
+// "4.2 s", "2 min 5 s", "1 h 3 min" (the alerts' spans read so too).
+export function minSec(x: number | null | undefined): string {
+  if (x == null || !Number.isFinite(x)) return "–";
+  if (x < 59_500) return seconds(x / 1000);
+  const s = Math.round(x / 1000);
+  const [h, m, r] = [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60];
+  if (h) return m ? `${num(h)} h ${num(m)} min` : `${num(h)} h`;
+  return r ? `${num(m)} min ${num(r)} s` : `${num(m)} min`;
+}
+
+export function ms(x: number | null | undefined): string {
+  return x == null ? "–" : `${num(x)} ms`;
+}
+
+// A web vital's value: CLS a score to two decimals, the others in ms.
+export function vital(name: string, x: number | null | undefined): string {
+  return name === "CLS" ? num(x, 2) : ms(x);
 }

@@ -1,5 +1,6 @@
 import { Endpoints } from "./Calls";
 import type { ListRow, Watch } from "./api";
+import { ExperiencePanel, experienceCols } from "./Experience";
 import { num, pct } from "./format";
 import type { Loaded } from "./hooks";
 import { type Col, TopList, changeCol } from "./lists";
@@ -14,6 +15,8 @@ const mono = (s: string) => (
 export function Content({ watch }: { watch: Loaded<Watch> }) {
   const { feed, openLog, scope } = useDash();
   const cmp = scope.cmp !== "off";
+  // What people experienced: no figure of bots'.
+  const people = scope.aud !== "bots";
   const pageCols: Col[] = [
     { head: "Path", cell: (r) => mono(r.label) },
     { head: "Visitors", num: true, cell: (r) => num(r.value) },
@@ -49,7 +52,7 @@ export function Content({ watch }: { watch: Loaded<Watch> }) {
       <SectionHead
         id="content"
         title="Content"
-        lead="What people look at, where they came from, what they clicked and where the pages load scripts from."
+        lead={`What people look at, ${people ? "how the pages load for them, " : ""}where they came from, what they clicked and where the pages load scripts from.`}
         sources={["browser"]}
       />
       <div className="grid grid-cols-1 gap-3 min-[1000px]:grid-cols-2">
@@ -59,6 +62,19 @@ export function Content({ watch }: { watch: Loaded<Watch> }) {
           tabs={[
             { key: "top", label: "Top", dim: "pages" },
             { key: "entry", label: "Entry", dim: "entry" },
+            ...(people
+              ? [
+                  {
+                    key: "experience",
+                    label: "Experience",
+                    dim: "experience" as const,
+                    cols: experienceCols,
+                    volumeOnly: true,
+                    // Top's Views are everyone's under All, these people's.
+                    head: scope.aud === "all" && <span>people only</span>,
+                  },
+                ]
+              : []),
           ]}
           cols={pageCols}
           expand
@@ -82,6 +98,11 @@ export function Content({ watch }: { watch: Loaded<Watch> }) {
           empty="No events in this range yet."
         />
       </div>
+      {people && (
+        <div className="mt-3">
+          <ExperiencePanel />
+        </div>
+      )}
       <div className="mt-3 grid grid-cols-1 gap-3 min-[1000px]:grid-cols-2">
         <TopList
           id="referrers-panel"

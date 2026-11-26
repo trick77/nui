@@ -403,47 +403,95 @@ export function Tip({ tip }: { tip: TipData | null }) {
   );
 }
 
-// The web vitals the tracker sends: name, what it measures, Google's
-// good and poor thresholds.
-const VITALS: Record<string, [string, string, string]> = {
-  LCP: [
-    "Largest Contentful Paint",
-    "Time until the page's largest image or text block shows.",
-    "Good up to 2.5 s, poor over 4 s.",
-  ],
-  CLS: [
-    "Cumulative Layout Shift",
-    "How much visible content jumped around in the worst burst of shifts on the page (shifts under a second apart, within 5 s), shifts right after a click or key press left out. No unit.",
-    "Google: good up to 0.1, poor over 0.25.",
-  ],
-  INP: [
-    "Interaction to Next Paint",
-    "The slowest delay from a click, tap or key press to the next screen update; on a page with many interactions, close to the slowest.",
-    "Good up to 200 ms, poor over 500 ms.",
-  ],
-  FCP: [
-    "First Contentful Paint",
-    "Time until the first text or image shows.",
-    "Good up to 1.8 s, poor over 3 s.",
-  ],
-  TTFB: [
-    "Time to First Byte",
-    "Time until the server's first byte arrived.",
-    "Good up to 0.8 s, poor over 1.8 s.",
-  ],
+// A web vital the tracker sends: its name, what it measures, Google's good
+// and poor thresholds in its unit (ms; CLS a score), and how the hint says
+// them, which must agree.
+type VitalInfo = {
+  title: string;
+  what: string;
+  good: number;
+  poor: number;
+  says: string;
+};
+
+export type Rating = "good" | "needs improvement" | "poor";
+
+export const VITALS: Record<string, VitalInfo> = {
+  LCP: {
+    title: "Largest Contentful Paint",
+    what: "Time until the page's largest image or text block shows.",
+    good: 2500,
+    poor: 4000,
+    says: "Good up to 2.5 s, poor over 4 s.",
+  },
+  CLS: {
+    title: "Cumulative Layout Shift",
+    what: "How much visible content jumped around in the worst burst of shifts on the page (shifts under a second apart, within 5 s), shifts right after a click or key press left out. No unit.",
+    good: 0.1,
+    poor: 0.25,
+    says: "Google: good up to 0.1, poor over 0.25.",
+  },
+  INP: {
+    title: "Interaction to Next Paint",
+    what: "The slowest delay from a click, tap or key press to the next screen update; on a page with many interactions, close to the slowest.",
+    good: 200,
+    poor: 500,
+    says: "Good up to 200 ms, poor over 500 ms.",
+  },
+  FCP: {
+    title: "First Contentful Paint",
+    what: "Time until the first text or image shows.",
+    good: 1800,
+    poor: 3000,
+    says: "Good up to 1.8 s, poor over 3 s.",
+  },
+  TTFB: {
+    title: "Time to First Byte",
+    what: "Time until the server's first byte arrived.",
+    good: 800,
+    poor: 1800,
+    says: "Good up to 0.8 s, poor over 1.8 s.",
+  },
+};
+
+// The name is the sender's: an inherited key (constructor) is no vital.
+export function isVital(name: string): boolean {
+  return Object.hasOwn(VITALS, name);
+}
+
+export function vitalTitle(name: string): string {
+  return isVital(name) ? VITALS[name].title : "";
+}
+
+// A vital's value by Google's thresholds, null for no value or no vital.
+export function rating(name: string, v: number | null): Rating | null {
+  if (v == null || !isVital(name)) return null;
+  const t = VITALS[name];
+  return v <= t.good ? "good" : v > t.poor ? "poor" : "needs improvement";
+}
+
+// A rating's colour: the family's online, ochre and danger inks.
+export const RATING_INK: Record<Rating, string> = {
+  good: "text-online",
+  "needs improvement": "text-ochre",
+  poor: "text-danger-ink",
 };
 
 // An (i) after an event line that names a web vital: a click opens what
-// the abbreviation means. A popover, so touch works and Esc or a click
-// elsewhere closes it.
+// the abbreviation means.
 export function VitalHint({ kind, what }: { kind: string; what: string }) {
-  const id = useId();
   if (kind !== "vital") return null;
   // The backend's shapes only ("vital LCP", "vital LCP 2.1 s", "vital CLS
   // 0.042"): the name is the sender's, "LCP fake" is no vital.
   const name = /^vital (\S+)(?: [\d.]+(?: m?s)?)?$/.exec(what)?.[1] ?? "";
-  // The name is the sender's: an inherited key (constructor) is no vital.
-  if (!Object.hasOwn(VITALS, name)) return null;
+  return <VitalInfoButton name={name} />;
+}
+
+// The (i) that explains a vital, nothing for a name that is none. A
+// popover, so touch works and Esc or a click elsewhere closes it.
+export function VitalInfoButton({ name }: { name: string }) {
+  const id = useId();
+  if (!isVital(name)) return null;
   const v = VITALS[name];
   const pop = `vital${id.replace(/[^\w-]/g, "")}`;
   const anchor = `--${pop}`;
@@ -468,10 +516,10 @@ export function VitalHint({ kind, what }: { kind: string; what: string }) {
         <span className="vital-pop-title">
           {name}
           {SEP}
-          {v[0]}
+          {v.title}
         </span>
-        <span>{v[1]}</span>
-        <span>{v[2]}</span>
+        <span>{v.what}</span>
+        <span>{v.says}</span>
       </span>
     </>
   );

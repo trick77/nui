@@ -8,6 +8,7 @@ import type {
   Alert,
   Alerts,
   Axis,
+  Change,
   Classes,
   ClassKey,
   Clients,
@@ -17,6 +18,9 @@ import type {
   ErrorCount,
   ErrorDetail,
   ErrorWhere,
+  Experience,
+  ExperienceRow,
+  ExperienceVital,
   List,
   ListRow,
   Log,
@@ -29,6 +33,7 @@ import type {
   TrailItem,
   Visitor,
   VisitorRow,
+  Verdict,
   Visitors,
   Watch,
   WatchHost,
@@ -957,10 +962,164 @@ const SERVICE_GROUP: Record<string, string> = {
 // Where the services' figures begin: the builder that keeps them came
 // later than 30 d and longer reach back, their comparisons hold none.
 const SERVICES_SINCE = "2026-11-02T23:00:00Z";
+// Where the endpoints' figures of 12 mo's comparison begin.
+const ENDPOINTS_PREV_SINCE = "2025-03-31T22:00:00Z";
 const servicesSince = (range: string) =>
   ["30d", "90d", "12mo"].includes(range)
     ? { since: SERVICES_SINCE, prev_since: FROM[range] }
     : { since: null, prev_since: null };
+
+// What people experienced: the builder that keeps it is the services' too,
+// so its figures begin there as well, and a comparison before then has
+// none. CLS was 0 in the comparison: up from it, no percentage but worse.
+// FCP has no samples.
+const EXPERIENCE_SINCE = SERVICES_SINCE;
+
+function experience(site: string, range: string, cmp: string): Experience {
+  const since = ["30d", "90d", "12mo"].includes(range)
+    ? EXPERIENCE_SINCE
+    : null;
+  // The comparison lies before the figures begin: nothing to compare with.
+  const on = cmp !== "off" && !since;
+  const v = (
+    name: string,
+    p75: number | null,
+    n: number,
+    prev: number | null,
+    change: Change,
+    verdict: Verdict,
+  ): ExperienceVital =>
+    on
+      ? { name, p75, n, prev, change, verdict }
+      : { name, p75, n, prev: null, change: null, verdict: "flat" };
+  // A site whose script never delivered: nothing, the way the backend
+  // answers that.
+  if (!SITES.find((s) => s.site === site)?.browser)
+    return {
+      since: null,
+      visits: 0,
+      engaged_ms: null,
+      engaged_change: null,
+      vitals: ["LCP", "INP", "CLS", "FCP", "TTFB"].map((name) =>
+        v(name, null, 0, null, null, "flat"),
+      ),
+    };
+  return {
+    since,
+    visits: 1840,
+    engaged_ms: 125_400,
+    engaged_change: on ? { pct: 6 } : null,
+    vitals: [
+      v("LCP", 2140, 1620, 1980, { pct: 8 }, "bad"),
+      v("INP", 312, 410, 355, { pct: -12 }, "good"),
+      v("CLS", 0.126, 1490, 0, null, "bad"),
+      v("FCP", null, 0, null, null, "flat"),
+      v("TTFB", 1920, 1655, 1536, { pct: 25 }, "bad"),
+    ],
+  };
+}
+
+// dim=experience's rows by views; /:cidr sits in a day's Other, its figures
+// unknown, /about has too few loads to rate and /privacy had no interaction.
+const EXPERIENCE_ROWS: ExperienceRow[] = [
+  {
+    key: "/",
+    views: 1890,
+    engaged: 48_200,
+    lcp: 1980,
+    inp: 160,
+    cls: 0.04,
+    loads: 1702,
+  },
+  {
+    key: "/AS:n",
+    views: 1310,
+    engaged: 95_400,
+    lcp: 2710,
+    inp: 240,
+    cls: 0.18,
+    loads: 1188,
+  },
+  {
+    key: "/:ipv4",
+    views: 1104,
+    engaged: 61_000,
+    lcp: 4630,
+    inp: 620,
+    cls: 0.31,
+    loads: 990,
+  },
+  {
+    key: "/:text",
+    views: 902,
+    engaged: 33_800,
+    lcp: 2290,
+    inp: 184,
+    cls: 0.09,
+    loads: 801,
+  },
+  {
+    key: "/:cidr",
+    views: 260,
+    engaged: null,
+    lcp: null,
+    inp: null,
+    cls: null,
+    loads: null,
+  },
+  {
+    key: "/about",
+    views: 140,
+    engaged: 22_000,
+    lcp: 1500,
+    inp: 96,
+    cls: 0,
+    loads: 7,
+  },
+  {
+    key: "/privacy",
+    views: 61,
+    engaged: 9_400,
+    lcp: 1320,
+    inp: null,
+    cls: 0.01,
+    loads: 55,
+  },
+  {
+    key: "/:ipv6",
+    views: 38,
+    engaged: 71_500,
+    lcp: 3110,
+    inp: 210,
+    cls: 0.02,
+    loads: 30,
+  },
+].map((r) => ({ ...r, label: r.key }));
+
+// The backend's dim=experience: by views only, its own parameters, the
+// figures since experience()'s.
+function experienceList(q: URLSearchParams, site: string): List | Response {
+  if ((q.get("sort") || "volume") !== "volume")
+    return json({ detail: "sort must be volume for dim=experience" }, 400);
+  for (const k of ["within", "sub", "cat"])
+    if (q.get(k))
+      return json({ detail: `${k} is not for dim=experience` }, 400);
+  const limit = Number(q.get("limit") || 6);
+  const term = (q.get("q") || "").toLowerCase();
+  const rows = SITES.find((s) => s.site === site)?.browser
+    ? EXPERIENCE_ROWS.filter((r) =>
+        `${r.key} ${r.label}`.toLowerCase().includes(term),
+      )
+    : [];
+  const rest = rows.slice(limit);
+  return {
+    rows: rows.slice(0, limit) as unknown as ListRow[],
+    other: { count: rest.length, value: sum(rest.map((r) => r.views)) },
+    total: rows.length,
+    server: false,
+    since: experience(site, q.get("range") || "7d", "off").since,
+  };
+}
 
 function list(q: URLSearchParams, feed: boolean): List | null {
   const dim = q.get("dim") as Dim;
@@ -986,6 +1145,14 @@ function list(q: URLSearchParams, feed: boolean): List | null {
       ),
     );
   } else rows = [...(LISTS[dim] ?? [])];
+  // 12 mo of endpoints: the comparison reaches back past their figures, so
+  // no row has a change.
+  const prevSince =
+    dim === "endpoints" && !within && q.get("range") === "12mo"
+      ? ENDPOINTS_PREV_SINCE
+      : null;
+  if (prevSince)
+    rows = rows.map((r) => ({ ...r, change: null, verdict: "flat" as const }));
   if (dim === "errors" && !feed) rows = rows.filter((r) => r.sub === "js");
   if (q.get("sub")) rows = rows.filter((r) => r.sub === q.get("sub"));
   // Shares are of every row the query matched, before the search narrows
@@ -1018,6 +1185,7 @@ function list(q: URLSearchParams, feed: boolean): List | null {
     server,
     // A template's paths only, as the backend answers.
     ...(within ? { detail_since: detailSince(q.get("range")) } : {}),
+    ...(prevSince ? { since: null, prev_since: prevSince } : {}),
   };
 }
 
@@ -2190,6 +2358,10 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
     const feed = SITES.find((s) => s.site === site)?.server != null;
     const script = SITES.find((s) => s.site === site)?.browser != null;
     const range = q.get("range") || "7d";
+    // Shown as an API: a kind of api with a feed.
+    const api = SITES.some(
+      (s) => s.site === site && s.kind === "api" && s.feed,
+    );
     switch (u.pathname) {
       case "/api/dash/sites":
         return json({ sites: SITES });
@@ -2201,6 +2373,10 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
         return json(noteworthy(site, opt.nw === "watch"));
       case "/api/dash/watch":
         return json(watch(site, range));
+      case "/api/dash/experience":
+        return api
+          ? json({ detail: `${site} is an API: it has no pages` }, 404)
+          : json(experience(site, range, q.get("cmp") || "prev"));
       case "/api/dash/classes":
         return feed
           ? json(classes(range))
@@ -2226,6 +2402,12 @@ export function fixtureFetch(opt: FixtureOptions = {}) {
             { detail: "cat is a purpose group, for dim=services" },
             400,
           );
+        if (q.get("dim") === "experience") {
+          if (api)
+            return json({ detail: `${site} is an API: it has no pages` }, 404);
+          const x = experienceList(q, site);
+          return x instanceof Response ? x : json(x);
+        }
         const l = list(q, feed);
         if (l && opt.beyond && Number(q.get("limit")) >= 500)
           l.total += opt.beyond;

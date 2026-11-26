@@ -190,7 +190,9 @@ export type Dim =
   | "accounts"
   | "failures"
   | "agents"
-  | "services";
+  | "services"
+  // Rows of their own shape (ExperienceRow), by volume only.
+  | "experience";
 
 export type ListRow = {
   key: string;
@@ -240,6 +242,44 @@ export type List = {
   // the comparison, whose rows then carry no change. null otherwise.
   since?: string | null;
   prev_since?: string | null;
+};
+
+// A row of dim=experience, people's only: a page template's views, its
+// engaged time per view (ms) and the p75s of LCP, INP (ms) and CLS (its
+// score); loads are LCP's samples. A figure is null without samples or
+// where the page sits in the aggregates' Other. No value, share or change.
+export type ExperienceRow = {
+  key: string;
+  label: string;
+  views: number;
+  engaged: number | null;
+  lcp: number | null;
+  inp: number | null;
+  cls: number | null;
+  loads: number | null;
+};
+
+// What people experienced over the range, whatever the audience: visits,
+// the engaged time per visit (ms, null without visits) and each vital's
+// p75 (ms; CLS its score; null without samples) in the order LCP, INP, CLS,
+// FCP, TTFB. prev and change are null where the comparison cannot be read;
+// the engaged change has no verdict. since: where the figures begin, when
+// that is within the range.
+export type ExperienceVital = {
+  name: string;
+  p75: number | null;
+  n: number;
+  prev: number | null;
+  change: Change;
+  verdict: Verdict;
+};
+
+export type Experience = {
+  since: string | null;
+  visits: number;
+  engaged_ms: number | null;
+  engaged_change: Change;
+  vitals: ExperienceVital[];
 };
 
 export type StatusRow = { class: string; value: number; share: number };
@@ -623,6 +663,12 @@ const dash = <T>(
   signal?: AbortSignal,
 ) => getJSON<T>(`/api/dash/${path}${query(scope, extra)}`, signal);
 
+// A list's scope: dim=experience is people's whatever the audience, so it
+// asks for humans and an audience switch asks for nothing new.
+export function listScope(s: Scope, dim: Dim): Scope {
+  return dim === "experience" ? { ...s, aud: "humans" } : s;
+}
+
 export const api = {
   me: (signal?: AbortSignal) => getJSON<Me>("/api/me", signal),
   // How this server signs people in; public.
@@ -664,7 +710,7 @@ export const api = {
   ) =>
     dash<List>(
       "list",
-      s,
+      listScope(s, p.dim),
       {
         dim: p.dim,
         sort: p.sort ?? "volume",
@@ -724,6 +770,9 @@ export const api = {
     dash<ErrorDetail>("error", s, { key }, signal),
   domain: (s: Scope, signal?: AbortSignal) =>
     dash<Domain>("domain", s, {}, signal),
+  // Always people's figures: the audience changes nothing. 404 on an API.
+  experience: (s: Scope, signal?: AbortSignal) =>
+    dash<Experience>("experience", { ...s, aud: "humans" }, {}, signal),
   // Script hosts: domain and range apply, never the audience or the
   // comparison.
   watch: (s: Scope, signal?: AbortSignal) =>

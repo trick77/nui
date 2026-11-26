@@ -373,9 +373,11 @@ body:has(.gate) {
   font-size: 13px;
 }
 
+/* Many tabs (a purpose group each) wrap within the card. */
 .tabs {
   display: flex;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 6px 14px;
   font-size: 12.5px;
   color: var(--color-muted);
 }

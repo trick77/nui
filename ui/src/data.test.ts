@@ -11,6 +11,8 @@ import {
   date,
   dateTime,
   dayMonth,
+  minSec,
+  ms,
   networkKind,
   num,
   pct,
@@ -19,9 +21,12 @@ import {
   seconds,
   signal,
   value,
+  vital,
   when,
 } from "./format";
+import { VITALS, rating } from "./ui";
 import { evidenceText, signalGroups, signalTexts } from "./signals";
+import { groupLabel } from "./Traffic";
 import {
   basePath,
   parseView,
@@ -75,9 +80,44 @@ describe("format", () => {
     expect(bytes(134217728)).toBe("128 MB");
     expect(bytes(1.5 * 1024 ** 3)).toBe("1.5 GB");
     expect(seconds(0.8)).toBe("0.8 s");
+    // The digits follow the rounded value.
+    expect(seconds(9.96)).toBe("10 s");
+    expect(seconds(4.02)).toBe("4 s");
+    expect(minSec(9960)).toBe("10 s");
     expect(seconds(90)).toBe("2 min");
     expect(seconds(7200)).toBe("2.0 h");
     expect(seconds(null)).toBe("–");
+    expect(minSec(4200)).toBe("4.2 s");
+    expect(minSec(59_400)).toBe("59 s");
+    expect(minSec(59_600)).toBe("1 min");
+    expect(minSec(125_400)).toBe("2 min 5 s");
+    expect(minSec(3_780_000)).toBe("1 h 3 min");
+    expect(minSec(null)).toBe("–");
+    expect(ms(184)).toBe("184 ms");
+    expect(ms(undefined)).toBe("–");
+    expect(vital("LCP", 2512)).toMatch(/^2['’]512 ms$/);
+    expect(vital("CLS", 0.126)).toBe("0.13");
+    expect(vital("CLS", 0)).toBe("0.00");
+    expect(vital("INP", null)).toBe("–");
+  });
+
+  it("rates a vital by the thresholds its hint states", () => {
+    // "Good up to 2.5 s, poor over 4 s.": the numbers, in the vital's unit.
+    const stated = (says: string) =>
+      [...says.matchAll(/(\d+(?:\.\d+)?)(?: (m?s)\b)?/g)].map(([, n, u]) =>
+        u === "s" ? Number(n) * 1000 : Number(n),
+      );
+    for (const [name, v] of Object.entries(VITALS)) {
+      expect(stated(v.says), name).toEqual([v.good, v.poor]);
+      expect(rating(name, v.good)).toBe("good");
+      expect(rating(name, (v.good + v.poor) / 2)).toBe("needs improvement");
+      expect(rating(name, v.poor)).toBe("needs improvement");
+      expect(rating(name, v.poor * 1.01)).toBe("poor");
+    }
+    // The raw value, not the shown one: 0.104 shows as 0.10.
+    expect(rating("CLS", 0.104)).toBe("needs improvement");
+    expect(rating("LCP", null)).toBeNull();
+    expect(rating("constructor", 1)).toBeNull();
   });
 
   it("writes a network's kind after its name", () => {
@@ -86,6 +126,15 @@ describe("format", () => {
         networkKind,
       ),
     ).toEqual(["ISP", "Hosting", "Business", "Education", "Government", ""]);
+  });
+
+  it("writes a purpose group as a tab, an acronym in capitals", () => {
+    expect(["ai", "seo", "search", "monitoring"].map(groupLabel)).toEqual([
+      "AI",
+      "SEO",
+      "Search",
+      "Monitoring",
+    ]);
   });
 
   it("starts a signal with a capital, a dotted name as it is", () => {

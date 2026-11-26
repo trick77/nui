@@ -312,9 +312,12 @@ function TrafficPanels({ classes }: { classes: Loaded<Classes> }) {
   );
 }
 
-// A purpose group's tab: the bot list's word, "ai" in capitals.
-const groupLabel = (g: string) =>
-  g === "ai" ? "AI" : g.charAt(0).toUpperCase() + g.slice(1);
+// The groups that are acronyms, in capitals.
+const ACRONYMS = new Set(["ai", "seo"]);
+
+// A purpose group's tab: the bot list's word, capitalised.
+export const groupLabel = (g: string) =>
+  ACRONYMS.has(g) ? g.toUpperCase() : g.charAt(0).toUpperCase() + g.slice(1);
 
 const CLASS_OF_SUB: Record<string, ClassKey> = {
   bot: "bot",
@@ -346,7 +349,7 @@ function Services() {
                   {joinSep([r.service, r.category])}
                   {r.declared && (
                     <span
-                      className="pill ml-1.5 !text-muted"
+                      className="pill ml-1.5 !border-elevated-border !text-muted"
                       title="The service's addresses serve several purposes; this one is what the client's user agent declares."
                     >
                       declared
@@ -356,7 +359,10 @@ function Services() {
                     <>
                       {(r.service || r.category) && SEP}
                       <span title="From the Signature-Agent header. Not verified.">
-                        says it is <span className="font-mono">{r.says}</span>
+                        says it is{" "}
+                        <span className="font-mono wrap-anywhere">
+                          {r.says}
+                        </span>
                       </span>
                     </>
                   )}

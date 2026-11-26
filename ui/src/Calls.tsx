@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { ListRow, Watch } from "./api";
-import { num, pct } from "./format";
+import { ms, num, pct } from "./format";
 import type { Loaded } from "./hooks";
 import { type Col, TopList, changeCol } from "./lists";
 import { AllClasses, SectionHead, useDash } from "./ui";
@@ -13,7 +13,6 @@ import { ScriptHosts } from "./Watch";
 const mono = (s: string) => (
   <span className="font-mono text-[12.5px] wrap-anywhere">{s}</span>
 );
-const ms = (x?: number) => (x == null ? "–" : `${num(x)} ms`);
 
 const failed: Col = {
   head: "Failed",
