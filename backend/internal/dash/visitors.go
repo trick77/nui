@@ -59,7 +59,7 @@ func (s *Server) actors(ctx context.Context, q *query, from, to time.Time) (map[
 				}
 				return s.actorPiece(ctx, q, pc[0], pc[1], sessions, out)
 			}
-			carried, err := s.carriedOn(ctx, q, ms(pc[0])/dayMS, "")
+			carried, err := s.carriedOn(ctx, q, q.aud, ms(pc[0])/dayMS, "")
 			if err != nil {
 				return err
 			}
@@ -93,17 +93,18 @@ func (s *Server) actors(ctx context.Context, q *query, from, to time.Time) (map[
 }
 
 // carriedOn is the sessions a day's stored rows carry from the day before, per address key (key's alone, or every
-// key's for ""), the audience's parts: what a raw read of the day cannot learn once the day before's raw is gone.
+// key's for ""), aud's parts: what a raw read of the day cannot learn once the day before's raw is gone.
 // Only from complete rows (built, not mid-write or cut by the cap), their state read in the same statement; a day
 // without them (unbuilt: the size cap's last days) counts a session crossing its midnight on both days.
-func (s *Server) carriedOn(ctx context.Context, q *query, day int64, key string) (map[string]int64, error) {
+func (s *Server) carriedOn(ctx context.Context, q *query, aud string, day int64, key string) (map[string]int64,
+	error) {
 	cond, args := "", []any{q.site.ID, day}
 	if key != "" {
 		cond, args = " AND t.ip_key = ?3", append(args, key)
 	}
 	rows, err := s.query(ctx, `SELECT t.ip_key, SUM(t.carried) FROM agg_day d JOIN agg_addr t ON t.site_id = d.site_id
 		AND t.day = d.day WHERE d.site_id = ?1 AND d.day = ?2 AND d.frozen = 1 AND d.dirty != `+
-		strconv.Itoa(store.AggWriting)+` AND t.carried > 0`+cond+partCond(q.aud)+` GROUP BY t.ip_key`, args...)
+		strconv.Itoa(store.AggWriting)+` AND t.carried > 0`+cond+partCond(aud)+` GROUP BY t.ip_key`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1661,8 +1662,8 @@ func (s *Server) actorIn(ctx context.Context, q *query, key string, from, to tim
 			if err := s.actorSids(ctx, q.site.ID, key, pt.lo.Add(-readSpan), pt.lo, seen, nil); err != nil {
 				return nil, err
 			}
-		default: // its raw gone: the sessions this day's stored rows carry from it
-			c, err := s.carriedOn(ctx, q, pt.day, key)
+		default: // its raw gone: the sessions this day's stored rows carry from it, every part's as the sums here
+			c, err := s.carriedOn(ctx, q, "all", pt.day, key)
 			if err != nil {
 				return nil, err
 			}
