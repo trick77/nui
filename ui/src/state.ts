@@ -156,19 +156,19 @@ export function tabTitle(site: string | null, v: View): string {
 
 export function viewHref(base: string, v: View): string {
   const q = new URLSearchParams();
-  // Site and range are always written, the audience on the dashboard, the
-  // defaults too: left out, a reload or a link would take the browser's last.
+  // Site, range and audience are always written, the defaults too: left out,
+  // a reload or a link would take the browser's last. On every page: the log
+  // and the alerts lead back to the dashboard as it was, after a reload too.
   if (v.site) q.set("site", v.site);
   if (v.range) q.set("range", v.range);
-  if (v.page === "dash") {
-    q.set("aud", v.aud);
-    if (v.cmp !== "prev") q.set("cmp", v.cmp);
-  } else if (v.page === "log") {
+  q.set("aud", v.aud);
+  if (v.cmp !== "prev") q.set("cmp", v.cmp);
+  if (v.page === "log") {
     for (const k of LOG_KEYS) {
       const val = v.log[k];
       if (val) q.set(k, val);
     }
-  } else if (v.all) q.set("all", "1");
+  } else if (v.page === "alerts" && v.all) q.set("all", "1");
   const s = q.toString();
   return `${base}${v.page === "dash" ? "" : v.page}${s ? `?${s}` : ""}`;
 }
