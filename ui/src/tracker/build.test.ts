@@ -224,13 +224,14 @@ describe("the built script", () => {
     for (const p of props) expect(wire.has(p), p).toBe(false);
   });
 
-  // Every page loads it: gzipped at the default level, 8985 bytes with the
-  // standard CLS and INP (8533 before), a budget of that and about 40.
+  // Every page loads it: gzipped at the default level, 9069 bytes with the
+  // unhook of a switched-off tag (8985 before, 8533 before the standard CLS
+  // and INP), a budget of that and about 40.
   it("stays within its size budget", async () => {
     const gz = await new Response(
       new Response(code).body!.pipeThrough(new CompressionStream("gzip")),
     ).arrayBuffer();
-    expect(gz.byteLength).toBeLessThanOrEqual(9025);
+    expect(gz.byteLength).toBeLessThanOrEqual(9110);
   });
 
   it("mangles no browser API and none of the page's window.trakk", () => {

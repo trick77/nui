@@ -941,6 +941,43 @@ describe("sending", () => {
     expect(t.state().queued).toBe(0);
   });
 
+  it("runs nothing in the page once switched off", async () => {
+    const push = History.prototype.pushState;
+    let refuse = false;
+    vi.spyOn(history, "pushState").mockImplementation(function (
+      this: History,
+      ...a: Parameters<History["pushState"]>
+    ) {
+      if (refuse) throw new Error("refused");
+      return push.apply(this, a);
+    });
+    const t = boot();
+    fetchMock.mockImplementation(() => reply(403));
+    t.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.state().disabled).toBe(true);
+    // Past the pause between two writes of the session's last activity.
+    vi.advanceTimersByTime(10_000);
+    const put = vi.spyOn(Storage.prototype, "setItem");
+    const frame = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", frame);
+    const focus = vi.spyOn(document, "hasFocus");
+    for (const type of ["pointerdown", "keydown", "pointermove"])
+      document.dispatchEvent(new Event(type));
+    window.dispatchEvent(new Event("scroll"));
+    window.dispatchEvent(new Event("focus"));
+    history.pushState(null, "", "/elsewhere");
+    expect(put).not.toHaveBeenCalled();
+    expect(frame).not.toHaveBeenCalled();
+    expect(focus).not.toHaveBeenCalled();
+    expect(t.state().queued).toBe(0);
+    // A history call that throws keeps nothing, starts no timer.
+    refuse = true;
+    const timers = vi.getTimerCount();
+    expect(() => history.pushState(null, "", "/x")).toThrow("refused");
+    expect(vi.getTimerCount()).toBe(timers);
+  });
+
   it("backs off on errors and switches off after repeated failures", async () => {
     const t = boot();
     fetchMock.mockImplementation(() => reply(503));
@@ -1943,7 +1980,15 @@ describe("capture", () => {
     t.flush();
     await vi.advanceTimersByTimeAsync(0);
     expect(t.state().disabled).toBe(true);
-    expect(reads(both)).toEqual([]);
+    // Its listeners are gone: the page's own keeps the test runner from
+    // reporting the error as uncaught (and reading it).
+    const page = () => {};
+    window.addEventListener("error", page);
+    try {
+      expect(reads(both)).toEqual([]);
+    } finally {
+      window.removeEventListener("error", page);
+    }
   });
 
   // WebKit and Chromium hide an error that comes out of the wrapped history

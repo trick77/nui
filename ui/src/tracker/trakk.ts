@@ -975,6 +975,17 @@ export function start(
   };
 
   // ---- sending
+  // Switched off for good: no handler, observer or timer of this script runs
+  // in the page any more. The history methods stay wrapped, as a later
+  // script's own wrapper would be lost: pageView and keep return at once.
+  const halt = () => {
+    disabled = true;
+    queue.length = 0;
+    for (const off of offs.splice(0)) guard(off);
+    for (const [o] of observers.splice(0)) guard(() => o.disconnect());
+    clearTimeout(timer);
+    clearTimeout(thrownTimer);
+  };
   // paced: a 429, the collector's pace and not a failure (it charges a
   // batch by what it stores, so a page with long URLs meets it in normal
   // use): wait as long as it says, or the own back-off without a
@@ -984,11 +995,7 @@ export function start(
       LIMITS.backoffMaxMs,
       backoff ? backoff * 2 : LIMITS.backoffMs,
     );
-    if (!paced && ++failures >= LIMITS.failures) {
-      disabled = true;
-      queue.length = 0;
-      return;
-    }
+    if (!paced && ++failures >= LIMITS.failures) return halt();
     const ra = retryMs > 0 ? retryMs : 0;
     notBefore =
       now() +
@@ -1105,10 +1112,8 @@ export function start(
       if (ok) {
         failures = 0;
         backoff = 0;
-      } else if (!nav.sendBeacon) {
-        disabled = true;
-        queue.length = 0;
-      } else fail(0);
+      } else if (!nav.sendBeacon) halt();
+      else fail(0);
       return;
     }
     const n = utf8Len(body);
@@ -1146,9 +1151,7 @@ export function start(
           notBefore = asked = 0;
         } else if (st === 403) {
           // Unknown site: nothing here will ever be accepted.
-          disabled = true;
-          queue.length = 0;
-          return;
+          return halt();
         } else if (st === 408 || st === 429 || st >= 500) {
           // 408: the body came in too slowly, the batch itself is fine.
           let ra = 0;
@@ -1476,6 +1479,7 @@ export function start(
     loc.pathname +
     (/^#[/!]/.test(loc.hash) ? loc.hash.replace(/\?[^]*$/, "") : "");
   const pageView = (force: boolean) => {
+    if (disabled) return;
     const k = pageKey();
     landed();
     const was = here;
@@ -1507,6 +1511,7 @@ export function start(
   let thrown: [unknown, number] | undefined;
   let thrownTimer: ReturnType<typeof setTimeout> | 0 = 0;
   const keep = (v: unknown) => {
+    if (disabled) return;
     // First the timer: without one nothing is kept.
     if (!thrownTimer)
       thrownTimer = setTimeout(() => {
@@ -1946,16 +1951,11 @@ export function start(
     event,
     flush: (final = false) => guard(() => flush(final)),
     stop: () => {
-      for (const off of offs.splice(0)) guard(off);
-      for (const [o] of observers.splice(0)) guard(() => o.disconnect());
+      halt();
       for (const [m, o] of orig.splice(0))
         guard(() => {
           (hist as unknown as Record<string, unknown>)[m] = o;
         });
-      if (timer) clearTimeout(timer);
-      if (thrownTimer) clearTimeout(thrownTimer);
-      timer = 0;
-      disabled = true;
     },
     state: () => ({
       queued: queue.length,
