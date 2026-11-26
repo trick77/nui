@@ -57,7 +57,7 @@ func newDashboard(ctx context.Context, st *store.Store, w *sim.World, now time.T
 		}
 	}
 	srv := &dash.Server{DB: st, Sites: reg, Ref: w.Ref.Data, Counters: counters, RetentionMonths: 25,
-		Build: "sim", Now: clock, Source: src}
+		Now: clock, Source: src}
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/dash/{endpoint}", srv)
 	return &Dashboard{srv: srv, mux: mux}, nil

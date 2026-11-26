@@ -261,7 +261,7 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 		Source: dispatch.NewEval(reads, notify.Rules, time.Now(), model), PublicFQDN: cfg.PublicFQDN,
 		Hello: realChannels(cfg, mode)})
 	ds := &dash.Server{DB: st, Sites: reg, Ref: ref, Counters: counters, Model: model,
-		RetentionMonths: cfg.RetentionMonths, RawDays: cfg.RawRetentionDays, Build: version.String(), Notify: alerts}
+		RetentionMonths: cfg.RetentionMonths, RawDays: cfg.RawRetentionDays, Notify: alerts}
 
 	// Background work runs on its own context: the server drains first, then the writer flushes what the drained
 	// requests queued.

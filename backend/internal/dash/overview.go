@@ -453,7 +453,7 @@ func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 	})
 	for _, st := range all {
 		row := siteRow{Site: st.Domain, Name: st.Label(), Product: st.Product, Kind: st.Kind, Feed: st.HasFeed}
-		b, sv, err := s.lastSeen(r.Context(), st.ID)
+		b, sv, err := s.LastSeen(r.Context(), st.ID)
 		if err != nil {
 			s.fail(w, r, err)
 			return
@@ -470,12 +470,13 @@ func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 	apix.JSON(w, http.StatusOK, map[string]any{"sites": rows})
 }
 
-// lastSeen is the time of each source's newest stored event, before and after a restart alike. Where to look comes
+// LastSeen is the time of each source's newest stored event, before and after a restart alike (the hourly counters,
+// not this process's own record alone); zero for one that never delivered. Where to look comes
 // from when the source last delivered: this process's own record (exact), else the last hour the counters show. A
 // delivery dates its events at most lastSeenBack before it (the feed's hour, the browser's half hour) and a minute
 // after, so the newest event is searched in that window only: a short index range, even when the other source
 // floods the site and this one delivered long ago. Found nothing (written by now, or pruned): the delivery time.
-func (s *Server) lastSeen(ctx context.Context, site int64) (browser, server time.Time, err error) {
+func (s *Server) LastSeen(ctx context.Context, site int64) (browser, server time.Time, err error) {
 	var bh, sh int64
 	if err = s.row(ctx, `SELECT COALESCE(MAX(CASE WHEN accepted > accepted_server THEN hour END), 0),
 		COALESCE(MAX(CASE WHEN accepted_server > 0 THEN hour END), 0) FROM ingest_stat WHERE site_id = ?`, site).

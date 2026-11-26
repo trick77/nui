@@ -34,7 +34,6 @@ type Server struct {
 	RetentionMonths int
 	// RawDays is how long raw events are kept (BACKEND_RAW_RETENTION_DAYS); 0 keeps them RetentionMonths.
 	RawDays int
-	Build   string
 	Now     func() time.Time
 	// Source is where the figures the aggregates can serve come from: SourceAuto but in tests.
 	Source Source
@@ -149,7 +148,7 @@ func (s *Server) parse(r *http.Request) (*query, error) {
 		q.tz = "UTC"
 	}
 	loc, err := time.LoadLocation(q.tz)
-	if err != nil || strings.HasPrefix(q.tz, "/") || strings.Contains(q.tz, "..") {
+	if err != nil || q.tz == "Local" || strings.HasPrefix(q.tz, "/") || strings.Contains(q.tz, "..") {
 		return nil, errors.New("tz must be an IANA zone")
 	}
 	q.loc = loc

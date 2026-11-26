@@ -296,7 +296,7 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 			}
 		}
 	}
-	browser, server, err := s.lastSeen(ctx, q.site.ID)
+	browser, server, err := s.LastSeen(ctx, q.site.ID)
 	if err != nil {
 		s.fail(w, r, err)
 		return

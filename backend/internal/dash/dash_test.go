@@ -408,6 +408,7 @@ func TestBadParameters(t *testing.T) {
 		{"overview", p(feedSite, "cmp", "next"), 400},
 		{"overview", p(feedSite, "tz", "Mars/Olympus"), 400},
 		{"overview", p(feedSite, "tz", "../../etc/passwd"), 400},
+		{"overview", p(feedSite, "tz", "Local"), 400}, // the host's zone, no IANA name
 		{"list", p(feedSite, "dim", "secrets"), 400},
 		{"list", p(feedSite, "dim", "pages", "limit", "0"), 400},
 		{"list", p(feedSite, "dim", "pages", "sort", "random"), 400},
