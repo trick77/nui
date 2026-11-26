@@ -11,16 +11,19 @@ Trakk is part of the analysis: it works from what Trakk has already worked out a
 ![The overview: figures with trends, visitors over 30 days against the previous period, what is noteworthy and who is asking](docs/img/overview.png)
 
 - **The whole picture.** A small browser script reports page views, clicks, errors and web vitals; your backend
-  reports every request it serves. Together they give a 360° view of what reaches your product.
+  reports every request it serves. Together they give a 360° view of what reaches your product, and of how its pages
+  serve people: engaged time and the vitals' 75th percentile per site, engaged time, LCP, INP and CLS per page.
 - **Who is doing what.** Every address with its network, country and client, and the trail of what it did. Nothing
   is sampled and nothing leaves your server.
 - **People or bots.** Each visitor is classed as a person, an API client your backend signed in, a known bot, an uptime
   probe or unknown automation, and the dashboard shows the reasons. Known bots come from the
-  [ipverse](https://github.com/ipverse) lists.
+  [ipverse](https://github.com/ipverse) lists; your backend's requests show them by service, with the purpose its
+  vendor declares (AI training, AI search, AI assistants, search, …) and what a client says it is (its
+  Signature-Agent, shown, not verified).
 - **AI built in, not bolted on.** The model is part of the analysis, not a chat box on top of the charts: it works from
   the facts and verdicts Trakk has already computed, writes a short briefing of what changed and says in a sentence
   what an address is up to. Every figure is computed without it; the model never produces a number.
-- **Harmless to your site.** The script is under 6 kB gzipped, sends in the background, and caps and backs off on its
+- **Harmless to your site.** The script is about 9 kB gzipped, sends in the background, and caps and backs off on its
   own. If Trakk is down, your pages and your backend do not notice.
 - **One container.** A single image behind your reverse proxy, with its database inside and sign-in by OIDC or an
   admin token: `docker compose up -d`.
@@ -255,7 +258,9 @@ rejected once; a batch refused for the rate is not counted until it is taken.
 Raw events, every request with its address, user agent and path, are kept `BACKEND_RAW_RETENTION_DAYS` (90, at
 least 15: 7d and its prior period are read raw): the log, a visitor's trail and what an address does reach back that
 far. The figures (tiles, lists, hours, the year before) are built per UTC day two days after it ended and kept; a
-day's raw is deleted only once its figures are built from it. Each address's daily sums, the actor classes and the
+day's raw is deleted only once its figures are built from it. They hold the known bots by service, people's Web Vitals
+(all five per hour, LCP, INP and CLS per page) and engaged time; a day an older release built, its raw gone, has
+none of these, and the list or panel then says since when. Each address's daily sums, the actor classes and the
 model's usage are kept `BACKEND_RETENTION_MONTHS` (25). `BACKEND_MAX_DB_MB` caps the whole
 ([`.env.example`](.env.example)).
 
@@ -272,6 +277,14 @@ A release that first deletes raw by days deletes nothing for 7 days after its fi
 footer says from when. Then raw from the day holding the months' cutoff back goes at once, the rest down to the raw
 days a day at a time in short steps, and the database file shrinks a MiB at a time (incremental vacuum, the mode
 Trakk creates its database in), at most 30 s per retention round, without locking the collector out.
+
+The release that adds services and page experience applies two migrations at its first start, rebuilds every
+day with raw in the background and names the stored events of known bots and probes by the bot list, newest day first
+(the job `names`), rebuilding each day it names. While no bot list is loaded, a day with a bot's or a probe's rows
+waits unbuilt, its raw kept: `agg` reports failing, `names` too once it has waited an hour, and the size cap, once
+reached, stops at such a day, deleting no aggregates either: `retention` reports failing and the database stays over
+the cap. The Web Vitals count only from that release's script, which measures CLS and INP the standard way: a
+browser still holding an older copy sends none that count.
 
 ### Notifications
 
@@ -354,8 +367,12 @@ URL too: `-notify-test` always sends. A failed one is tested again at the next s
 
 `/api/dash/*` is the dashboard's own API (a session required). For links into it: the log's `addr` filter takes an
 address or an IPv6 /64 (any other prefix is a 400), its `asn` filter an AS number, its `name` filter
-an event's exact name (a script error's message). Noteworthy shows five findings and counts the rest; `findings=all`
+an event's exact name (a script error's message), its `service` filter a bot list name (the server's requests, as
+`list?dim=services` counts them). Noteworthy shows five findings and counts the rest; `findings=all`
 lists every one. `watch` answers the hosts a site's pages loaded scripts from in a range, the new ones marked.
+`experience` answers people's engaged time per visit and the Web Vitals' 75th percentiles over a range, `dim=experience`
+the pages with engaged time per page view and LCP, INP and CLS; both are a 404 on an `api` domain with a feed key.
+`dim=services` lists the known bots and probes by the bot list's name, `cat` one purpose group (`ai`, `search`, …).
 
 ## License
 
