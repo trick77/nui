@@ -519,8 +519,8 @@ func (s *Server) spikes(ctx context.Context, q *query, th Thresholds, add func(i
 		return err
 	}
 	nets := func(w window, short bool, _ map[string]bool) (map[string]int64, *otherSums, error) {
-		sc := scan{dimSpec: dimSpec{where: "source = 'server'", key: "CAST(asn AS TEXT)", a: "COUNT(*)", b: "0",
-			value: countA, second: zeroSecond}, dim: "networks", fromB: true}
+		sc := scan{dimSpec: dimSpec{where: "source = 'server'", key: "CAST(asn AS TEXT)", a: "COUNT(*)", b: "0"},
+			dim: "networks", fromB: true}
 		sums := newSums()
 		if err := s.scanDim(ctx, q, sc, w, short, sums); err != nil {
 			return nil, nil, err

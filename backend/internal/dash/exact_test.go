@@ -606,3 +606,36 @@ func TestExact_StoredReasonsRespaced(t *testing.T) {
 		}
 	}
 }
+
+// The hour strip is the viewer's: in a zone on the half hour an hour of UTC spans two local ones.
+func TestExact_VisitorHoursOnTheHalfHour(t *testing.T) {
+	r, insert := exactRig(t)
+	insert(pageLoad(at("2026-11-22T10:45:00Z"), "v", "192.0.2.9", "CH", "Mozilla/5.0 (Windows) Firefox/140", 0)...)
+	code, v := r.get(t, "visitor", p(feedSite, "range", "24h", "tz", "Asia/Kolkata", "key", "192.0.2.9"))
+	if code != 200 {
+		t.Fatalf("visitor: %d %v", code, v)
+	}
+	hours := v["hours"].([]any) // 10:45 UTC is 16:15 in Kolkata
+	if num64(hours[16]) == 0 || num64(hours[15]) != 0 {
+		t.Errorf("hours %v, want the events at 16", hours)
+	}
+}
+
+// A list's search reads a typed space as the en space a client's name holds around its dot.
+func TestExact_ListSearchFoldsSpaces(t *testing.T) {
+	r, insert := exactRig(t)
+	insert(pageLoad(at("2026-11-22T10:00:00Z"), "v", "192.0.2.9", "CH", "Mozilla/5.0 (Macintosh) Chrome/142 Safari/537.36", 0)...)
+	_, all := r.get(t, "list", p(feedSite, "range", "24h", "dim", "agents"))
+	rows := listRows(all)
+	if len(rows) != 1 {
+		t.Fatalf("agents %v", all)
+	}
+	key := rows[0]["key"].(string)
+	if !strings.ContainsRune(key, ' ') {
+		t.Fatalf("the client's name %q holds no en space to fold", key)
+	}
+	typed := strings.Join(strings.Fields(strings.ToLower(key)), "  ")
+	if _, found := r.get(t, "list", p(feedSite, "range", "24h", "dim", "agents", "q", typed)); len(listRows(found)) != 1 {
+		t.Errorf("q=%q found %v", typed, found)
+	}
+}
