@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -127,6 +128,160 @@ func TestParseBots(t *testing.T) {
 			t.Error("bad list parsed")
 		}
 	}
+	// Without agents (today's lists) a service has none, and its name is the service alone.
+	for _, p := range b.Providers {
+		if p.Agents != nil {
+			t.Errorf("%s agents = %+v", p.Name, p.Agents)
+		}
+		if a, ok := p.Agent("Mozilla/5.0 (compatible; Googlebot/2.1)"); ok {
+			t.Errorf("%s agent = %+v", p.Name, a)
+		}
+		if n, ok := b.ByName(p.Name); !ok || n != (Named{Service: p.Name, Class: p.Class}) {
+			t.Errorf("ByName(%s) = %+v %v", p.Name, n, ok)
+		}
+	}
+}
+
+// name64 is the longest agent name kept.
+const name64 = "a123456789012345678901234567890123456789012345678901234567890123"
+
+// agentList declares agents: names and purposes the vendor gives each user-agent token of a service.
+const agentList = `{"services":{
+ "ClaudeBot":{"ipv4":["192.0.2.0/24"],"ip_list_authoritative":true,
+   "user_agent_patterns":["*ClaudeBot*","*Claude-User*","*Claude-Search*"],
+   "agents":[{"name":"ClaudeBot","pattern":"*ClaudeBot*","purpose":"ai-training"},
+     {"name":" Claude-User ","pattern":"*Claude-User*","purpose":" AI-Assistant "},
+     {"name":"Claude-Search","pattern":"*Claude-Search*","purpose":"ai-search"},
+     {"name":"Claude-SearchBot","pattern":"*Claude-SearchBot*","purpose":"quantum-crawl"},
+     {"name":"Claude-Typed","pattern":"*Claude-Typed*","purpose":7},
+     {"name":"Claude-Under","pattern":"*Claude-Under*","purpose":"ai_training"},
+     {"name":"Claude-Spaced","pattern":"*Claude-Spaced*","purpose":"AI Assistant"},
+     {"name":"Claude-Long","pattern":"*Claude-Long*","purpose":"a123456789012345678901234567890123"},
+     {"name":"Claude-Hidden","pattern":"*Claude-Hidden*"},
+     {"pattern":"*NoName*"},{"name":"  ","pattern":"*Claude-Searcher*"},{"name":"NoPattern","purpose":"x"},
+     {"name":"Star","pattern":"**"},{"name":7,"pattern":"*Seven*"},{"name":"Bad","pattern":["*Bad*"]},
+     "Claude-String",null,7,
+     {"name":"` + name64 + `x","pattern":"*TooLong*"},{"name":"` + name64 + `","pattern":"*Claude-Max*"},
+     {"name":"Claude\u0007Bell","pattern":"*Bell*"},{"name":"Claude-Blank","pattern":"   "},
+     {"name":"Claude-Padded","pattern":" *Claude-Padded* ","purpose":"ai-search"},
+     {"name":"Claude Dot.Bot","pattern":"*Dot.Bot*"}]},
+ "Plain":{"ipv4":["198.51.100.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Plain*"],
+   "agents":{"name":"Plain","pattern":"*Plain*"}},
+ "Stringy":{"ipv4":["198.51.101.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Stringy*"],
+   "agents":"Stringy"},
+ "Numeric":{"ipv4":["198.51.102.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Numeric*"],"agents":7},
+ "Null":{"ipv4":["198.51.103.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Null*"],"agents":null},
+ "Empty":{"ipv4":["198.51.104.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Empty*"],"agents":[]}}}`
+
+func TestParseBots_Agents(t *testing.T) {
+	b, err := parseBots([]byte(agentList), []byte(monitoring))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each agent of no use and each agents value of the wrong shape, none for null or []; the first ones in order.
+	if r := b.RejectedAgents; r.Count != 15 || strings.Join(r.First, ", ") != `ClaudeBot "" (agent name), `+
+		`ClaudeBot "" (agent name), ClaudeBot "NoPattern" (agent pattern), ClaudeBot "Star" (agent pattern), `+
+		`ClaudeBot "7" (agent name)` {
+		t.Errorf("rejected agents = %+v", r)
+	}
+	if b.Rejected.Count != 0 {
+		t.Errorf("rejected = %+v", b.Rejected)
+	}
+	p, ok := b.ByUA("Claude-User/1.0")
+	if !ok || p.Name != "ClaudeBot" {
+		t.Fatalf("ByUA = %+v", p)
+	}
+	var got []string
+	for _, a := range p.Agents {
+		got = append(got, a.Name+"="+a.Purpose)
+	}
+	// Trimmed and lower-cased, kept when unknown but well-formed, "" when not a word; no name, no usable pattern
+	// or a wrong shape skips the agent. A name may hold spaces and dots.
+	if want := "ClaudeBot=ai-training Claude-User=ai-assistant Claude-Search=ai-search " +
+		"Claude-SearchBot=quantum-crawl Claude-Typed= Claude-Under= Claude-Spaced= Claude-Long= Claude-Hidden= " +
+		name64 + "= Claude-Padded=ai-search Claude Dot.Bot="; strings.Join(got, " ") != want {
+		t.Errorf("agents = %q, want %q", strings.Join(got, " "), want)
+	}
+	for ua, want := range map[string]string{
+		"Mozilla/5.0 (compatible; ClaudeBot/1.0)": "ClaudeBot",
+		"claude-user/1.0":                         "Claude-User",
+		// The longest pattern wins: *Claude-SearchBot* over *Claude-Search*.
+		"Claude-SearchBot/1.0": "Claude-SearchBot",
+		"Claude-Search/1.0":    "Claude-Search",
+		"Mozilla/5.0 Firefox":  "",
+		"Seven/1 NoName/1":     "",
+		// The pattern of an agent without a name still decides: *Claude-Searcher* names none, not *Claude-Search*.
+		"Claude-Searcher/1": "",
+		"TooLong/1 Bell/1":  "",
+		// A pattern is trimmed.
+		"Claude-Padded/1": "Claude-Padded",
+		"Dot.Bot/1":       "Claude Dot.Bot",
+	} {
+		a, ok := p.Agent(ua)
+		if a.Name != want || ok != (want != "") {
+			t.Errorf("Agent(%q) = %+v %v, want %q", ua, a, ok, want)
+		}
+	}
+	// A pattern only an agent carries names no service.
+	if q, ok := b.ByUA("Claude-Hidden/1"); ok {
+		t.Errorf("agent pattern named %+v", q)
+	}
+	for _, name := range []string{"Plain", "Stringy", "Numeric", "Null", "Empty"} {
+		q, ok := b.ByUA(name + "/1")
+		if !ok || q.Name != name || q.Agents != nil || len(q.Ranges) != 1 {
+			t.Errorf("%s = %+v", name, q)
+		}
+	}
+	var nilProvider *Provider
+	if _, ok := nilProvider.Agent("ClaudeBot"); ok {
+		t.Error("nil provider agent")
+	}
+}
+
+// What an agent of no use leaves behind: one trace each, its purpose still read.
+func TestParseAgents_Rejected(t *testing.T) {
+	for _, c := range [][2]string{
+		{``, ""},
+		{`null`, ""},
+		{`[]`, ""},
+		{`{"name":"A","pattern":"*A*"}`, "S (unreadable agents)"},
+		{`[7]`, "S (unreadable agent)"},
+		{`[null]`, "S (unreadable agent)"},
+		{`[{"name":"A\u0000B","pattern":"*A*"}]`, `S "A\x00B" (agent name)`},
+		{`[{"name":"A\tB","pattern":"*A*","purpose":"search"}]`, `S "A\tB" (agent name)`},
+		{`[{"name":"Agent é/2","pattern":"*A*"}]`, ""},
+		{`[{"name":[1],"pattern":"*A*","purpose":"search"}]`, `S "[1]" (agent name)`},
+		{`[{"name":"A","pattern":"  ","purpose":"search"}]`, `S "A" (agent pattern)`},
+		{`[{"name":"A","pattern":7,"purpose":"search"}]`, `S "A" (agent pattern)`},
+		{`[{"name":"A","pattern":" *A* ","purpose":"search"}]`, ""},
+		{`[{"name":"Agent Dot.Bot/2","pattern":"*A*"}]`, ""},
+	} {
+		raw, want := c[0], c[1]
+		var r Rejected
+		agents := parseAgents("S", json.RawMessage(raw), &r)
+		if got := strings.Join(r.First, ", "); got != want || r.Count != len(r.First) {
+			t.Errorf("%s: rejected = %+v, want %q", raw, r, want)
+		}
+		if strings.Contains(raw, "search") && (len(agents) != 1 || agents[0].purpose != "search") {
+			t.Errorf("%s: agents = %+v", raw, agents)
+		}
+	}
+	// What does not print renders like another name: a zero-width space, a bidi override, a no-break space.
+	for _, c := range []rune{0x200b, 0x202e, 0xa0} {
+		name := "A" + string(c) + "B"
+		raw, err := json.Marshal([]map[string]string{{"name": name, "pattern": "*A*", "purpose": "search"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var r Rejected
+		agents := parseAgents("S", raw, &r)
+		if want := fmt.Sprintf("S %q (agent name)", name); strings.Join(r.First, ", ") != want || r.Count != 1 {
+			t.Errorf("%U: rejected = %+v, want %q", c, r, want)
+		}
+		if len(agents) != 1 || agents[0].named || agents[0].purpose != "search" {
+			t.Errorf("%U: agents = %+v", c, agents)
+		}
+	}
 }
 
 // One entry of an unexpected shape costs that service, not the list: the services added since still load. A range
@@ -162,6 +317,307 @@ func TestParseBots_UnreadableEntry(t *testing.T) {
 		if got := matchRdns(host, p.RdnsPatterns, anyRun); got != want {
 			t.Errorf("%s = %v", host, got)
 		}
+	}
+	// Agents of an unexpected shape are no unreadable entry: at the broken bound already, the list still loads.
+	b, err = parseBots([]byte(`{"services":{"Odd":{"ipv4":"192.0.2.0/24"},
+		"A":{"ipv4":["192.0.2.0/24"],"ip_list_authoritative":true,"agents":{"name":"A"}},
+		"B":{"ipv4":["198.51.100.0/24"],"ip_list_authoritative":true,"agents":"B"},
+		"C":{"ipv4":["203.0.113.0/24","0.0.0.0/0"],"ip_list_authoritative":true,
+		  "agents":[7,"x",{"name":[1]},{"purpose":{}}]}}}`),
+		[]byte(monitoring))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each traced all the same, on its own: A's and B's values, C's four elements. More than the first few, they
+	// crowd out neither C's refused range nor Odd.
+	if r := b.RejectedAgents; r.Count != 6 || strings.Join(r.First, ", ") != `A (unreadable agents), `+
+		`B (unreadable agents), C (unreadable agent), C (unreadable agent), C "[1]" (agent name)` {
+		t.Errorf("rejected agents = %+v", r)
+	}
+	if b.Rejected.Count != 2 || strings.Join(b.Rejected.First, ", ") != "C 0.0.0.0/0, Odd (unreadable entry)" {
+		t.Errorf("rejected = %+v", b.Rejected)
+	}
+	for _, ip := range []string{"192.0.2.1", "198.51.100.1", "203.0.113.1"} {
+		if ps := b.ByIP(addr(ip)); len(ps) != 1 || ps[0].Agents != nil {
+			t.Errorf("%s = %+v", ip, ps)
+		}
+	}
+}
+
+// A name stands for one thing: a service, or an agent with its service.
+func TestBots_ByName(t *testing.T) {
+	b, err := parseBots([]byte(`{"services":{
+		"Alpha":{"ipv4":["192.0.2.0/26"],"ip_list_authoritative":true,"user_agent_patterns":["*Alpha*"],
+		  "agents":[{"name":"Alpha-Index","pattern":"*Alpha-Index*","purpose":"search"},
+		    {"name":"Alpha-News","pattern":"*Alpha-News*","purpose":"search"},
+		    {"name":"Zeta","pattern":"*Zeta*","purpose":"ai-training"},
+		    {"name":"Shared","pattern":"*Shared*","purpose":"search"},
+		    {"name":"Alpha-News","pattern":"*Alpha-Newer*","purpose":"ai-training"},
+		    {"name":"alpha-index","pattern":"*Alpha-Idx*","purpose":"ai-assistant"},
+		    {"name":"Alpha-News","pattern":"*Alpha-Daily*","purpose":"search"}]},
+		"Beta":{"ipv4":["192.0.2.64/26"],"ip_list_authoritative":true,"user_agent_patterns":["*Beta*"],
+		  "agents":[{"name":"Shared","pattern":"*Beta-Shared*","purpose":"ai-training"},
+		    {"name":"Beta-Any","pattern":"*Beta*","purpose":"ai-training"},
+		    {"name":"Beta-Train","pattern":"*Beta-Train*","purpose":"ai-training"},
+		    {"name":"Beta-Ask","pattern":"*Beta-Ask*","purpose":"ai-assistant"},
+		    {"name":"alpha-news","pattern":"*Beta-News*","purpose":"search"},
+		    {"name":"zeta","pattern":"*Train*","purpose":"search"}]},
+		"ClaudeBot":{"ipv4":["192.0.2.128/26"],"ip_list_authoritative":true,"user_agent_patterns":["*Claude*"],
+		  "agents":[{"name":"ClaudeBot","pattern":"*ClaudeBot*","purpose":"ai-training"},
+		    {"name":"Claude-User","pattern":"*Claude-User*","purpose":"ai-assistant"}]},
+		"Delta":{"ipv4":["198.51.101.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Delta*"],
+		  "agents":[{"name":"DELTA","pattern":"*Delta*","purpose":"search"}]},
+		"Eta":{"ipv4":["198.51.102.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Eta*"],
+		  "agents":[{"name":"Shared","pattern":"*Eta-Shared*","purpose":"search"},
+		    {"name":"ZETA","pattern":"*Eta-Zeta*","purpose":"ai-training"}]},
+		"Gamma":{"ipv4":["192.0.2.192/26"],"ip_list_authoritative":true,"user_agent_patterns":["*Gamma*"],
+		  "agents":[{"name":"Gamma-Bot","pattern":"*Gamma-Bot*"}]},
+		"Iota":{"ipv4":["198.51.103.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Iota*"],
+		  "agents":[{"name":"Iota-Bot","pattern":"*Iota-Bot*","purpose":"search"},
+		    {"name":"Iota-Odd","purpose":"ai-training"},
+		    {"name":"`+name64+`x","pattern":"*Iota-Long*","purpose":"ai-assistant"}]},
+		"Theta":{"ipv4":["198.51.104.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Theta*"],
+		  "agents":[{"name":"Theta-Bot","pattern":"*Theta-Bot*","purpose":"search"}]},
+		"Zeta":{"ipv4":["198.51.100.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Zeta*"]}}}`),
+		[]byte(`{"services":{"Probe":{"ipv4":["203.0.113.0/24"],"ip_list_authoritative":true,
+		  "user_agent_patterns":["*Probe*"],
+		  "agents":[{"name":"Alpha","pattern":"*Alpha*","purpose":"uptime"},
+		    {"name":"Beta-Ask","pattern":"*Beta-Ask*","purpose":"uptime"},
+		    {"name":"Probe-Check","pattern":"*Probe-Check*","purpose":"uptime"}]},
+		  "Theta":{"ipv4":["198.51.105.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Theta*"],
+		  "agents":[{"name":"Theta-Ping","pattern":"*Theta-Ping*","purpose":"uptime"}]}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]Named{
+		// Purposes differ, counting the agents left out: only the user agent tells them apart.
+		"Alpha":       {Service: "Alpha", Class: "bot", Declared: true},
+		"Alpha-Index": {Service: "Alpha", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		// The first of two agents of one name.
+		"Alpha-News": {Service: "Alpha", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		"Beta":       {Service: "Beta", Class: "bot", Declared: true},
+		"Beta-Train": {Service: "Beta", Class: "bot", Purpose: "ai-training", Declared: true, Agent: true},
+		"Beta-Ask":   {Service: "Beta", Class: "bot", Purpose: "ai-assistant", Declared: true, Agent: true},
+		// An agent named like its own service is the agent, spelled as the service.
+		"ClaudeBot":   {Service: "ClaudeBot", Class: "bot", Purpose: "ai-training", Declared: true, Agent: true},
+		"Claude-User": {Service: "ClaudeBot", Class: "bot", Purpose: "ai-assistant", Declared: true, Agent: true},
+		"Delta":       {Service: "Delta", Class: "bot", Purpose: "search", Agent: true},
+		// Every agent left out, their purposes still the service's.
+		"Eta": {Service: "Eta", Class: "bot", Declared: true},
+		// An agent without a purpose: the service shares the "".
+		"Gamma":     {Service: "Gamma", Class: "bot"},
+		"Gamma-Bot": {Service: "Gamma", Class: "bot", Agent: true},
+		// Agents of no use still declare their purpose.
+		"Iota":     {Service: "Iota", Class: "bot", Declared: true},
+		"Iota-Bot": {Service: "Iota", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		// Listed twice: the first listing's class and agents, the purposes of both.
+		"Theta":     {Service: "Theta", Class: "bot", Declared: true},
+		"Theta-Bot": {Service: "Theta", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		// Named like another service: the service, the agent dropped; named like an earlier agent: that one.
+		"Zeta":        {Service: "Zeta", Class: "bot"},
+		"Shared":      {Service: "Alpha", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		"Probe":       {Service: "Probe", Class: "monitor", Purpose: "uptime"},
+		"Probe-Check": {Service: "Probe", Class: "monitor", Purpose: "uptime", Agent: true},
+	} {
+		if got, ok := b.ByName(name); !ok || got != want {
+			t.Errorf("ByName(%s) = %+v %v, want %+v", name, got, ok, want)
+		}
+	}
+	// Iota's two agents of no use, then each pattern of a name taken or of a repeat of another purpose, and Theta's
+	// second listing.
+	if r := b.RejectedAgents; r.Count != 13 || strings.Join(r.First, ", ") != `Iota "Iota-Odd" (agent pattern), `+
+		`Iota "`+name64[:50]+`" (agent name), Alpha "Zeta" (agent name taken), `+
+		`Alpha "Alpha-News" (agent purpose differs), Alpha "alpha-index" (agent purpose differs)` {
+		t.Errorf("rejected agents = %+v", r)
+	}
+	if b.Rejected.Count != 0 {
+		t.Errorf("rejected = %+v", b.Rejected)
+	}
+	// A dropped agent is gone from its service too: Agent never names what ByName resolves elsewhere.
+	for _, ua := range []string{"Zeta/1", "Shared/1", "Alpha/1", "Alpha-Newer/1", "Beta-Ask/1", "Probe-Check/1",
+		"Beta-Shared/1", "Beta-News/1", "Train/1", "Eta-Zeta/1", "Theta-Ping/1", "Delta/1"} {
+		for _, p := range b.Providers {
+			if a, ok := p.Agent(ua); ok {
+				if n, _ := b.ByName(a.Name); n.Service != p.Name || n.Class != p.Class || !n.Agent {
+					t.Errorf("%s: Agent(%s) = %+v, named %+v", p.Name, ua, a, n)
+				}
+			}
+		}
+	}
+	for svc, uas := range map[string]map[string]string{
+		// One name twice, its case aside: a repeat's pattern names the agent when it declares the agent's purpose,
+		// else none.
+		"Alpha/1": {"Alpha-Daily/1": "Alpha-News", "Alpha-Newer/1": "", "Alpha-Idx/1": "", "Alpha-News/1": "Alpha-News",
+			"Zeta/1": ""},
+		// A dropped agent's longer pattern names none, a kept one's longer pattern still names its agent.
+		"Beta/1": {"Beta-Shared/1": "", "Beta-News/1": "", "Beta/1": "Beta-Any", "Beta-Train/1": "Beta-Train",
+			"Train/1": ""},
+		"Delta/1": {"Delta/1": "Delta"},
+		"Eta/1":   {"Eta-Shared/1": "", "Eta-Zeta/1": ""},
+	} {
+		p, _ := b.ByUA(svc)
+		for ua, want := range uas {
+			if a, ok := p.Agent(ua); a.Name != want || ok != (want != "") {
+				t.Errorf("%s: Agent(%s) = %+v %v, want %q", p.Name, ua, a, ok, want)
+			}
+		}
+	}
+	if p, _ := b.ByUA("Alpha/1"); p == nil || len(p.Agents) != 3 {
+		t.Errorf("Alpha agents = %+v", p)
+	}
+	if p, _ := b.ByUA("Beta/1"); p == nil || len(p.Agents) != 3 {
+		t.Errorf("Beta agents = %+v", p)
+	}
+	// All dropped, none at all; a second listing has none.
+	for _, ip := range []string{"198.51.102.1", "198.51.105.1"} {
+		if ps := b.ByIP(addr(ip)); len(ps) != 1 || ps[0].Agents != nil || ps[0].agentUA != nil {
+			t.Errorf("%s = %+v", ip, ps)
+		}
+	}
+	for _, name := range []string{"Nobody", "alpha", "", "DELTA", "alpha-index", "Theta-Ping"} {
+		if got, ok := b.ByName(name); ok {
+			t.Errorf("ByName(%q) = %+v", name, got)
+		}
+	}
+	var nilBots *Bots
+	if _, ok := nilBots.ByName("Alpha"); ok {
+		t.Error("nil bots name")
+	}
+}
+
+// A service's purposes are every agent's it declares: one of no use without a purpose is the unknown one, one name
+// twice with two purposes is both.
+func TestBots_AgentPurposes(t *testing.T) {
+	b, err := parseBots([]byte(`{"services":{
+		"Kappa":{"ipv4":["192.0.2.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Kappa*"],
+		  "agents":[{"name":"Kappa-Bot","pattern":"*Kappa-Bot*","purpose":"search"},{"name":"Kappa-Odd"}]},
+		"Lambda":{"ipv4":["198.51.100.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Lambda*"],
+		  "agents":[{"name":"Lambda-Bot","pattern":"*Lambda-Bot*","purpose":"search"},
+		    {"name":"Lambda-Bot","pattern":"*Lambda-Ask*","purpose":"ai-assistant"}]}}}`), []byte(monitoring))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]Named{
+		"Kappa":      {Service: "Kappa", Class: "bot", Declared: true},
+		"Kappa-Bot":  {Service: "Kappa", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		"Lambda":     {Service: "Lambda", Class: "bot", Declared: true},
+		"Lambda-Bot": {Service: "Lambda", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+	} {
+		if got, ok := b.ByName(name); !ok || got != want {
+			t.Errorf("ByName(%s) = %+v %v, want %+v", name, got, ok, want)
+		}
+	}
+	// The repeat's pattern says the other purpose: it names none, also when the first's pattern of its length matches
+	// too.
+	p, _ := b.ByUA("Lambda/1")
+	if len(p.Agents) != 1 {
+		t.Fatalf("Lambda agents = %+v", p.Agents)
+	}
+	for ua, want := range map[string]bool{"Lambda-Bot/1": true, "Lambda-Ask/1": false, "Lambda-Bot Lambda-Ask/1": false,
+		"Lambda-Ask Lambda-Bot/1": false} {
+		if a, ok := p.Agent(ua); ok != want || ok && a != (Agent{Name: "Lambda-Bot", Purpose: "search"}) {
+			t.Errorf("Agent(%s) = %+v %v", ua, a, ok)
+		}
+	}
+}
+
+// Of patterns of one length, one that names none wins whatever the order; of two kept agents' the first listed.
+func TestProvider_AgentTie(t *testing.T) {
+	b, err := parseBots([]byte(`{"services":{
+		"Mu":{"ipv4":["192.0.2.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Mu*"],
+		  "agents":[{"name":"Mu-Kept","pattern":"*Mu-AAAA*","purpose":"search"},{"pattern":"*Mu-BBBB*"},
+		    {"name":"Zeta","pattern":"*Mu-CCCC*"},{"name":"Mu-Late","pattern":"*Mu-DDDD*","purpose":"search"}]},
+		"Zeta":{"ipv4":["198.51.100.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Zeta*"]}}}`),
+		[]byte(monitoring))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := b.ByUA("Mu/1")
+	for ua, want := range map[string]string{
+		"Mu-AAAA/1": "Mu-Kept", "Mu-DDDD/1": "Mu-Late", "Mu-BBBB/1": "",
+		// Kept, then left out for want of a name; left out for a name taken, then kept.
+		"Mu-AAAA Mu-BBBB/1": "", "Mu-CCCC Mu-DDDD/1": "",
+		"Mu-AAAA Mu-DDDD/1": "Mu-Kept",
+	} {
+		if a, ok := p.Agent(ua); a.Name != want || ok != (want != "") {
+			t.Errorf("Agent(%s) = %+v %v, want %q", ua, a, ok, want)
+		}
+	}
+}
+
+// One name declared twice is settled at its first named declaration, with or without a pattern: that one's spelling
+// and purpose. A name without a usable pattern in any declaration is no agent and takes no name.
+func TestBots_AgentFirstDeclaration(t *testing.T) {
+	b, err := parseBots([]byte(`{"services":{
+		"Omicron":{"ipv4":["192.0.2.0/26"],"ip_list_authoritative":true,"user_agent_patterns":["*Omicron*"],
+		  "agents":[{"name":"Omicron-Bot","pattern":"*Omicron-Bot*","purpose":"search"}]},
+		"Xi":{"ipv4":["192.0.2.64/26"],"ip_list_authoritative":true,"user_agent_patterns":["*Xi*"],
+		  "agents":[{"name":"Xi-Bot","purpose":"search"},{"name":"xi-bot","pattern":"*Xi-Bot*","purpose":"search"},
+		    {"name":"Xi-Odd","purpose":"ai-training"},{"name":"xi-odd","pattern":"*Xi-Odd*","purpose":"ai-assistant"},
+		    {"name":"Xi-None","purpose":"search"},{"name":"XI-NONE","pattern":7,"purpose":"search"}]},
+		"Ypsilon":{"ipv4":["192.0.2.128/26"],"ip_list_authoritative":true,"user_agent_patterns":["*Ypsilon*"],
+		  "agents":[{"name":"xi-none","pattern":"*Ypsilon-None*","purpose":"search"}]}}}`),
+		[]byte(`{"services":{"Omicron":{"ipv4":["203.0.113.0/24"],"ip_list_authoritative":true,
+		  "user_agent_patterns":["*Omicron*"],
+		  "agents":[{"name":"Omicron-Ping","pattern":"*Omicron-Ping*","purpose":"search"}]}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]Named{
+		"Xi-Bot": {Service: "Xi", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		// Its only pattern declares another purpose: the agent stands, no user agent names it.
+		"Xi-Odd":  {Service: "Xi", Class: "bot", Purpose: "ai-training", Declared: true, Agent: true},
+		"xi-none": {Service: "Ypsilon", Class: "bot", Purpose: "search", Agent: true},
+		// Listed twice, one purpose across both: shared.
+		"Omicron":     {Service: "Omicron", Class: "bot", Purpose: "search"},
+		"Omicron-Bot": {Service: "Omicron", Class: "bot", Purpose: "search", Agent: true},
+	} {
+		if got, ok := b.ByName(name); !ok || got != want {
+			t.Errorf("ByName(%s) = %+v %v, want %+v", name, got, ok, want)
+		}
+	}
+	for _, name := range []string{"xi-bot", "xi-odd", "Xi-None", "XI-NONE", "Omicron-Ping"} {
+		if got, ok := b.ByName(name); ok {
+			t.Errorf("ByName(%q) = %+v", name, got)
+		}
+	}
+	p, _ := b.ByUA("Xi/1")
+	if len(p.Agents) != 2 {
+		t.Errorf("Xi agents = %+v", p.Agents)
+	}
+	for ua, want := range map[string]string{"Xi-Bot/1": "Xi-Bot", "Xi-Odd/1": ""} {
+		if a, ok := p.Agent(ua); a.Name != want || ok != (want != "") {
+			t.Errorf("Agent(%s) = %+v %v, want %q", ua, a, ok, want)
+		}
+	}
+}
+
+// Agents left out are logged apart from refused ranges, a line each, below the range warning.
+func TestData_LogsRejectedAgents(t *testing.T) {
+	b, err := parseBots([]byte(`{"services":{
+		"A":{"ipv4":["192.0.2.0/24","0.0.0.0/0"],"ip_list_authoritative":true,"agents":[7,7,7,7,7,7]}}}`),
+		[]byte(monitoring))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	d := New(Options{Log: slog.New(slog.NewTextHandler(&buf, nil))})
+	d.installBots(b)
+	var ranges, agents []string
+	for line := range strings.Lines(buf.String()) {
+		switch {
+		case strings.Contains(line, "agents left out"):
+			agents = append(agents, line)
+		case strings.Contains(line, "rejected"):
+			ranges = append(ranges, line)
+		}
+	}
+	if len(ranges) != 1 || !strings.Contains(ranges[0], "level=WARN") || !strings.Contains(ranges[0], "A 0.0.0.0/0") ||
+		strings.Contains(ranges[0], "agent") {
+		t.Errorf("ranges logged %q", ranges)
+	}
+	if len(agents) != 1 || !strings.Contains(agents[0], "level=INFO") || !strings.Contains(agents[0], "count=6") {
+		t.Errorf("agents logged %q", agents)
 	}
 }
 
