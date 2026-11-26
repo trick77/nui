@@ -752,6 +752,7 @@ func (s *Server) readRows(ctx context.Context, q *query, span visitorCursor, row
 		})
 	}
 	wg.Wait()
+	model := s.Model != nil && s.Model.Configured()
 	ins := make([]insight.ReadingInput, 0, len(rows))
 	shown := map[string]map[string]string{}
 	for i := range rows {
@@ -760,6 +761,9 @@ func (s *Server) readRows(ctx context.Context, q *query, span visitorCursor, row
 			continue
 		}
 		rows[i].Does.Text = doesText(rows[i], counts)
+		if !model { // the rest is what the model reads
+			continue
+		}
 		if rows[i].values, err = s.variety(ctx, q.site.ID, rows[i].Key, since, to, counts, tmpls); err != nil {
 			continue
 		}
@@ -767,7 +771,7 @@ func (s *Server) readRows(ctx context.Context, q *query, span visitorCursor, row
 		if err != nil {
 			continue
 		}
-		rd, _, err := s.readingRow(ctx, q, rows[i], nil, classInfo{}, from, to, since)
+		rd, _, err := s.readingRow(ctx, q, rows[i], nil, from, to, since)
 		if err != nil {
 			continue
 		}
@@ -777,7 +781,7 @@ func (s *Server) readRows(ctx context.Context, q *query, span visitorCursor, row
 		ins = append(ins, in)
 		shown[rows[i].Key] = facts
 	}
-	if s.Model == nil || !s.Model.Configured() {
+	if !model {
 		return
 	}
 	readings := s.Model.Readings(ctx, ins, false)
@@ -1543,7 +1547,7 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 			}
 		}
 		// Its figures are the raw span's too: evidence never mixes the range's sums with the raw span's counts.
-		rd, basis, err := s.readingRow(ctx, q, row, a, ci, q.p.win.From, q.p.win.End, since)
+		rd, basis, err := s.readingRow(ctx, q, row, a, q.p.win.From, q.p.win.End, since)
 		if err != nil {
 			s.fail(w, r, err)
 			return
@@ -1553,7 +1557,6 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 			s.fail(w, r, err)
 			return
 		}
-		row.values = rd.values
 		in, shown := s.readingInput(q.site.ID, rd, counts, latest)
 		in.Queue = true // the user opened this actor
 		if rd, ok := s.Model.Readings(ctx, []insight.ReadingInput{in}, true)[key]; ok {
@@ -1579,7 +1582,7 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 
 // readingRow is the row the model reads about an actor, and the actor behind it: the table's, unless the span
 // [from, to) reaches before the raw events (since), then the raw span's own sums, as its evidence counts.
-func (s *Server) readingRow(ctx context.Context, q *query, row visitorRow, a *actor, ci classInfo, from, to,
+func (s *Server) readingRow(ctx context.Context, q *query, row visitorRow, a *actor, from, to,
 	since time.Time) (visitorRow, *actor, error) {
 	if !since.After(from) {
 		return row, a, nil
@@ -1588,7 +1591,7 @@ func (s *Server) readingRow(ctx context.Context, q *query, row visitorRow, a *ac
 	if err != nil || ra == nil {
 		return row, a, err
 	}
-	rr := s.visitorRow(q, ra, ci, nil)
+	rr := s.visitorRow(q, ra, classInfo{}, nil)
 	rr.Class, rr.Signals = row.Class, row.Signals
 	return rr, ra, nil
 }
@@ -1796,21 +1799,25 @@ func (s *Server) actorDays(ctx context.Context, q *query, key string, parts []ac
 // hours is the actor's activity per hour of the viewer's day over [from, to), as levels 0-4: index only, one
 // statement.
 func (s *Server) hours(ctx context.Context, q *query, key string, from, to time.Time) ([]int, error) {
-	rows, err := s.query(ctx, `SELECT ts / 3600000, COUNT(*) FROM event
+	// By the quarter hour: a zone's offset is a multiple of it, so a quarter lies in one local hour (an hour of UTC
+	// spans two in India's).
+	rows, err := s.query(ctx, `SELECT ts / 900000, COUNT(*) FROM event
 		WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ? GROUP BY 1`, q.site.ID, key, ms(from), ms(to))
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
 	counts := make([]int64, 24)
 	for rows.Next() {
-		var h, n int64
-		if err := rows.Scan(&h, &n); err != nil {
-			_ = rows.Close()
+		var quarter, n int64
+		if err := rows.Scan(&quarter, &n); err != nil {
 			return nil, err
 		}
-		counts[time.Unix(h*3600, 0).In(q.loc).Hour()] += n
+		counts[time.Unix(quarter*900, 0).In(q.loc).Hour()] += n
 	}
-	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	top := slices.Max(counts)
 	levels := make([]int, 24)
 	for i, n := range counts {

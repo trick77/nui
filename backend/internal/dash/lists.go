@@ -39,10 +39,9 @@ type dimSpec struct {
 	value, second func(a, b, d int64) int64
 }
 
-func countA(a, _, _ int64) int64     { return a }
-func countB(_, b, _ int64) int64     { return b }
-func countD(_, _, d int64) int64     { return d }
-func zeroSecond(_, _, _ int64) int64 { return 0 }
+func countA(a, _, _ int64) int64 { return a }
+func countB(_, b, _ int64) int64 { return b }
+func countD(_, _, d int64) int64 { return d }
 
 var dims = map[string]dimSpec{
 	"pages": {where: "kind = 'page_view'", key: "template", a: "COUNT(*)", b: "0", distinct: "visitor",
@@ -182,11 +181,7 @@ type scan struct {
 
 // scanOf is a list dimension's scan. refused is agg_addr's (every address of a day, no Other).
 func scanOf(dim string) scan {
-	sc := scan{dimSpec: dims[dim]}
-	if slices.Contains(agg.Dims, dim) || dim == "refused" {
-		sc.dim = dim
-	}
-	return sc
+	return scan{dimSpec: dims[dim], dim: dim}
 }
 
 // partCond is the agg_list (and agg_addr) part an audience reads: people are part 1, everything automated part 2.
@@ -459,7 +454,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request, q *query) {
 		return
 	}
 	o := listOpts{scan: scanOf(dim), sortBy: sortBy, limit: limit,
-		needle: strings.ToLower(strings.TrimSpace(v.Get("q")))}
+		needle: foldSpaces(strings.ToLower(v.Get("q")))}
 	within := v.Get("within")
 	if within != "" {
 		if dim != "pages" && dim != "entry" {
@@ -518,7 +513,7 @@ type listOpts struct {
 	scan
 	sortBy string
 	limit  int
-	needle string // lower-case substring of key or label, applied before the top-N
+	needle string // lower-case, spaces folded: a substring of key and label, applied before the top-N
 }
 
 // figure is a key's value in a list.
@@ -587,7 +582,9 @@ func (s *Server) list(ctx context.Context, q *query, dim string, o listOpts) (li
 	s.cheapLabels(dim, rows)
 	if o.needle != "" {
 		rows = slices.DeleteFunc(rows, func(r listRow) bool {
-			return !strings.Contains(strings.ToLower(r.Key), o.needle) && !strings.Contains(strings.ToLower(r.Label), o.needle)
+			// Folded as the needle: a client's key holds en spaces around its dot, a typed one plain ones.
+			return !strings.Contains(foldSpaces(strings.ToLower(r.Key)), o.needle) &&
+				!strings.Contains(foldSpaces(strings.ToLower(r.Label)), o.needle)
 		})
 	}
 	slices.SortFunc(rows, func(a, b listRow) int {
@@ -789,7 +786,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, q *query) 
 		return
 	}
 	sc := scan{dimSpec: dimSpec{where: "source = 'server' AND status > 0", key: "CAST(status / 100 AS TEXT) || 'xx'",
-		a: "COUNT(*)", b: "0", value: countA, second: zeroSecond}, dim: "status"}
+		a: "COUNT(*)", b: "0"}, dim: "status"}
 	all := newSums()
 	if err := s.scanDim(r.Context(), q, sc, q.p.win, !q.p.agg, all); err != nil {
 		s.fail(w, r, err)
