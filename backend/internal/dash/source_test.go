@@ -64,7 +64,7 @@ func countPieces(r *rig, f func(r *rig)) pieceCount {
 func (r *rig) server(src Source) *Server {
 	s := r.s
 	return &Server{DB: s.DB, Sites: s.Sites, Ref: s.Ref, Counters: s.Counters, Model: s.Model,
-		RetentionMonths: s.RetentionMonths, Build: s.Build, Now: s.Now, Source: src, trace: r.trace}
+		RetentionMonths: s.RetentionMonths, Now: s.Now, Source: src, trace: r.trace}
 }
 
 // getFrom asks the endpoint of a server reading from src.

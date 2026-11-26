@@ -141,7 +141,7 @@ func (s *Server) handleNoteworthy(w http.ResponseWriter, r *http.Request, q *que
 	if q.rng == "24h" {
 		fq.p = hoursPeriod(q.p.Now, q.loc)
 	}
-	in, un, err := s.briefingInput(ctx, &fq)
+	in, un, err := s.briefingInput(ctx, &fq, DefaultThresholds())
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -242,14 +242,9 @@ func nonNil(s []string) []string {
 // over, those past the briefing's bounds (listed with findings=all only).
 type unbriefed struct{ open, over []insight.Fact }
 
-// briefingInput computes the findings and the tile summary of a range against its prior period, and the findings
-// outside the briefing's set.
-func (s *Server) briefingInput(ctx context.Context, q *query) (insight.BriefingInput, unbriefed, error) {
-	return s.briefingInputWith(ctx, q, DefaultThresholds())
-}
-
-// briefingInputWith is briefingInput with the findings' thresholds th.
-func (s *Server) briefingInputWith(ctx context.Context, q *query, th Thresholds) (insight.BriefingInput, unbriefed,
+// briefingInput computes the findings (by the thresholds th) and the tile summary of a range against its prior
+// period, and the findings outside the briefing's set.
+func (s *Server) briefingInput(ctx context.Context, q *query, th Thresholds) (insight.BriefingInput, unbriefed,
 	error) {
 	in := insight.BriefingInput{SiteID: q.site.ID, Domain: q.site.Domain, Range: q.rng, PrevLabel: q.p.prevL,
 		AsOf: q.p.ClosedEnd()}

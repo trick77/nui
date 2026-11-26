@@ -29,7 +29,7 @@ func (s *Server) Findings(ctx context.Context, site *sites.Site, now time.Time, 
 	unknown map[string]bool, err error) {
 	q := &query{site: site, rng: "24h", loc: time.UTC, tz: "UTC", aud: "all", cmp: "prev", p: hoursPeriod(now, time.UTC),
 		alerts: true}
-	in, un, err := s.briefingInputWith(ctx, q, th)
+	in, un, err := s.briefingInput(ctx, q, th)
 	facts = append(append(slices.Clip(in.Facts), un.open...), un.over...)
 	return facts, q.unknown, err
 }
@@ -59,12 +59,6 @@ func (s *Server) ScriptErrorOf(ctx context.Context, site *sites.Site, key string
 		out.Place = strings.TrimSpace(rows[0].Where.Origin + " " + rows[0].Where.Place)
 	}
 	return out, nil
-}
-
-// LastSeen is when each source of a site last delivered, after a restart too (the hourly counters, not this
-// process's own record alone); zero for one that never did.
-func (s *Server) LastSeen(ctx context.Context, site int64) (browser, server time.Time, err error) {
-	return s.lastSeen(ctx, site)
 }
 
 // Collector counts a site's collector refusals since from (whole hours: the counters are hourly).
@@ -448,10 +442,12 @@ func deliveryOf(a store.Alert) delivery {
 	if a.NotifiedAt != nil {
 		d.At = iso(time.UnixMilli(*a.NotifiedAt))
 	}
+	took := 0
 	for _, n := range a.Channels {
 		switch {
 		case slices.Contains(a.Delivered, n):
 			d.Channels = append(d.Channels, channelOutcome{n, true})
+			took++
 		case slices.Contains(a.Failed, n):
 			d.Channels = append(d.Channels, channelOutcome{n, false})
 		}
@@ -459,12 +455,6 @@ func deliveryOf(a store.Alert) delivery {
 	for _, n := range a.Failed { // a channel gone from the file since
 		if !slices.Contains(a.Channels, n) {
 			d.Channels = append(d.Channels, channelOutcome{n, false})
-		}
-	}
-	took := 0
-	for _, n := range a.Channels {
-		if slices.Contains(a.Delivered, n) {
-			took++
 		}
 	}
 	switch {
