@@ -527,7 +527,7 @@ function AllRows({
         />
         {l.error ? (
           <ErrorBox error={l.error} />
-        ) : !l.data ? (
+        ) : !l.data || (l.loading && !l.data.rows.length) ? (
           <Skeleton h={240} />
         ) : !l.data.rows.length ? (
           <Empty>Nothing matches “{dq}”.</Empty>

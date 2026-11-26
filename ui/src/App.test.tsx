@@ -1448,6 +1448,50 @@ describe("while an answer is on its way", () => {
     expect(within(log).getAllByRole("row")).toHaveLength(201);
   });
 
+  it("claims no match only for a term whose answer is in", async () => {
+    startHeld("/dashboard/");
+    const pages = await screen.findByRole("region", { name: "Pages" });
+    fireEvent.click(
+      await within(pages).findByRole("button", { name: /Show all/ }),
+    );
+    const dlg = screen.getByRole("dialog");
+    await within(dlg).findByText("/privacy");
+    const box = within(dlg).getByRole("textbox");
+    fireEvent.change(box, { target: { value: "zzz" } });
+    await within(dlg).findByText(
+      "Nothing matches “zzz”.",
+      {},
+      { timeout: 2000 },
+    );
+    hold.match = (u) => u.includes("q=qqq");
+    fireEvent.change(box, { target: { value: "qqq" } });
+    await waitFor(() => expect(hold.waiting).toHaveLength(1), {
+      timeout: 2000,
+    });
+    expect(within(dlg).queryByText(/Nothing matches/)).toBeNull();
+    await hold.release();
+    expect(
+      await within(dlg).findByText("Nothing matches “qqq”."),
+    ).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    // The visitors table, the same.
+    const v = panel("Visitors by address");
+    const find = within(v).getByRole("textbox");
+    hold.match = null;
+    fireEvent.change(find, { target: { value: "zzz" } });
+    await within(v).findByText(/matches “zzz”/, {}, { timeout: 2000 });
+    hold.match = (u) => u.includes("q=qqq");
+    fireEvent.change(find, { target: { value: "qqq" } });
+    await waitFor(() => expect(hold.waiting).toHaveLength(1), {
+      timeout: 2000,
+    });
+    expect(within(v).queryByText(/matches/)).toBeNull();
+    expect(within(v).getByLabelText("Loading visitors")).toBeInTheDocument();
+    await hold.release();
+    expect(await within(v).findByText(/matches “qqq”/)).toBeInTheDocument();
+  });
+
   it("never pages a visitor's trail with another visitor's cursor", async () => {
     startHeld("/dashboard/");
     const v = await screen.findByRole("region", {

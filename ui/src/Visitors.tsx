@@ -126,7 +126,7 @@ export function Visitors({ aud }: { aud: Audience }) {
         </CardHead>
         {page.error ? (
           <ErrorBox error={page.error} />
-        ) : !page.data ? (
+        ) : !page.data || (page.loading && !rows.length) ? (
           <Skeleton h={300} label="Loading visitors" />
         ) : !rows.length ? (
           <Empty>
