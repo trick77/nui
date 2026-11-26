@@ -896,6 +896,42 @@ func TestData_RefreshCacheAndFailure(t *testing.T) {
 		Networks: "http://127.0.0.1:1/z", Countries: "http://127.0.0.1:1/w", Log: quiet}).Run(ctx)
 }
 
+// A refresh that failed is tried again within the interval, not a whole one later.
+func TestData_RunRetriesAFailedRefresh(t *testing.T) {
+	tb := tarball(t, asTar)
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) <= 3 { // the first refresh: the bot list and both tarballs
+			http.Error(w, "down", http.StatusBadGateway)
+			return
+		}
+		switch r.URL.Path {
+		case "/crawlers.json":
+			_, _ = io.WriteString(w, crawlers)
+		case "/monitoring.json":
+			_, _ = io.WriteString(w, monitoring)
+		default:
+			_, _ = w.Write(tb)
+		}
+	}))
+	defer srv.Close()
+	d := New(Options{Dir: t.TempDir(), Crawlers: srv.URL + "/crawlers.json", Monitoring: srv.URL + "/monitoring.json",
+		Networks: srv.URL + "/as.tar.gz", Countries: srv.URL + "/geo.tar.gz", Every: time.Minute,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); d.Run(ctx) }()
+	deadline := time.Now().Add(20 * time.Second)
+	for d.Bots() == nil || d.Networks() == nil || d.Countries() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("a failed refresh was not tried again within the interval")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+}
+
 // A bot list that does not parse (an error page served with 200) never replaces the good cached pair: the files on
 // disk keep their content and age (so the next refresh tries again), and a restart without network still has them.
 func TestData_BotListRollback(t *testing.T) {
