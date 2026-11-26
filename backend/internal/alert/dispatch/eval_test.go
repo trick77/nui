@@ -819,7 +819,10 @@ func TestEvalErrorsLevel(t *testing.T) {
 	}
 }
 
-type budgetModel struct{ calls, budget int64 }
+type budgetModel struct {
+	calls, budget int64
+	spent         bool
+}
 
 func (budgetModel) Configured() bool { return true }
 func (budgetModel) Briefing(context.Context, insight.BriefingInput) *insight.Briefing {
@@ -829,14 +832,18 @@ func (budgetModel) Readings(context.Context, []insight.ReadingInput, bool) map[s
 	return nil
 }
 func (budgetModel) Labels(context.Context, int64, string, []string) map[string]string { return nil }
-func (m budgetModel) Usage(context.Context, int64) (int64, int64)                     { return m.calls, m.budget }
+func (m budgetModel) Usage(context.Context, int64) (int64, int64, bool) {
+	return m.calls, m.budget, m.spent
+}
 
+// The model says when its budget is spent: tokens run out with calls to spare.
 func TestEvalBudget(t *testing.T) {
 	r := newEvalRig(t)
 	for _, tc := range []struct {
 		m    insight.Model
 		want int
-	}{{nil, 0}, {budgetModel{10, 200}, 0}, {budgetModel{200, 200}, 1}, {budgetModel{5, 0}, 0}} {
+	}{{nil, 0}, {budgetModel{10, 200, false}, 0}, {budgetModel{200, 200, true}, 1},
+		{budgetModel{150, 200, true}, 1}} {
 		v, c := r.eval(`{"name": "b", "on": "llm.budget"}`, time.Time{}, tc.m)
 		if occ, ok := r.occ(v, c.Rules[0], r.web); !ok || len(occ) != tc.want {
 			t.Errorf("%+v: %+v", tc.m, occ)

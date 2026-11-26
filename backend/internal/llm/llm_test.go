@@ -315,8 +315,8 @@ func TestBudgetAndFailures(t *testing.T) {
 	r.srv.SetReply(`not json at all`)
 	r.s.Labels(t.Context(), 1, "ua", []string{"curl/8"})
 	r.s.Drain(t.Context()) // fails: no JSON object; the call still counts
-	if u, b := r.s.Usage(t.Context(), 1); u != 1 || b != 5 {
-		t.Errorf("usage %d/%d", u, b)
+	if u, b, spent := r.s.Usage(t.Context(), 1); u != 1 || b != 5 || spent {
+		t.Errorf("usage %d/%d spent %v", u, b, spent)
 	}
 	// Backed off: asking again queues nothing for a while.
 	r.s.Labels(t.Context(), 1, "ua", []string{"curl/8"})
@@ -329,8 +329,8 @@ func TestBudgetAndFailures(t *testing.T) {
 		r.s.Labels(t.Context(), 1, "ua", []string{ua})
 		r.s.Drain(t.Context())
 	}
-	if u, _ := r.s.Usage(t.Context(), 1); u != 4 {
-		t.Errorf("labels used %d calls, want 4", u)
+	if u, _, spent := r.s.Usage(t.Context(), 1); u != 4 || spent {
+		t.Errorf("labels used %d calls, want 4; spent %v with the briefing's call left", u, spent)
 	}
 	calls := len(r.srv.Requests())
 	r.srv.SetReply(`{"headline":"A quiet week","lines":[]}`)
@@ -338,6 +338,9 @@ func TestBudgetAndFailures(t *testing.T) {
 	r.s.Drain(t.Context())
 	if len(r.srv.Requests()) != calls+1 {
 		t.Error("the briefing found no budget left")
+	}
+	if _, _, spent := r.s.Usage(t.Context(), 1); !spent {
+		t.Error("all calls used, budget not reported spent")
 	}
 	// Budget spent: the next job fails without a call.
 	calls = len(r.srv.Requests())
@@ -360,6 +363,31 @@ func TestBudgetAndFailures(t *testing.T) {
 	<-done
 	if len(r.srv.Requests()) == calls {
 		t.Error("Run did not work the queue")
+	}
+}
+
+// Tokens spent with calls to spare: Usage reports the budget spent exactly when the briefing is refused.
+func TestBudgetTokensSpent(t *testing.T) {
+	r := newRig(t, 200)
+	book := store.Usage{SiteID: 1, Day: r.s.day(), Calls: 1, InputTokens: 999_000, OutputTokens: 999}
+	if err := r.st.AddUsage(t.Context(), book); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, spent := r.s.Usage(t.Context(), 1); spent {
+		t.Error("spent with a token left")
+	}
+	book = store.Usage{SiteID: 1, Day: r.s.day(), OutputTokens: 1}
+	if err := r.st.AddUsage(t.Context(), book); err != nil {
+		t.Fatal(err)
+	}
+	if u, b, spent := r.s.Usage(t.Context(), 1); u != 1 || b != 200 || !spent {
+		t.Errorf("usage %d/%d spent %v, want 1/200 spent", u, b, spent)
+	}
+	r.srv.SetReply(`{"headline":"A quiet week","lines":[]}`)
+	r.s.Briefing(t.Context(), briefingInput("h"))
+	r.s.Drain(t.Context())
+	if n := len(r.srv.Requests()); n != 0 {
+		t.Errorf("%d calls past the token budget", n)
 	}
 }
 

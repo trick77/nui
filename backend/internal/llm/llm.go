@@ -252,16 +252,27 @@ func (s *Service) work(ctx context.Context, j job) error {
 
 func (s *Service) day() int64 { return s.o.Now().UTC().Unix() / 86400 }
 
-// Usage is a site's calls today and the daily call budget.
-func (s *Service) Usage(ctx context.Context, site int64) (int64, int64) {
+// Usage is a site's calls today, the daily call budget and whether the day's budget, calls or tokens, is spent:
+// the briefing, the last call allowed, would be refused.
+func (s *Service) Usage(ctx context.Context, site int64) (int64, int64, bool) {
 	u, err := s.st.UsageOn(ctx, site, s.day())
 	if err != nil {
-		return 0, s.o.DailyCalls
+		return 0, s.o.DailyCalls, false
 	}
-	return u.Calls, s.o.DailyCalls
+	return u.Calls, s.o.DailyCalls, s.spent(u, true)
 }
 
 var errBudget = errors.New("daily model budget spent")
+
+// spent is whether a call is refused on the day's usage u; readings and labels stop before the briefings' share.
+func (s *Service) spent(u store.Usage, briefing bool) bool {
+	calls, tokens := s.o.DailyCalls, s.o.DailyTokens
+	if !briefing {
+		calls -= max(1, calls/briefingShare)
+		tokens -= tokens / briefingShare
+	}
+	return u.Calls >= calls || u.InputTokens+u.OutputTokens >= tokens
+}
 
 // call sends one request after the budget check, books its usage and returns the reply's JSON object.
 func (s *Service) call(ctx context.Context, site int64, schemaName string, schema map[string]any, system string,
@@ -270,12 +281,7 @@ func (s *Service) call(ctx context.Context, site int64, schemaName string, schem
 	if err != nil {
 		return "", err
 	}
-	calls, tokens := s.o.DailyCalls, s.o.DailyTokens
-	if schemaName != "briefing" {
-		calls -= max(1, calls/briefingShare)
-		tokens -= tokens / briefingShare
-	}
-	if u.Calls >= calls || u.InputTokens+u.OutputTokens >= tokens {
+	if s.spent(u, schemaName == "briefing") {
 		return "", errBudget
 	}
 	req, err := s.request(schemaName, schema, system, data, answer)
