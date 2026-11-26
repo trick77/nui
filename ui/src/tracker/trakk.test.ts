@@ -2285,7 +2285,9 @@ describe("capture", () => {
   });
 
   it("sends engagement and vitals when the page is hidden", async () => {
+    const po = observers();
     boot();
+    po.emit("paint", [{ name: "first-contentful-paint", startTime: 300 }]);
     window.dispatchEvent(new Event("scroll"));
     document.dispatchEvent(new Event("pointerdown"));
     document.dispatchEvent(new KeyboardEvent("keydown"));
@@ -2516,6 +2518,31 @@ describe("capture", () => {
     }
   });
 
+  it("sends no paint of a page shown hidden on activation", async () => {
+    const po = observers();
+    Object.defineProperty(document, "prerendering", {
+      value: true,
+      configurable: true,
+    });
+    try {
+      boot();
+      po.emit("paint", [{ name: "first-contentful-paint", startTime: 300 }]);
+      po.emit("largest-contentful-paint", [{ startTime: 400 }]);
+      Object.defineProperty(document, "prerendering", {
+        value: false,
+        configurable: true,
+      });
+      setVisibility("hidden");
+      document.dispatchEvent(new Event("prerenderingchange"));
+      setVisibility("visible");
+      hide(5000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vitalsOf().map((e) => e.p.name)).toEqual([]);
+    } finally {
+      delete (document as { prerendering?: boolean }).prerendering;
+    }
+  });
+
   it("takes custom events, including those queued before it loaded", async () => {
     (win as { trakk?: unknown }).trakk = {
       q: [["copy_prefix_list", { asn: 15169 }]],
@@ -2537,6 +2564,448 @@ describe("capture", () => {
       ["copy_prefix_list", { asn: 15169 }],
       ["signup", { plan: "free" }],
       ["late", {}],
+    ]);
+  });
+});
+
+type Entry = { startTime: number; [k: string]: unknown };
+// The browser's performance observers: entries handed to the callbacks
+// (emit), an event's only from its observer's duration threshold up, or
+// held until the tracker takes them (buffer).
+function observers(
+  types = [
+    "paint",
+    "largest-contentful-paint",
+    "layout-shift",
+    "event",
+    "first-input",
+  ],
+  interactionIds = true,
+) {
+  class FakePO {
+    static supportedEntryTypes = types;
+    static all: FakePO[] = [];
+    type = "";
+    threshold = 104;
+    held: Entry[] = [];
+    constructor(public cb: (l: { getEntries: () => Entry[] }) => void) {
+      FakePO.all.push(this);
+    }
+    observe(o: { type: string; durationThreshold?: number }) {
+      this.type = o.type;
+      this.threshold = o.durationThreshold ?? 104;
+    }
+    takeRecords() {
+      return this.held.splice(0);
+    }
+    disconnect() {}
+  }
+  vi.stubGlobal("PerformanceObserver", FakePO);
+  vi.stubGlobal(
+    "PerformanceEventTiming",
+    interactionIds
+      ? class {
+          get interactionId() {
+            return 0;
+          }
+        }
+      : undefined,
+  );
+  const of = (type: string) => FakePO.all.filter((o) => o.type === type);
+  return {
+    emit: (type: string, entries: Entry[]) =>
+      of(type).forEach((o) =>
+        o.cb({
+          getEntries: () =>
+            type === "event"
+              ? entries.filter((e) => Number(e.duration) >= o.threshold)
+              : entries,
+        }),
+      ),
+    buffer: (type: string, entries: Entry[]) =>
+      of(type).forEach((o) => o.held.push(...entries)),
+  };
+}
+const setVisibility = (v: DocumentVisibilityState) =>
+  Object.defineProperty(document, "visibilityState", {
+    value: v,
+    configurable: true,
+  });
+// Hidden at timeStamp, on the entries' clock (by default after their
+// paints), then visible again without an event.
+function hide(timeStamp = 60_000) {
+  setVisibility("hidden");
+  const e = new Event("visibilitychange");
+  Object.defineProperty(e, "timeStamp", { value: timeStamp });
+  document.dispatchEvent(e);
+  setVisibility("visible");
+}
+const vitalsOf = () =>
+  bodies()
+    .flatMap((b) =>
+      b.events.map((e) => ({
+        ...e,
+        url: e.url ?? String(b.ctx.url),
+        title: (e as { title?: string }).title ?? String(b.ctx.title),
+      })),
+    )
+    .filter((e) => e.k === "vital");
+const vitalValues = () =>
+  Object.fromEntries(vitalsOf().map((e) => [e.p.name, e.p.value]));
+const FCP = { name: "first-contentful-paint", startTime: 300 };
+const shift = (startTime: number, value: number, hadRecentInput = false) => ({
+  startTime,
+  value,
+  hadRecentInput,
+});
+
+describe("web vitals", () => {
+  it("reports the worst window of layout shifts, not their sum", async () => {
+    const po = observers();
+    boot();
+    po.emit("paint", [FCP]);
+    po.emit("layout-shift", [
+      shift(1000, 0.1),
+      shift(1100, 0.1),
+      shift(1150, 1, true),
+      shift(1200, 0.1),
+      // 2 s later: a window of its own.
+      shift(3200, 0.1),
+      shift(3300, 0.1),
+    ]);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues()).toEqual({ FCP: 300, CLS: 0.3 });
+  });
+
+  it("ends a window at a gap of a second", async () => {
+    const po = observers();
+    boot();
+    po.emit("paint", [FCP]);
+    po.emit("layout-shift", [
+      shift(100, 0.1),
+      shift(1099, 0.1),
+      shift(2099, 0.15),
+      shift(2500, 0.1),
+    ]);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues().CLS).toBe(0.25);
+  });
+
+  it("ends a window after five seconds", async () => {
+    const po = observers();
+    boot();
+    po.emit("paint", [FCP]);
+    po.emit(
+      "layout-shift",
+      [10000, 10900, 11800, 12700, 13600, 14500, 15000].map((t) =>
+        shift(t, 0.1),
+      ),
+    );
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues().CLS).toBe(0.6);
+  });
+
+  it("sends CLS, 0 included, only where layout shifts are observed and after a first paint", async () => {
+    let po = observers(["paint"]);
+    boot();
+    po.emit("paint", [FCP]);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues()).toEqual({ FCP: 300 });
+
+    tracker!.stop();
+    fetchMock.mockClear();
+    po = observers();
+    boot();
+    po.emit("layout-shift", [shift(100, 0.1)]);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues()).toEqual({});
+
+    tracker!.stop();
+    fetchMock.mockClear();
+    po = observers();
+    boot();
+    po.emit("paint", [FCP]);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues()).toEqual({ FCP: 300, CLS: 0 });
+  });
+
+  it("reports the second longest of 60 interactions, each at its longest entry", async () => {
+    const po = observers();
+    boot();
+    const events = Array.from({ length: 60 }, (_, i) => ({
+      startTime: 1000 + i * 100,
+      interactionId: 7 * (i + 1),
+      duration: 40 + 8 * i,
+    }));
+    po.emit("event", [
+      ...events,
+      // The longest interaction's key up, shorter: its key down stands.
+      { startTime: 7000, interactionId: 420, duration: 48 },
+      // No interaction: never counted.
+      { startTime: 7100, duration: 2000 },
+    ]);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues().INP).toBe(504);
+  });
+
+  it("takes the browser's interaction count where it has one", async () => {
+    const po = observers();
+    Object.defineProperty(performance, "interactionCount", {
+      value: 120,
+      configurable: true,
+    });
+    try {
+      boot();
+      po.emit(
+        "event",
+        [80, 200, 120, 96].map((duration, i) => ({
+          startTime: 1000 + i,
+          interactionId: 7 * (i + 1),
+          duration,
+        })),
+      );
+      hide();
+      await vi.advanceTimersByTimeAsync(0);
+      // 120 interactions: the two longest left out.
+      expect(vitalValues().INP).toBe(96);
+    } finally {
+      delete (performance as { interactionCount?: number }).interactionCount;
+    }
+  });
+
+  it("reports a first input under 40 ms", async () => {
+    const po = observers();
+    boot();
+    po.emit("first-input", [
+      { startTime: 500, interactionId: 7, duration: 16 },
+    ]);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues().INP).toBe(16);
+  });
+
+  it("sends no INP without interactions or where entries carry no interaction id", async () => {
+    let po = observers();
+    boot();
+    po.emit("event", [{ startTime: 500, duration: 300 }]);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues().INP).toBeUndefined();
+
+    tracker!.stop();
+    fetchMock.mockClear();
+    po = observers(undefined, false);
+    boot();
+    po.emit("event", [{ startTime: 500, interactionId: 7, duration: 300 }]);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues().INP).toBeUndefined();
+  });
+
+  it("takes what the observers still hold when hidden, no paint after it", async () => {
+    let po = observers();
+    boot();
+    po.buffer("paint", [FCP]);
+    po.buffer("largest-contentful-paint", [{ startTime: 400 }]);
+    po.buffer("layout-shift", [shift(500, 0.2)]);
+    po.buffer("event", [{ startTime: 600, interactionId: 7, duration: 64 }]);
+    hide(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues()).toEqual({ FCP: 300, LCP: 400, INP: 64, CLS: 0.2 });
+
+    tracker!.stop();
+    fetchMock.mockClear();
+    po = observers();
+    boot();
+    po.buffer("paint", [FCP]);
+    po.buffer("largest-contentful-paint", [{ startTime: 400 }]);
+    hide(200);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues()).toEqual({});
+  });
+
+  it("sends no paint of a page loaded hidden", async () => {
+    const po = observers();
+    setVisibility("hidden");
+    boot();
+    setVisibility("visible");
+    po.emit("paint", [FCP]);
+    po.emit("largest-contentful-paint", [{ startTime: 400 }]);
+    po.emit("layout-shift", [shift(500, 0.2)]);
+    hide(5000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues()).toEqual({});
+  });
+
+  it("files every vital under the landing page, with its version", async () => {
+    const po = observers();
+    vi.spyOn(performance, "getEntriesByType").mockReturnValue([
+      { type: "navigate", responseStart: 120 },
+    ] as unknown as PerformanceEntryList);
+    history.replaceState(null, "", "/a?x=1");
+    document.title = "A";
+    boot();
+    history.pushState(null, "", "/b");
+    document.title = "B";
+    po.emit("paint", [FCP]);
+    po.emit("largest-contentful-paint", [{ startTime: 400 }]);
+    po.emit("layout-shift", [shift(500, 0.05)]);
+    po.emit("event", [{ startTime: 600, interactionId: 7, duration: 72 }]);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    const ev = vitalsOf();
+    expect(ev.map((e) => [e.p.name, e.url, e.title])).toEqual(
+      ["TTFB", "FCP", "LCP", "INP", "CLS"].map((n) => [
+        n,
+        location.origin + "/a?x=1",
+        "A",
+      ]),
+    );
+    for (const e of ev)
+      expect(Object.keys(e.p)).toEqual(["name", "value", "v"]);
+    expect(ev.map((e) => e.p.v)).toEqual([2, 2, 2, 2, 2]);
+  });
+
+  it("measures CLS and INP again after the back/forward cache, for the page shown", async () => {
+    const po = observers();
+    vi.spyOn(performance, "getEntriesByType").mockReturnValue([
+      { type: "navigate", responseStart: 120 },
+    ] as unknown as PerformanceEntryList);
+    history.replaceState(null, "", "/a");
+    boot();
+    po.emit("paint", [FCP]);
+    po.emit("largest-contentful-paint", [{ startTime: 400 }]);
+    po.emit("layout-shift", [shift(500, 0.1)]);
+    po.emit("event", [{ startTime: 600, interactionId: 7, duration: 200 }]);
+    history.pushState(null, "", "/b");
+    hide(2000);
+    window.dispatchEvent(new Event("pagehide"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalsOf().map((e) => e.p.name)).toEqual([
+      "TTFB",
+      "FCP",
+      "LCP",
+      "INP",
+      "CLS",
+    ]);
+
+    fetchMock.mockClear();
+    const back = new Event("pageshow");
+    Object.defineProperty(back, "persisted", { value: true });
+    window.dispatchEvent(back);
+    po.emit("largest-contentful-paint", [{ startTime: 8000 }]);
+    po.emit("layout-shift", [shift(8100, 0.05)]);
+    po.emit("event", [{ startTime: 8200, interactionId: 14, duration: 80 }]);
+    hide(9000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalsOf().map((e) => [e.p.name, e.p.value, e.url])).toEqual([
+      ["INP", 80, location.origin + "/b"],
+      ["CLS", 0.05, location.origin + "/b"],
+    ]);
+  });
+
+  it("sends CLS after the back/forward cache where the load, hidden, sent no paint", async () => {
+    const po = observers();
+    setVisibility("hidden");
+    boot();
+    setVisibility("visible");
+    po.emit("layout-shift", [shift(500, 0.1)]);
+    hide(2000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues()).toEqual({});
+
+    const back = new Event("pageshow");
+    Object.defineProperty(back, "persisted", { value: true });
+    window.dispatchEvent(back);
+    po.emit("layout-shift", [shift(8100, 0.05)]);
+    hide(9000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues()).toEqual({ CLS: 0.05 });
+  });
+
+  it("takes the browser's record of a hide before it ran", async () => {
+    const at = (
+      nav: Record<string, unknown>,
+      states: { name: string; startTime: number }[],
+    ) =>
+      vi
+        .spyOn(performance, "getEntriesByType")
+        .mockImplementation(
+          (t) =>
+            (t === "navigation"
+              ? [nav]
+              : t === "visibility-state"
+                ? states
+                : []) as unknown as PerformanceEntryList,
+        );
+    // Opened in the background, shown before the script ran.
+    let po = observers();
+    at({ type: "navigate" }, [
+      { name: "hidden", startTime: 0 },
+      { name: "visible", startTime: 250 },
+    ]);
+    boot();
+    po.emit("paint", [FCP]);
+    po.emit("largest-contentful-paint", [{ startTime: 400 }]);
+    po.emit("layout-shift", [shift(500, 0.1)]);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues()).toEqual({});
+
+    // Hidden while prerendered only: before activation.
+    tracker!.stop();
+    fetchMock.mockClear();
+    po = observers();
+    at({ type: "navigate", activationStart: 200 }, [
+      { name: "hidden", startTime: 100 },
+    ]);
+    boot();
+    po.emit("paint", [FCP]);
+    po.emit("largest-contentful-paint", [{ startTime: 400 }]);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues()).toMatchObject({ FCP: 100, LCP: 200 });
+  });
+
+  it("counts the fast interactions too where the browser counts none", async () => {
+    const po = observers();
+    boot();
+    // 100 interactions, the first three slow: the third longest stands.
+    po.emit(
+      "event",
+      Array.from({ length: 100 }, (_, i) => ({
+        startTime: 1000 + i * 100,
+        interactionId: 7 * (i + 1),
+        duration: [300, 200, 100][i] ?? 16,
+      })),
+    );
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalValues().INP).toBe(100);
+  });
+
+  it("keeps the landing title through a change of the query alone", async () => {
+    const po = observers();
+    history.replaceState(null, "", "/a");
+    document.title = "A";
+    boot();
+    history.replaceState(null, "", "/a?q=x");
+    document.title = "A2";
+    history.pushState(null, "", "/b");
+    document.title = "B";
+    po.emit("paint", [FCP]);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vitalsOf().map((e) => [e.p.name, e.url, e.title])).toEqual([
+      ["FCP", location.origin + "/a", "A2"],
+      ["CLS", location.origin + "/a", "A2"],
     ]);
   });
 });

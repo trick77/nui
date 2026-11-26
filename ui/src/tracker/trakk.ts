@@ -118,6 +118,10 @@ const AUTO_TOKEN = [
 // The version of the probes' meaning, sent with every context: a change to what one counts raises it, so figures
 // taken before and after are told apart.
 const PROBES = 2;
+// The version of the vitals' definitions, sent with every vital: a change to what one measures raises it. 2 is Web
+// Vitals' own (CLS the worst session window, INP the 98th percentile); a vital without one is from before: CLS the
+// whole visit's sum, INP the slowest interaction.
+const VITALS = 2;
 // How long a measured renderer stands; a new browser version ends it sooner.
 const GL_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 // The input counts, per page and per document: scroll counts a script's scrolling too, the wheel a person's own;
@@ -538,15 +542,16 @@ export function start(
   // ---- context, sent with every batch
   const inputs = noInputs();
   let uach: Props | undefined;
-  const navEntry = () => {
+  const entries = (type: string): PerformanceEntry[] => {
     try {
-      return win.performance.getEntriesByType("navigation")[0] as
-        | (PerformanceNavigationTiming & { activationStart?: number })
-        | undefined;
+      return win.performance.getEntriesByType(type);
     } catch {
-      return undefined;
+      return [];
     }
   };
+  const navEntry = () =>
+    entries("navigation")[0] as
+      (PerformanceNavigationTiming & { activationStart?: number }) | undefined;
   const navType = navEntry()?.type || "";
   // A page the browser prerenders reports nothing until it is shown: the
   // visitor may never open it.
@@ -1455,14 +1460,28 @@ export function start(
   // change (here), with the title it still shows.
   let lastPage = "";
   let here = "";
+  // The page the vitals belong to, the document's first (or the one shown
+  // again from the back/forward cache), with the title it showed last while
+  // still shown: a change of the query alone leaves it shown.
+  let landing: [string, string] = ["", ""];
+  let onLanding = false;
+  const land = () => {
+    landing = [here, doc.title];
+    onLanding = true;
+  };
+  const landed = () => {
+    if (onLanding) landing[1] = doc.title;
+  };
   const pageKey = () =>
     loc.pathname +
     (/^#[/!]/.test(loc.hash) ? loc.hash.replace(/\?[^]*$/, "") : "");
   const pageView = (force: boolean) => {
     const k = pageKey();
+    landed();
     const was = here;
     here = clipURL(loc.href);
     if (!force && k === lastPage) return;
+    onLanding = false;
     if (lastPage) {
       settle();
       engagement([was, doc.title]);
@@ -1526,11 +1545,14 @@ export function start(
       activeSince = 0;
       tick();
       pageView(true);
+      restored();
     }
   });
 
-  // Leaving or hiding the page: engagement, the vitals, then out.
+  // Leaving or hiding the page: engagement, the vitals, then out. Paints
+  // after the page was first hidden are no one's experience (Web Vitals).
   let vitalsSent = false;
+  let firstHidden = Infinity;
   const hidden = () => {
     if (pre()) return;
     engagement();
@@ -1543,9 +1565,11 @@ export function start(
     }
     flush(true);
   };
-  on(doc, "visibilitychange", () => {
-    if (doc.visibilityState === "hidden") hidden();
-    else tick();
+  on(doc, "visibilitychange", (e) => {
+    if (doc.visibilityState === "hidden") {
+      firstHidden = Math.min(firstHidden, e.timeStamp);
+      hidden();
+    } else tick();
   });
   on(win, "pagehide", hidden);
 
@@ -1700,11 +1724,11 @@ export function start(
     );
   });
 
-  // Web vitals, from the browser's own observers where it has them.
+  // Web vitals, from the browser's own observers where it has them, as Web
+  // Vitals defines them (VITALS). Each observer keeps its callback to drain
+  // what is still buffered when the page is hidden.
   let lcp = 0;
-  let cls = 0;
-  let inp = 0;
-  const observers: PerformanceObserver[] = [];
+  const observers: [PerformanceObserver, () => void][] = [];
   const observe = (
     type: string,
     cb: (list: PerformanceEntry[]) => void,
@@ -1715,29 +1739,38 @@ export function start(
       if (!PO || !(PO.supportedEntryTypes || []).includes(type)) return;
       const o = new PO((l) => guard(() => cb(l.getEntries())));
       o.observe({ type, buffered: true, ...extra } as PerformanceObserverInit);
-      observers.push(o);
+      return observers.push([o, () => guard(() => cb(o.takeRecords()))]);
     } catch {
       // unsupported
     }
   };
-  // Callers send only vitals that exist. Times since navigation start count
-  // from activation for a prerendered page, never below 0.
-  const vital = (name: string, value: number, shifted?: boolean) =>
-    record("vital", {
-      name,
-      value:
-        Math.round(
-          Math.max(
-            0,
-            value - (shifted ? navEntry()?.activationStart || 0 : 0),
-          ) * 1000,
-        ) / 1000,
-    });
+  // Callers send only vitals that exist, for the landing page. Times since
+  // navigation start count from activation for a prerendered page, never
+  // below 0.
+  const vital = (name: string, value: number, shifted?: boolean) => {
+    landed();
+    record(
+      "vital",
+      {
+        name,
+        value:
+          Math.round(
+            Math.max(
+              0,
+              value - (shifted ? navEntry()?.activationStart || 0 : 0),
+            ) * 1000,
+          ) / 1000,
+        v: VITALS,
+      },
+      undefined,
+      landing,
+    );
+  };
   // First paint is kept: during prerendering it is sent on activation.
   let fcp = 0;
   let fcpSent = false;
   const sendFCP = () => {
-    if (fcp && !fcpSent && !pre()) {
+    if (fcp && !fcpSent && !pre() && fcp < firstHidden) {
       fcpSent = true;
       vital("FCP", fcp, true);
     }
@@ -1750,27 +1783,76 @@ export function start(
       }
   });
   observe("largest-contentful-paint", (l) => {
-    for (const e of l) lcp = e.startTime;
+    for (const e of l) if (e.startTime < firstHidden) lcp = e.startTime;
   });
-  observe("layout-shift", (l) => {
+  // CLS: the worst session window, shifts less than 1 s apart within 5 s,
+  // those right after input left out. Sent only after a first paint or a
+  // restore.
+  let cls = 0;
+  let sum = 0;
+  let from = 0;
+  let last = 0;
+  const shifts = observe("layout-shift", (l) => {
     for (const e of l) {
       const s = e as PerformanceEntry & {
         value: number;
         hadRecentInput: boolean;
       };
-      if (!s.hadRecentInput) cls += s.value;
+      if (s.hadRecentInput) continue;
+      const t = s.startTime;
+      if (sum && t - last < 1000 && t - from < 5000) sum += s.value;
+      else {
+        sum = s.value;
+        from = t;
+      }
+      last = t;
+      if (sum > cls) cls = sum;
     }
   });
-  observe(
-    "event",
-    (l) => {
-      for (const e of l) {
-        const x = e as PerformanceEntry & { interactionId?: number };
-        if (x.interactionId && e.duration > inp) inp = e.duration;
-      }
-    },
-    { durationThreshold: 40 },
-  );
+  // INP: the ten longest interactions, each at its longest entry; one in 50
+  // interactions is left out from the top, so the value is the 98th
+  // percentile. Where the browser counts no interactions their ids do,
+  // about 7 apart, every interaction's, the fast ones included (as the Web
+  // Vitals polyfill). Only where entries carry an interaction id.
+  const longest: [number, number][] = [];
+  let lo = Infinity;
+  let hi = 0;
+  let base = 0;
+  const perf = win.performance as Performance & { interactionCount?: number };
+  const interactions = () =>
+    perf.interactionCount ?? (hi ? (hi - lo) / 7 + 1 : 0);
+  const idOf = (e: PerformanceEntry) =>
+    (e as PerformanceEntry & { interactionId?: number }).interactionId;
+  const interact = (l: PerformanceEntry[]) => {
+    for (const e of l) {
+      const id = idOf(e);
+      if (!id) continue;
+      const x = longest.find((a) => a[0] === id);
+      if (!x) longest.push([id, e.duration]);
+      else if (e.duration > x[1]) x[1] = e.duration;
+      longest.sort((a, b) => b[1] - a[1]).splice(10);
+    }
+  };
+  const PET = (win as { PerformanceEventTiming?: { prototype: object } })
+    .PerformanceEventTiming;
+  if ("interactionId" in (PET?.prototype || {})) {
+    observe("event", interact, { durationThreshold: 40 });
+    observe("first-input", interact);
+    if (!("interactionCount" in perf))
+      observe(
+        "event",
+        (l) => {
+          for (const e of l) {
+            const id = idOf(e);
+            if (id) {
+              lo = Math.min(lo, id);
+              hi = Math.max(hi, id);
+            }
+          }
+        },
+        { durationThreshold: 0 },
+      );
+  }
   // Scripts as they load, those before the tracker included (buffered).
   observe("resource", (l) => {
     if (scriptHosts.length >= SCRIPT_HOSTS) return;
@@ -1779,9 +1861,28 @@ export function start(
         addScript(e.name);
   });
   const vitalsFinal = () => {
-    if (lcp) vital("LCP", lcp, true);
-    if (inp) vital("INP", inp);
-    vital("CLS", cls);
+    for (const o of observers) o[1]();
+    if (lcp && lcp < firstHidden) vital("LCP", lcp, true);
+    if (longest.length)
+      vital(
+        "INP",
+        longest[
+          Math.min(longest.length - 1, Math.floor((interactions() - base) / 50))
+        ][1],
+      );
+    if (shifts && fcpSent) vital("CLS", cls);
+  };
+  // Back from the back/forward cache: CLS and INP start over and go out
+  // again when the page is hidden, for the page shown now; the paints and
+  // the first byte were the load's. A restored page is shown: CLS needs no
+  // paint of its own, even where the load, hidden, sent none.
+  const restored = () => {
+    lcp = cls = sum = 0;
+    longest.length = 0;
+    base = interactions();
+    land();
+    fcpSent = true;
+    vitalsSent = false;
   };
 
   // ---- the public API, and calls queued before the script loaded
@@ -1818,7 +1919,15 @@ export function start(
     pageView(true);
     arrival = sid;
     begun = true;
+    land();
+    // Hidden before the script ran: the browser's record of it where it
+    // keeps one, the hiding during prerendering left out; else hidden now
+    // is taken as hidden from the start.
     const n = navEntry();
+    firstHidden =
+      entries("visibility-state").find(
+        (e) => e.name === "hidden" && e.startTime >= (n?.activationStart || 0),
+      )?.startTime ?? (doc.visibilityState === "hidden" ? 0 : Infinity);
     if (n && n.responseStart > 0) vital("TTFB", n.responseStart, true);
     sendFCP();
     for (const a of pending.slice(0, LIMITS.batchEvents))
@@ -1835,7 +1944,7 @@ export function start(
     flush: (final = false) => guard(() => flush(final)),
     stop: () => {
       for (const off of offs.splice(0)) guard(off);
-      for (const o of observers.splice(0)) guard(() => o.disconnect());
+      for (const [o] of observers.splice(0)) guard(() => o.disconnect());
       for (const [m, o] of orig.splice(0))
         guard(() => {
           (hist as unknown as Record<string, unknown>)[m] = o;

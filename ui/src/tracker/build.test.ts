@@ -65,13 +65,54 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// At a time on the entries' clock after their paints.
 const show = (state: "visible" | "hidden") => {
   Object.defineProperty(document, "visibilityState", {
     value: state,
     configurable: true,
   });
-  document.dispatchEvent(new Event("visibilitychange"));
+  const e = new Event("visibilitychange");
+  Object.defineProperty(e, "timeStamp", { value: 60_000 });
+  document.dispatchEvent(e);
 };
+
+// The browser's performance observers, each handed its entries once.
+type Entry = { startTime: number; [k: string]: unknown };
+function observers() {
+  class FakePO {
+    static supportedEntryTypes = [
+      "paint",
+      "largest-contentful-paint",
+      "layout-shift",
+      "event",
+    ];
+    static all: FakePO[] = [];
+    type = "";
+    constructor(public cb: (l: { getEntries: () => Entry[] }) => void) {
+      FakePO.all.push(this);
+    }
+    observe(o: { type: string }) {
+      this.type = o.type;
+    }
+    takeRecords() {
+      return [];
+    }
+    disconnect() {}
+  }
+  vi.stubGlobal("PerformanceObserver", FakePO);
+  vi.stubGlobal(
+    "PerformanceEventTiming",
+    class {
+      get interactionId() {
+        return 0;
+      }
+    },
+  );
+  return (type: string, entries: Entry[]) =>
+    FakePO.all
+      .filter((o) => o.type === type)
+      .forEach((o) => o.cb({ getEntries: () => entries }));
+}
 
 // One visit, the same for the source and the built script; the batches it
 // sends, with the random ids named by their order.
@@ -85,7 +126,12 @@ async function visit(load: () => void): Promise<unknown[]> {
     '<a id="out" href="https://github.com/ipverse">out</a>' +
     '<form id="s"><input type="search" name="q" value="AS15169"></form>';
   (window as { trakk?: unknown }).trakk = { q: [["early", { a: 1 }]] };
+  const emit = observers();
   load();
+  emit("paint", [{ name: "first-contentful-paint", startTime: 300 }]);
+  emit("largest-contentful-paint", [{ startTime: 400 }]);
+  emit("layout-shift", [{ startTime: 500, value: 0.1, hadRecentInput: false }]);
+  emit("event", [{ startTime: 600, interactionId: 7, duration: 64 }]);
   const trakk = (
     window as unknown as { trakk: { event: (...a: unknown[]) => void } }
   ).trakk;
@@ -161,9 +207,30 @@ describe("the built script", () => {
         "engagement",
       ]),
     );
+    // A vital's props by their wire names.
+    const vitals = got.flatMap((b) =>
+      (b as { events: { k: string; p: unknown }[] }).events
+        .filter((e) => e.k === "vital")
+        .map((e) => e.p),
+    );
+    expect(vitals).toEqual([
+      { name: "FCP", value: 300, v: 2 },
+      { name: "LCP", value: 400, v: 2 },
+      { name: "INP", value: 64, v: 2 },
+      { name: "CLS", value: 0.1, v: 2 },
+    ]);
     // No property of its own collides with a key on the wire.
     const wire = keys(got, new Set());
     for (const p of props) expect(wire.has(p), p).toBe(false);
+  });
+
+  // Every page loads it: gzipped at the default level, 8985 bytes with the
+  // standard CLS and INP (8533 before), a budget of that and about 40.
+  it("stays within its size budget", async () => {
+    const gz = await new Response(
+      new Response(code).body!.pipeThrough(new CompressionStream("gzip")),
+    ).arrayBuffer();
+    expect(gz.byteLength).toBeLessThanOrEqual(9025);
   });
 
   it("mangles no browser API and none of the page's window.trakk", () => {

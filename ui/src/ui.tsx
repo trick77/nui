@@ -445,12 +445,12 @@ const VITALS: Record<string, [string, string, string]> = {
   ],
   CLS: [
     "Cumulative Layout Shift",
-    "How much visible content jumped around during the whole visit, shifts right after a click or key press left out. No unit.",
-    "Google: good up to 0.1, poor over 0.25, for the worst burst of shifts only; a long visit sums up to more.",
+    "How much visible content jumped around in the worst burst of shifts on the page (shifts under a second apart, within 5 s), shifts right after a click or key press left out. No unit.",
+    "Google: good up to 0.1, poor over 0.25.",
   ],
   INP: [
     "Interaction to Next Paint",
-    "The slowest delay from a click, tap or key press to the next screen update.",
+    "The slowest delay from a click, tap or key press to the next screen update; on a page with many interactions, close to the slowest.",
     "Good up to 200 ms, poor over 500 ms.",
   ],
   FCP: [

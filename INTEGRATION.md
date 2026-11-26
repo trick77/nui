@@ -55,6 +55,15 @@ On every page, in `<head>`:
   takes over 50 ms between the throw and the error event.
   The only input value ever read is a search term: an `<input type="search">`, or a text input named `q`, `query`,
   `search`, `s` or `term`.
+- Web vitals are measured as Web Vitals defines them and carry `v: 2` beside `name` and `value` (the definitions'
+  version; a vital without one summed every layout shift of the visit and took the slowest interaction). CLS is the
+  worst session window, INP the 98th percentile of the interactions. All five are filed under the page the document
+  first showed, its URL and title, whatever route a single-page app shows by then; after a back/forward cache
+  restore CLS and INP are measured again, under the page shown then, and the others are not sent again. CLS and INP
+  cover the page up to its first hide and, after such a restore, up to the next: nothing after an ordinary tab
+  switch counts. FCP and LCP
+  are left out when the paint came after the page was first hidden, CLS where the browser reports no layout shifts
+  or, on the load, without an FCP, INP without an interaction or where the browser's event timing has no interaction ids.
 - To tell people from automated browsers it also reads: globals and attributes automation tools leave in the page
   (sent as fixed tokens, never the names), where `navigator.webdriver` is defined, window frame size, plugin count
   and `pdfViewerEnabled`, the notification permission against the Permissions API, the WebGL renderer (an offscreen
