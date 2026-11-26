@@ -147,6 +147,6 @@ type Model interface {
 	Readings(ctx context.Context, ins []ReadingInput, urgent bool) map[string]Reading
 	// Labels are the stored labels of values ("path" templates, "ua" strings); missing ones are queued.
 	Labels(ctx context.Context, site int64, kind string, values []string) map[string]string
-	// Usage is a site's calls today and the daily call budget.
-	Usage(ctx context.Context, site int64) (calls, budget int64)
+	// Usage is a site's calls today, the daily call budget and whether the day's budget (calls or tokens) is spent.
+	Usage(ctx context.Context, site int64) (calls, budget int64, spent bool)
 }

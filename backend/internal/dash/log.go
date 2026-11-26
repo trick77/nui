@@ -382,8 +382,9 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 		}
 	}
 	if s.Model != nil {
-		calls, budget := s.Model.Usage(ctx, q.site.ID)
-		rules["llm"] = map[string]any{"calls_today": calls, "budget": budget, "configured": s.Model.Configured()}
+		calls, budget, spent := s.Model.Usage(ctx, q.site.ID)
+		rules["llm"] = map[string]any{"calls_today": calls, "budget": budget, "spent": spent,
+			"configured": s.Model.Configured()}
 	}
 	notify, err := s.notifyBlock(ctx)
 	if err != nil {
