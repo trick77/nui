@@ -23,7 +23,8 @@ type pathGen struct {
 	lookup bool
 }
 
-// pageShape is one rule's pattern, filled on demand; re matches the paths it fills.
+// pageShape is one rule's pattern, filled on demand; re matches the paths it fills, by the values fill puts in: a
+// path is its own rule's, not another's of one segment as well ("/{ipv4}" and "/{text}").
 type pageShape struct {
 	pattern string
 	re      *regexp.Regexp
@@ -34,10 +35,19 @@ func newPageShape(pattern string) pageShape {
 	last := 0
 	for _, m := range placeholderRE.FindAllStringSubmatchIndex(pattern, -1) {
 		b.WriteString(regexp.QuoteMeta(pattern[last:m[0]]))
-		if pattern[m[2]:m[3]] == "any" {
+		switch kind := pattern[m[2]:m[3]]; {
+		case kind == "any":
 			b.WriteString(`.+`)
-		} else {
-			b.WriteString(`[^/]+`)
+		case kind == "int":
+			b.WriteString(`[0-9]+`)
+		case len(fills[kind]) == 0:
+			b.WriteString(`x`)
+		default:
+			vals := make([]string, len(fills[kind]))
+			for i, v := range fills[kind] {
+				vals[i] = regexp.QuoteMeta(v)
+			}
+			b.WriteString(`(?:` + strings.Join(vals, `|`) + `)`)
 		}
 		last = m[1]
 	}
@@ -124,15 +134,19 @@ func (g *pathGen) page(r rng) string {
 }
 
 // speed is how slow a page of path loads, by the rule it was made from: a factor from 0.6 to 2 on the vitals.
-func (g *pathGen) speed(path string) float64 {
-	shape := path
+func (g *pathGen) speed(path string) float64 { return shapeSpeed(g.shape(path)) }
+
+// shapeSpeed is the speed of the pages of a rule's pattern.
+func shapeSpeed(shape string) float64 { return 0.6 + float64(strHash(shape)%1000)/1000*1.4 }
+
+// shape is the rule's pattern a page of path was made from, the path itself when none.
+func (g *pathGen) shape(path string) string {
 	for _, p := range g.pages {
 		if p.re.MatchString(path) {
-			shape = p.pattern
-			break
+			return p.pattern
 		}
 	}
-	return 0.6 + float64(strHash(shape)%1000)/1000*1.4
+	return path
 }
 
 // spikePage is the page a news post links: the lookup site's most asked address, or the first page.

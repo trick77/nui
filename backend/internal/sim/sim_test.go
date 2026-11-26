@@ -1,10 +1,13 @@
 package sim
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"maps"
+	"net/netip"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -476,6 +479,172 @@ func TestBackfill_Named(t *testing.T) {
 	}
 	if named, err := st.SvcNamed(t.Context()); err != nil || named {
 		t.Errorf("a history beside older events marked named: %v, %v", named, err)
+	}
+}
+
+// A world without a script site (sites from a store, all feed-only) builds every scenario's expectations and its
+// alert hours: the scenarios on the first script site expect nothing there.
+func TestNoScriptSite(t *testing.T) {
+	ref, err := OpenReference(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, _ := Scenarios("all")
+	w, err := NewWorld(Options{Seed: 7, Anchor: anchor, Scale: 0.1, Scenarios: sc, Ref: ref,
+		Sites: []*Site{{Domain: "feed.example.com", Product: "Feed", Kind: "site", Feed: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = w.AlertHours()
+	for _, e := range w.Expectations() {
+		switch e.Scenario {
+		case "slow-page", "script-inject", "hammer", "headless":
+			t.Errorf("%s: %s", e.Scenario, e.Says)
+		}
+	}
+	if len(w.Requests(anchor.Add(-day), anchor)) == 0 {
+		t.Error("no requests")
+	}
+}
+
+// writeList writes a bot list file of services.
+func writeList(t *testing.T, path string, services map[string]botService) {
+	t.Helper()
+	b, err := botList(services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A reference directory an earlier build wrote (marked, its list without the AI vendor) is written anew, or the AI
+// roles would stay away unseen; the current world's is left as it is (its times are the export's), and so is a list
+// fetched for real, marked directory or not.
+func TestOpenReferenceRewritesAnEarlierWorld(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteReference(dir); err != nil {
+		t.Fatal(err)
+	}
+	older := maps.Clone(worldCrawlers)
+	delete(older, AIService)
+	for name, s := range older {
+		s.Agents = nil
+		older[name] = s
+	}
+	writeList(t, filepath.Join(dir, crawlersFile), older)
+	ref, err := OpenReference(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"ai-crawler", "ai-fetcher"} {
+		if r, ok := ref.role(role); !ok || !r.own {
+			t.Errorf("%s: %+v, %v", role, r, ok)
+		}
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, crawlersFile)) //nolint:gosec // the test's directory
+	if want, _ := botList(worldCrawlers); !bytes.Equal(got, want) {
+		t.Errorf("crawlers.json not the world's: %s", got)
+	}
+	then := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := ref.Stamp(then); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenReference(dir); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, crawlersFile)); err != nil || !fi.ModTime().Equal(then) {
+		t.Errorf("the current world's list rewritten: %v, %v", fi.ModTime(), err)
+	}
+
+	fetched := map[string]botService{"ClaudeBot": {IPv4: []string{"192.0.2.0/24"}, Authoritative: true,
+		UA: []string{"*ClaudeBot*"}}}
+	for _, marked := range []bool{false, true} {
+		dir := t.TempDir()
+		if marked {
+			if err := WriteReference(dir); err != nil {
+				t.Fatal(err)
+			}
+		}
+		path := filepath.Join(dir, crawlersFile)
+		writeList(t, path, fetched)
+		writeList(t, filepath.Join(dir, monitorFile), worldMonitors)
+		before, _ := os.ReadFile(path) //nolint:gosec // the test's directory
+		if _, err := OpenReference(dir); err != nil {
+			t.Fatal(err)
+		}
+		if after, _ := os.ReadFile(path); !bytes.Equal(before, after) { //nolint:gosec // the test's directory
+			t.Errorf("marked %v: a real list rewritten", marked)
+		}
+	}
+}
+
+// With a real list the fetcher is the real service's, which names no key directory: Signature-Agent is the world's
+// vendor's alone.
+func TestRealFetcherClaimsNoKeyDirectory(t *testing.T) {
+	dir := t.TempDir()
+	writeList(t, filepath.Join(dir, crawlersFile), map[string]botService{"ClaudeBot": {IPv4: []string{"192.0.2.0/24"},
+		Authoritative: true, UA: []string{"*ClaudeBot*", "*Claude-User*"}}})
+	writeList(t, filepath.Join(dir, monitorFile), worldMonitors)
+	ref, err := OpenReference(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := ref.role("ai-fetcher"); !ok || r.own {
+		t.Fatalf("ai-fetcher: %+v, %v", r, ok)
+	}
+	sc, _ := Scenarios("baseline")
+	w, err := NewWorld(Options{Seed: 7, Anchor: anchor, Scale: 1, Scenarios: sc, Ref: ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetches := 0
+	for _, q := range w.Requests(anchor.Add(-day), anchor) {
+		for _, r := range q.records {
+			if strings.Contains(r.ua, "Claude-User") {
+				fetches++
+			}
+		}
+		if q.Feed && strings.Contains(string(q.Body(nil)), `"sig_agent"`) {
+			t.Fatalf("a real service names a key directory: %s", q.Body(nil))
+		}
+	}
+	if fetches == 0 {
+		t.Error("no fetches")
+	}
+}
+
+// Every bot role's address is its own on every site, inside its service's range: two roles of one range interleave.
+func TestBotAddrsApart(t *testing.T) {
+	var ss []*Site
+	for i := range 50 {
+		ss = append(ss, &Site{Domain: fmt.Sprintf("s%d.example.com", i), Product: "P", Kind: "site", Feed: true})
+	}
+	ref, err := OpenReference(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := NewWorld(Options{Anchor: anchor, Sites: ss, Ref: ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[netip.Addr]string{}
+	for role := range roleChoices {
+		b, ok := ref.role(role)
+		if !ok {
+			t.Fatalf("no %s", role)
+		}
+		for i := range ss {
+			a, _ := w.BotAddr(role, i)
+			if !b.V4[0].Contains(a) {
+				t.Errorf("%s on site %d: %v outside %v", role, i, a, b.V4[0])
+			}
+			if other, ok := seen[a]; ok {
+				t.Errorf("%s on site %d: %v is %s's", role, i, a, other)
+			}
+			seen[a] = fmt.Sprint(role, " on site ", i)
+		}
 	}
 }
 

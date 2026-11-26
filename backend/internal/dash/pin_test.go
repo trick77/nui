@@ -41,10 +41,11 @@ func factsDigest(t *testing.T, r *rig, model *fakeModel, sites ...string) (strin
 
 // The alert rules' thresholds never touch the dashboard: Noteworthy's facts, as the model is given them, and their
 // hash (the briefing cache's key) stay byte for byte what they were before the thresholds became a parameter. The
-// digests were recorded on the code before it, the watch's once its findings were the script hosts alone.
+// digests were recorded on the code before it, the watch's once its findings were the script hosts alone, the sites'
+// again once the simulated history gained an AI vendor's bots (the same facts, their figures moved).
 func TestFactsPinned(t *testing.T) {
 	got, n := factsDigest(t, sharedRig(t, nil), &fakeModel{}, feedSite, plainSite)
-	if want := "20c072a0b3518354790c91665762805b2cd020955dae333f8bded56b0c5da546"; got != want || n != 5 {
+	if want := "c6f6c72dc51bc079e3662f6953eb13d8e6337e52d6a5b90317a84b0777672b5c"; got != want || n != 5 {
 		t.Errorf("sites: %d inputs, digest %s, want 5, %s", n, got, want)
 	}
 	calls := mcpCalls()

@@ -2,6 +2,7 @@ package sim
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -62,7 +63,8 @@ const h = time.Hour
 // catalogue is every scenario, with its default window.
 var catalogue = []Scenario{
 	{Name: "baseline", Story: "A quiet product: people on their daily and weekly rhythm, a crawler, a crawler " +
-		"rendering pages, an uptime probe. Always on.", expect: expectBaseline},
+		"rendering pages, an uptime probe, an AI vendor's crawler and the pages its assistant fetches for users. " +
+		"Always on.", expect: expectBaseline},
 	{Name: "referrer-spike", Story: "A post on a news site sends a wave of first-time visitors to one lookup page.",
 		From: -30 * h, To: -20 * h, expect: expectReferrer},
 	{Name: "scan-wave", Story: "A dozen hosting addresses probe for secrets, admin pages and backups.",
@@ -93,6 +95,11 @@ var catalogue = []Scenario{
 	// The watch's learning window behind it: a week from the history's first day.
 	{Name: "script-inject", Story: "A host the pages never loaded scripts from shows up on every page: a skimmer " +
 		"injected into the site.", From: -40 * h, To: 1000 * 24 * h, MinDays: 9, expect: expectInject},
+	// From inside the first day of 7d, whatever the anchor's hour: its prior period stays as it was, and whole (on a
+	// part of it the p75 drifted by up to 30 % alone).
+	{Name: "slow-page", Story: "The lookup site's address and network pages take three times as long to paint their " +
+		"largest content, from six days before the anchor on.", From: -6 * 24 * h, To: 1000 * 24 * h, MinDays: 14,
+		expect: expectSlowPage},
 }
 
 // Catalogue lists the scenarios.
@@ -426,6 +433,7 @@ func expectBaseline(w *World, _ *Scenario) []Expectation {
 			out = append(out, visitor("the crawler is a known bot, by its address range", s.Domain, "7d",
 				a.String(), "bot", "address range"))
 		}
+		out = append(out, expectServices(w, s.Domain)...)
 	}
 	for _, s := range w.Sites {
 		if s.Kind != "api" || !s.Feed || s.Silent {
@@ -446,6 +454,90 @@ func expectBaseline(w *World, _ *Scenario) []Expectation {
 				}
 				return nil
 			}})
+	}
+	return out
+}
+
+// expectServices are the services list's rows of the world's own bot list on a site with a feed: the AI vendor's two
+// agents by purpose behind their one service, declared (one range serves both purposes), the fetcher's key directory;
+// a service of one purpose; the probe an older list names without agents. A real list's are another's.
+func expectServices(w *World, site string) []Expectation {
+	var out []Expectation
+	services := func(kv ...string) map[string]string {
+		return params(site, "7d", append([]string{"dim", "services", "limit", "50"}, kv...)...)
+	}
+	str := func(v any) string { s, _ := v.(string); return s }
+	crawler, cok := w.Ref.role("ai-crawler")
+	fetcher, fok := w.Ref.role("ai-fetcher")
+	if cok && fok && crawler.own && fetcher.own {
+		agent := func(name, purpose, says string) func(map[string]any) error {
+			return rowWith(name, func(r map[string]any) error {
+				if r["category"] != purpose || r["service"] != AIService || r["declared"] != true || str(r["says"]) != says {
+					return fmt.Errorf("row %v", r)
+				}
+				return nil
+			})
+		}
+		out = append(out,
+			Expectation{Says: "the services list has the AI vendor's two agents by purpose, behind their service, " +
+				"the purpose declared, the fetcher saying who it is", Endpoint: "list", Params: services(),
+				Check: func(b map[string]any) error {
+					if gs, _ := b["groups"].([]any); !slices.Contains(gs, any("ai")) {
+						return fmt.Errorf("groups %v", b["groups"])
+					}
+					if err := agent(AICrawler, "ai-training", "")(b); err != nil {
+						return err
+					}
+					return agent(AIFetcher, "ai-assistant", "ai.example.com")(b)
+				}},
+			Expectation{Says: "the purpose group ai lists the AI vendor's agents alone", Endpoint: "list",
+				Params: services("cat", "ai"), Check: func(b map[string]any) error {
+					var keys []string
+					for _, r := range items(b, "rows") {
+						keys = append(keys, str(r["key"]))
+					}
+					slices.Sort(keys)
+					if !slices.Equal(keys, []string{AICrawler, AIFetcher}) {
+						return fmt.Errorf("rows %v", keys)
+					}
+					return nil
+				}})
+		for _, name := range []string{AICrawler, AIFetcher} {
+			out = append(out, Expectation{Says: "the log filters by the agent " + name, Endpoint: "log",
+				Params: params(site, "7d", "service", name), Check: func(b map[string]any) error {
+					if n, _ := b["total"].(float64); n <= 0 || len(items(b, "rows")) == 0 {
+						return fmt.Errorf("total %v", b["total"])
+					}
+					return nil
+				}})
+		}
+		if a, ok := w.BotAddr("ai-fetcher", w.firstFeed()); ok {
+			out = append(out, Expectation{Says: "the fetcher's visitor detail says who it is", Endpoint: "visitor",
+				Params: params(site, "7d", "key", a.String()), Check: func(b map[string]any) error {
+					if says, _ := b["says"].([]any); len(says) != 1 || says[0] != "ai.example.com" {
+						return fmt.Errorf("says %v", b["says"])
+					}
+					return nil
+				}})
+		}
+	}
+	if role, ok := w.Ref.role("crawler"); ok && role.own {
+		out = append(out, Expectation{Says: "a service of one purpose lists it, not declared", Endpoint: "list",
+			Params: services(), Check: rowWith("Examplebot", func(r map[string]any) error {
+				if r["category"] != "search" || r["declared"] != nil || r["service"] != nil {
+					return fmt.Errorf("row %v", r)
+				}
+				return nil
+			})})
+	}
+	if role, ok := w.Ref.role("monitor"); ok && role.own {
+		out = append(out, Expectation{Says: "a service an older list names without agents is listed by its name alone",
+			Endpoint: "list", Params: services(), Check: rowWith("Uptimely", func(r map[string]any) error {
+				if r["category"] != nil || r["declared"] != nil || r["service"] != nil {
+					return fmt.Errorf("row %v", r)
+				}
+				return nil
+			})})
 	}
 	return out
 }
@@ -617,8 +709,15 @@ func expectGrowth(w *World, _ *Scenario) []Expectation {
 		Params: findings(s, "90d"), Check: hasFinding("trend:visitors:up")}}
 }
 
+// The scenarios on the first script site expect nothing of a world without one (sites from a store, all feed-only):
+// their actors stay away too.
+
 func expectHammer(w *World, _ *Scenario) []Expectation {
-	s := w.Sites[w.firstScript()].Domain
+	i := w.firstScript()
+	if i < 0 {
+		return nil
+	}
+	s := w.Sites[i].Domain
 	return []Expectation{
 		{Says: "Noteworthy has the collector's refusals as a problem", Endpoint: "noteworthy", Params: findings(s, "24h"),
 			Check: hasFinding("collector:refused")},
@@ -638,7 +737,11 @@ func expectHammer(w *World, _ *Scenario) []Expectation {
 }
 
 func expectHeadless(w *World, _ *Scenario) []Expectation {
-	s := w.Sites[w.firstScript()].Domain
+	i := w.firstScript()
+	if i < 0 {
+		return nil
+	}
+	s := w.Sites[i].Domain
 	return []Expectation{visitor("the headless browser is unknown automated: navigator.webdriver set", s, "7d",
 		HeadlessAddr.String(), "unknown", "navigator.webdriver set")}
 }
@@ -653,8 +756,61 @@ func expectProber(w *World, _ *Scenario) []Expectation {
 	}
 }
 
+// lcpRiseFloor is the least rise of the site's LCP p75 against the prior period slow-page shows: +41 % at the lowest
+// with it, up to +19 % without it (seeds 1 to 3, scale 1 and 0.3, either source).
+const lcpRiseFloor = 25
+
+func expectSlowPage(w *World, _ *Scenario) []Expectation {
+	i := w.firstScript()
+	if i < 0 {
+		return nil
+	}
+	s := w.Sites[i].Domain
+	pages := w.slowPages()
+	return []Expectation{
+		{Says: "the experience list has each slow page's LCP p75 nearer its slowed figure than its usual one",
+			Endpoint: "list", Params: params(s, "7d", "dim", "experience", "limit", "500"),
+			Check: func(b map[string]any) error {
+				if len(pages) == 0 {
+					return fmt.Errorf("no slow page on %s", s)
+				}
+				for _, page := range pages {
+					// The geometric middle: the usual p75 and the slowed one each a factor √slowFactor away.
+					bound := lcpP75(page.speed) * math.Sqrt(slowFactor)
+					if err := rowWith(page.tmpl, func(r map[string]any) error {
+						if v, _ := r["lcp"].(float64); v <= bound {
+							return fmt.Errorf("%s: lcp %v of %v loads, at most %.0f", page.tmpl, r["lcp"], r["loads"], bound)
+						}
+						return nil
+					})(b); err != nil {
+						return err
+					}
+				}
+				return nil
+			}},
+		{Says: fmt.Sprintf("the site's LCP is bad, up at least %d %% on the prior period", lcpRiseFloor),
+			Endpoint: "experience", Params: params(s, "7d"), Check: func(b map[string]any) error {
+				for _, v := range items(b, "vitals") {
+					if v["name"] != "LCP" {
+						continue
+					}
+					c, _ := v["change"].(map[string]any)
+					if pct, _ := c["pct"].(float64); pct < lcpRiseFloor || v["verdict"] != "bad" {
+						return fmt.Errorf("LCP %v", v)
+					}
+					return nil
+				}
+				return fmt.Errorf("no LCP among %v", b["vitals"])
+			}},
+	}
+}
+
 func expectInject(w *World, _ *Scenario) []Expectation {
-	s := w.Sites[w.firstScript()].Domain
+	i := w.firstScript()
+	if i < 0 {
+		return nil
+	}
+	s := w.Sites[i].Domain
 	return []Expectation{
 		{Says: "Noteworthy lists the new script host", Endpoint: "noteworthy", Params: findings(s, "7d"),
 			Check: hasFinding("script:" + InjectedHost)},

@@ -52,8 +52,8 @@ func agreeCases() (cases []agreeCase) {
 }
 
 // agreeScenarios play on a 400-day history: the half year of growth, and the stories of the last days, whose lists
-// (new referrers, probes, errors, spikes) the comparisons read.
-const agreeScenarios = "growth,referrer-spike,scan-wave,deploy-error,api-walker,flood-48"
+// (new referrers, probes, errors, spikes) and page experience (a slow page) the comparisons read.
+const agreeScenarios = "growth,referrer-spike,scan-wave,deploy-error,api-walker,flood-48,slow-page"
 
 // TestSourcesAgree asks every request of the UI's parameter set (Export's) in each zone against the prior period and
 // last year, from raw events and from the aggregates, over a 400-day history: additive figures equal, distinct ones

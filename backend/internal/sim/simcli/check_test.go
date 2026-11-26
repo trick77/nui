@@ -175,18 +175,54 @@ func TestExpectationsFailWithoutTheirStory(t *testing.T) {
 	}
 }
 
+// A services row counts the requests the log shows under its name, from either source: the AI vendor's agents, which
+// one expectation alone cannot set side by side.
+func TestServiceRowsMatchTheLog(t *testing.T) {
+	t.Parallel()
+	scale := 1.0
+	if raceOn {
+		scale = 0.3
+	}
+	st, w := history(t, scale, 3, "baseline")
+	for _, src := range checkSources {
+		d, err := newDashboard(t.Context(), st, w, w.Anchor.Add(time.Minute), src.src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ask := func(ep, k1, v1, k2, v2 string) map[string]any {
+			return answer(t, d, ep, map[string]string{"site": "lens.example.com", "range": "7d", "tz": "UTC", k1: v1,
+				k2: v2})
+		}
+		list := ask("list", "dim", "services", "limit", "50")
+		for _, name := range []string{sim.AICrawler, sim.AIFetcher} {
+			var value any
+			for _, r := range rows(list) {
+				if r["key"] == name {
+					value = r["value"]
+				}
+			}
+			log := ask("log", "service", name, "aud", "all")
+			if n, _ := value.(float64); n <= 0 || log["total"] != value {
+				t.Errorf("%s, %s: row %v, log %v", src.name, name, value, log["total"])
+			}
+		}
+	}
+}
+
 // Played together, the scenarios still show what each says: Noteworthy's findings past the five it shows are
-// checked too.
+// checked too. The history is the longest any of them needs (slow-page's 14 days took 7.1 s alone, 9 days 6.3 s).
 func TestScenariosTogether(t *testing.T) {
 	t.Parallel()
 	skipRace(t)
 	var names []string
+	days := 0
 	for _, c := range sim.Catalogue() {
 		if c.MinDays <= 30 {
 			names = append(names, c.Name)
+			days = max(days, c.MinDays)
 		}
 	}
-	st, w := history(t, 1, 9, strings.Join(names, ","))
+	st, w := history(t, 1, days, strings.Join(names, ","))
 	fails, err := Check(t.Context(), st, w)
 	if err != nil {
 		t.Fatal(err)

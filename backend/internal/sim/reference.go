@@ -49,6 +49,7 @@ var networks = []network{
 	{64507, "Example Search LLC", "US", "business", []string{"198.51.100.0/25"}, 0},
 	{64508, "Uptimely Ltd", "GB", "hosting", []string{"198.51.100.128/25"}, 0},
 	{64509, "Harbour Office Networks", "DE", "business", []string{"198.19.32.0/20"}, 3},
+	{64510, "Example AI Inc", "US", "hosting", []string{"198.19.64.0/20"}, 0},
 }
 
 var countryNames = map[string]string{"CH": "Switzerland", "DE": "Germany", "US": "United States", "FR": "France",
@@ -69,26 +70,50 @@ type botService struct {
 	Authoritative bool     `json:"ip_list_authoritative"`
 	Rdns          []string `json:"rdns_patterns"`
 	UA            []string `json:"user_agent_patterns"`
+	// Agents is missing from an older list's entry.
+	Agents []botAgent `json:"agents,omitempty"`
+}
+
+// botAgent is one user-agent token a service declares, with what the vendor says it does.
+type botAgent struct {
+	Name    string `json:"name"`
+	Pattern string `json:"pattern"`
+	Purpose string `json:"purpose"`
 }
 
 // The made-up bots: a crawler with an authoritative list, one rendering pages whose list needs rDNS, an uptime
-// probe. Their user agents follow the real ones' pattern.
+// probe whose entry is an older list's (no agents), and an AI vendor publishing one address list for two purposes:
+// its crawler's and the fetches its assistant makes for a user. Their user agents follow the real ones' pattern.
 var (
 	worldCrawlers = map[string]botService{
 		"Examplebot": {IPv4: []string{"198.51.100.0/26"}, IPv6: []string{"2001:db8:c00::/48"}, Authoritative: true,
-			Rdns: []string{"*.crawl.example.com"}, UA: []string{"*Examplebot*"}},
+			Rdns: []string{"*.crawl.example.com"}, UA: []string{"*Examplebot*"},
+			Agents: []botAgent{{"Examplebot", "*Examplebot*", "search"}}},
 		"Samplebot": {IPv4: []string{"198.51.100.64/26"}, Rdns: []string{"*.render.example.net"},
-			UA: []string{"*Samplebot*"}},
+			UA: []string{"*Samplebot*"}, Agents: []botAgent{{"Samplebot", "*Samplebot*", "seo"}}},
+		AIService: {IPv4: []string{"198.19.64.0/24"}, Authoritative: true, Rdns: []string{"*.ai.example.com"},
+			UA: []string{"*ExampleAI*"}, Agents: []botAgent{{AICrawler, "*ExampleAI-Crawler*", "ai-training"},
+				{AIFetcher, "*ExampleAI-User*", "ai-assistant"}}},
 	}
 	worldMonitors = map[string]botService{
 		"Uptimely": {IPv4: []string{"198.51.100.128/26"}, Authoritative: true, UA: []string{"*Uptimely*"}},
 	}
 )
 
-// botRole is a bot actor's identity: its user agent and the ranges it sends from.
+// The AI vendor's service and agents, and the key directory its fetcher names in Signature-Agent (an RFC 8941 string).
+const (
+	AIService  = "ExampleAI"
+	AICrawler  = "ExampleAI-Crawler"
+	AIFetcher  = "ExampleAI-User"
+	AISigAgent = `"https://ai.example.com"`
+)
+
+// botRole is a bot actor's identity: its user agent, the ranges it sends from, and whether the service is the world's
+// own (the expectations that name a purpose hold for its list only).
 type botRole struct {
-	UA string
-	V4 []netip.Prefix
+	UA  string
+	V4  []netip.Prefix
+	own bool
 }
 
 // roleChoices are the candidates for each bot role, the world's own last: with a real bot list loaded the actors
@@ -106,7 +131,24 @@ var roleChoices = map[string][]struct{ name, ua string }{
 		{"UptimeRobot", "Mozilla/5.0+(compatible; UptimeRobot/2.0; http://www.uptimerobot.com/)"},
 		{"Uptimely", "Mozilla/5.0 (compatible; Uptimely/3.2; +https://uptimely.example.com/)"},
 	},
+	// One service's two agents: its crawler and the fetcher a user's question sends.
+	"ai-crawler": {
+		{"ClaudeBot", "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; ClaudeBot/1.0; +claudebot@anthropic.com)"},
+		{AIService, "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; ExampleAI-Crawler/1.0; +https://ai.example.com/bots)"},
+	},
+	"ai-fetcher": {
+		{"ClaudeBot", "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Claude-User/1.0; +Claude-User@anthropic.com)"},
+		{AIService, "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; ExampleAI-User/1.0; +https://ai.example.com/bots)"},
+	},
 }
+
+// hostPlan places a role's hosts in its range: the first, then one every step per site.
+type hostPlan struct{ first, step int }
+
+// roleHost is the plan of a role sharing its service's range with another, every other role's host 10 plus the site:
+// the two interleave, another visitor on every site however many sites there are (blocks side by side met from the
+// ninth site on).
+var roleHost = map[string]hostPlan{"ai-crawler": {10, 2}, "ai-fetcher": {11, 2}}
 
 // The reference files, as refdata caches them.
 const (
@@ -124,9 +166,15 @@ type Reference struct {
 	roles map[string]botRole
 }
 
-// OpenReference loads the reference data in dir, writing the world's own first when dir holds no bot list.
+// OpenReference loads the reference data in dir, writing the world's own first when dir holds no bot list or an
+// earlier build's world (staleWorld).
 func OpenReference(dir string) (*Reference, error) {
-	if _, err := os.Stat(filepath.Join(dir, crawlersFile)); errors.Is(err, fs.ErrNotExist) {
+	_, err := os.Stat(filepath.Join(dir, crawlersFile))
+	stale, serr := staleWorld(dir)
+	if serr != nil {
+		return nil, serr
+	}
+	if errors.Is(err, fs.ErrNotExist) || stale {
 		if err := WriteReference(dir); err != nil {
 			return nil, err
 		}
@@ -154,7 +202,9 @@ func OpenReference(dir string) (*Reference, error) {
 			if !ok || p.Name != c.name {
 				continue
 			}
-			r := botRole{UA: c.ua}
+			_, crawler := worldCrawlers[c.name]
+			_, monitor := worldMonitors[c.name]
+			r := botRole{UA: c.ua, own: crawler || monitor}
 			for _, x := range p.Ranges {
 				if x.Addr().Is4() {
 					r.V4 = append(r.V4, x)
@@ -198,8 +248,8 @@ func WriteReference(dir string) error {
 		"discards it and fetches the real data"); err != nil {
 		return err
 	}
-	for name, list := range map[string]map[string]botService{crawlersFile: worldCrawlers, monitorFile: worldMonitors} {
-		b, err := json.MarshalIndent(map[string]any{"services": list}, "", " ")
+	for name, list := range worldLists {
+		b, err := botList(list)
 		if err != nil {
 			return err
 		}
@@ -241,6 +291,65 @@ func WriteReference(dir string) error {
 		}
 	}
 	return nil
+}
+
+// worldLists are the world's bot lists by file.
+var worldLists = map[string]map[string]botService{crawlersFile: worldCrawlers, monitorFile: worldMonitors}
+
+// botList is a bot list file's content, byte for byte the same for the same list (a map marshals sorted).
+func botList(list map[string]botService) ([]byte, error) {
+	return json.MarshalIndent(map[string]any{"services": list}, "", " ")
+}
+
+// staleWorld reports whether dir holds an earlier build's world reference: marked, its bot lists other than the
+// world's, and naming none but the world's services. A directory without the marker, or whose list names another
+// service (real data fetched into it since), is never rewritten. An earlier build's list lacked the AI vendor: its
+// roles would stay away, unseen.
+func staleWorld(dir string) (bool, error) {
+	if !SimulatedReference(dir) {
+		return false, nil
+	}
+	stale := false
+	for name, list := range worldLists {
+		got, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // the directory the caller names
+		if errors.Is(err, fs.ErrNotExist) {
+			stale = true
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		want, err := botList(list)
+		if err != nil {
+			return false, err
+		}
+		if bytes.Equal(got, want) {
+			continue
+		}
+		if !worldOnly(got) {
+			return false, nil
+		}
+		stale = true
+	}
+	return stale, nil
+}
+
+// worldOnly reports whether a bot list file names none but the world's services.
+func worldOnly(list []byte) bool {
+	var f struct {
+		Services map[string]json.RawMessage `json:"services"`
+	}
+	if json.Unmarshal(list, &f) != nil {
+		return false
+	}
+	for s := range f.Services {
+		_, crawler := worldCrawlers[s]
+		_, monitor := worldMonitors[s]
+		if !crawler && !monitor {
+			return false
+		}
+	}
+	return true
 }
 
 // tarball packs JSON documents into a gzipped tar, ipverse's release format.

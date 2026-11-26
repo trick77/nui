@@ -19,6 +19,8 @@ type record struct {
 	ref, lang               string
 	sfSite, sfMode, sfDest  string
 	chUA, account, op, err  string
+	// sigAgent is the client's Signature-Agent header.
+	sigAgent string
 }
 
 // event is one tracker event.
@@ -111,7 +113,8 @@ func (q *Request) Body(clock Clock) []byte {
 			e := map[string]any{"t": clock(r.t), "ip": r.ip.String(), "ua": r.ua, "method": r.method, "path": r.path,
 				"status": r.status, "dur_ms": r.dur, "bytes": r.bytes}
 			for k, s := range map[string]string{"route": r.route, "ref": r.ref, "lang": r.lang, "sf_site": r.sfSite,
-				"sf_mode": r.sfMode, "sf_dest": r.sfDest, "ch_ua": r.chUA, "account": r.account, "op": r.op, "err": r.err} {
+				"sf_mode": r.sfMode, "sf_dest": r.sfDest, "ch_ua": r.chUA, "account": r.account, "op": r.op, "err": r.err,
+				"sig_agent": r.sigAgent} {
 				if s != "" {
 					e[k] = s
 				}

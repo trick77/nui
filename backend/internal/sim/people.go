@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -363,7 +364,7 @@ func (w *World) tracker(p *dayPlan, s *Site, per *person, pages []page, ref stri
 	// The visit's own stream for what the visit adds beside r's draws (an engagement of a hidden page), by its start to
 	// the nanosecond: r's sequence stays as it was, the rest of the visit with it.
 	vr := newRng(w.Seed, 30, int64(s.idx), pages[0].at.UnixNano())
-	vital := vitals(s, per, pages[0])
+	vital := vitals(s, per, pages[0], w.lcpFactor(s, pages[0]))
 	engage := func(i int, at time.Time) {
 		props := engagement(r, pages[i], per.prof, scripted)
 		if hidden, ok := hide(vr, pages[i], props, scripted); ok {
@@ -583,21 +584,81 @@ var vitalShapes = map[string][2]float64{"TTFB": {250, 0.6}, "FCP": {900, 0.5}, "
 	"INP": {120, 0.7}, "CLS": {0.04, 1}}
 
 // vitals makes a visit's vital props from a uniform draw u, log-normal around the vital's median times the landing
-// page's speed, three decimals as the script rounds them. A visitor on a cached old script (one in twenty, by visitor
-// id: no draw) sends no v.
-func vitals(s *Site, per *person, landing page) func(name string, u float64) map[string]any {
+// page's speed (LCP's times lcp as well), three decimals as the script rounds them. A visitor on a cached old script
+// (one in twenty, by visitor id: no draw) sends no v.
+func vitals(s *Site, per *person, landing page, lcp float64) func(name string, u float64) map[string]any {
 	speed := s.paths.speed(landing.path)
 	old := strHash(per.vid)%20 == 0
 	return func(name string, u float64) map[string]any {
 		sh := vitalShapes[name]
 		u = min(max(u, 1e-9), 1-1e-9)
 		v := sh[0] * speed * math.Exp(sh[1]*math.Sqrt2*math.Erfinv(2*u-1))
+		if name == "LCP" {
+			v *= lcp
+		}
 		p := map[string]any{"name": name, "value": math.Round(v*1000) / 1000}
 		if !old {
 			p["v"] = vitalsVersion
 		}
 		return p
 	}
+}
+
+// slowFactor is what slow-page multiplies its pages' LCP by.
+const slowFactor = 3
+
+// slowShapes are slow-page's pages on the first script site: its address and network lookups, some two in five of the
+// landings. The address page alone (a quarter) moved the site's p75 by nothing on seed 1 at scale 0.3: its loads
+// were past the p75 already, a larger factor moves none more across it.
+func (g *pathGen) slowShapes() []string {
+	var out []string
+	for _, p := range g.pages {
+		if strings.Contains(p.pattern, "{ipv4}") || strings.Contains(p.pattern, "{cidr}") {
+			out = append(out, p.pattern)
+		}
+	}
+	return out
+}
+
+// lcpFactor is what a landing page's LCP is multiplied by: slowFactor in slow-page's window on its pages.
+func (w *World) lcpFactor(s *Site, landing page) float64 {
+	if s.idx == w.firstScript() && w.in("slow-page", landing.at) &&
+		slices.Contains(s.paths.slowShapes(), s.paths.shape(landing.path)) {
+		return slowFactor
+	}
+	return 1
+}
+
+// slowPage is one of slow-page's pages: its template as the site's rules name it, and its speed.
+type slowPage struct {
+	tmpl  string
+	speed float64
+}
+
+// slowPages are slow-page's pages, none in a world without a script site.
+func (w *World) slowPages() []slowPage {
+	i := w.firstScript()
+	if i < 0 {
+		return nil
+	}
+	s := w.Sites[i]
+	var out []slowPage
+	for _, shape := range s.paths.slowShapes() {
+		p := slowPage{tmpl: shape, speed: shapeSpeed(shape)}
+		for _, r := range s.Rules {
+			if r.Pattern == shape {
+				p.tmpl = r.Template
+			}
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// lcpP75 is the p75 of the LCP of a page at speed, not slowed: the log-normal's median times e^(σ·z₀.₇₅).
+func lcpP75(speed float64) float64 {
+	sh := vitalShapes["LCP"]
+	return sh[0] * speed * math.Exp(sh[1]*math.Sqrt2*math.Erfinv(0.5))
 }
 
 // webKit is a Safari engine's profile: it measures no layout shift.

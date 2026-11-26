@@ -43,10 +43,15 @@ func (w *World) BotAddr(role string, site int) (netip.Addr, bool) {
 	if !ok {
 		return netip.Addr{}, false
 	}
-	return hostIn(b.V4[0], 10+site), true
+	plan, ok := roleHost[role]
+	if !ok {
+		plan = hostPlan{10, 1}
+	}
+	return hostIn(b.V4[0], plan.first+plan.step*site), true
 }
 
-// Bot is the address a bot role ("crawler", "renderer", "monitor") sends from to the site with domain.
+// Bot is the address a bot role ("crawler", "renderer", "monitor", "ai-crawler", "ai-fetcher") sends from to the
+// site with domain.
 func (w *World) Bot(role, domain string) (netip.Addr, bool) {
 	s, ok := w.Site(domain)
 	if !ok {
@@ -102,6 +107,40 @@ func (w *World) bots(p *dayPlan, s *Site, d int64) {
 		for t := d0.Add(off); t.Before(d0.Add(day)); t = t.Add(every) {
 			p.records[s.idx] = append(p.records[s.idx], record{t: t, ip: addr, ua: b.UA, method: method, path: path,
 				status: 200, dur: 3, bytes: 0})
+		}
+	}
+	// The AI vendor's two agents, from one range: its crawler reads pages on a slower beat; its fetcher gets a page or
+	// two whenever a user's question needs one, naming its key directory. Once a day at least, whatever the scale: the
+	// baseline expects both. Streams of their own: the draws above stay what they were.
+	if b, ok := w.Ref.role("ai-crawler"); ok && s.Feed && s.Kind != "api" && w.Scale > 0 {
+		addr, _ := w.BotAddr("ai-crawler", s.idx)
+		r := newRng(w.Seed, 12, int64(s.idx), d)
+		n := max(r.poisson(12*w.Scale), 1)
+		for k := range n {
+			at := d0.Add(time.Duration((float64(k) + 0.5 + 0.3*(r.Float64()-0.5)) * float64(day) / float64(n)))
+			path := s.paths.page(r)
+			if k == 0 {
+				path = "/robots.txt"
+			}
+			p.records[s.idx] = append(p.records[s.idx], record{t: at, ip: addr, ua: b.UA, method: "GET", path: path,
+				status: 200, dur: int64(8 + r.IntN(40)), bytes: 4200})
+		}
+	}
+	if b, ok := w.Ref.role("ai-fetcher"); ok && s.Feed && s.Kind != "api" && w.Scale > 0 {
+		addr, _ := w.BotAddr("ai-fetcher", s.idx)
+		r := newRng(w.Seed, 13, int64(s.idx), d)
+		// The key directory is the world's vendor's: a real service never claims it.
+		sig := ""
+		if b.own {
+			sig = AISigAgent
+		}
+		for range max(r.poisson(5*w.Scale), 1) {
+			at := d0.Add(time.Duration(r.Int64N(int64(day - time.Minute))))
+			for k := range 1 + r.IntN(2) {
+				p.records[s.idx] = append(p.records[s.idx], record{t: at.Add(time.Duration(k) * 700 * time.Millisecond),
+					ip: addr, ua: b.UA, method: "GET", path: s.paths.page(r), status: 200, dur: int64(6 + r.IntN(30)),
+					bytes: 4200, sigAgent: sig})
+			}
 		}
 	}
 }
@@ -161,7 +200,7 @@ func (w *World) automation(p *dayPlan, s *Site, d int64) {
 		}
 	}
 	// A flood outweighs the rest of the site's day: twice the prober's hour and the people's and bots' requests
-	// together (some 450 fixed and 650 per unit of scale with the referrer wave, 800 and 700 allowed), so each
+	// together (some 450 fixed and 670 per unit of scale with the referrer wave, 800 and 700 allowed), so each
 	// address flood keeps over a quarter of the day's requests, a spike, with the other two floods and the prober
 	// beside it.
 	floodSize := int(math.Round(2 * (1800 + 800 + 700*w.Scale)))

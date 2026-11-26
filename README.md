@@ -91,7 +91,7 @@ The simulator (`backend/internal/sim`) has a command line of its own, `go run ./
 
 - `scenarios` lists the scenarios, their windows and what the dashboard shows for each; `check` plays each on its
   own and checks exactly that. The watch's (`script-inject`) needs nine days of history: its learning window is a
-  week.
+  week. `slow-page` needs fourteen: its 7d is held against a whole prior week.
 - `backfill -data ./data [-wipe]` writes a history, `sites.json` and the world's reference data (`ref/`) into an
   empty or absent data directory, or one it wrote before (marked by `sim.json`; a second history is refused,
   `-wipe` empties the directory first). Anything else is refused untouched, and so is every run with `PUBLIC_FQDN`
