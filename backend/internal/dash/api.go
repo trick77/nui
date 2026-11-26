@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/trick77/trakk/backend/internal/agg"
@@ -205,17 +206,36 @@ var apiTileDefs = []tileDef{
 		}},
 }
 
-// scanDurations adds a raw piece's durations per key to into: a list whose rows carry percentiles.
+// scanDurations adds a raw piece's samples per key to into: a list whose rows carry percentiles. A sample is its
+// dur_ms, or sc.sample's values as sc.units takes them; one it does not take is left out.
 func (s *Server) scanDurations(ctx context.Context, q *query, sc scan, from, to time.Time, into *listSums) error {
+	sample, units := []string{"dur_ms"}, durUnits
+	if sc.units != nil {
+		sample, units = sc.sample, sc.units
+	}
+	cols := strings.Join(sample, ", ")
 	args := append([]any{q.site.ID, ms(from), ms(to)}, sc.args...)
-	return s.each(ctx, `SELECT `+sc.key+`, dur_ms, COUNT(*) FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND `+
-		sc.where+` AND `+audWhere(q.aud)+sc.extra+` GROUP BY `+sc.key+`, dur_ms`, args, func(rows *sql.Rows) error {
+	return s.each(ctx, `SELECT `+sc.key+`, `+cols+`, COUNT(*) FROM event WHERE site_id = ? AND ts >= ? AND ts < ? AND `+
+		sc.where+` AND `+audWhere(q.aud)+sc.extra+` GROUP BY `+sc.key+`, `+cols, args, func(rows *sql.Rows) error {
 		var key string
-		var dur, n int64
-		if err := rows.Scan(&key, &dur, &n); err != nil {
+		var n int64
+		vals := make([]any, len(sample))
+		dest := []any{&key}
+		for i := range vals {
+			dest = append(dest, &vals[i])
+		}
+		if err := rows.Scan(append(dest, &n)...); err != nil {
 			return err
 		}
-		into.get(key).durations.Add(dur, n)
+		if u, ok := units(vals); ok {
+			into.get(key).durations.Add(u, n)
+		}
 		return nil
 	})
+}
+
+// durUnits takes a call's dur_ms as it is.
+func durUnits(vals []any) (int64, bool) {
+	d, ok := vals[0].(int64)
+	return d, ok
 }

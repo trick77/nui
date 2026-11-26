@@ -25,7 +25,7 @@ var (
 	audiences = []string{"all", "humans", "bots"}
 	compares  = []string{"prev", "yoy", "off"}
 	listDims  = []string{"pages", "entry", "events", "outbound", "referrers", "networks", "countries", "probed",
-		"refused", "errors", "endpoints", "accounts", "failures", "agents", "services"}
+		"refused", "errors", "endpoints", "accounts", "failures", "agents", "services", "experience"}
 	visitorSorts = []string{"requests", "refused", "events", "views"}
 )
 
@@ -167,12 +167,18 @@ func uiRequests(site, rng, tz, cmp string, get func(endpoint string, params map[
 		for _, ep := range []string{"noteworthy", "classes", "status", "clients", "domain", "log"} {
 			reqs = append(reqs, []string{ep})
 		}
-		// The script hosts card asks in the whole audience only (api.ts).
+		// The script hosts card asks in the whole audience only (api.ts); what people experienced ignores the audience.
 		if aud == "all" {
-			reqs = append(reqs, []string{"watch"})
+			reqs = append(reqs, []string{"watch"}, []string{"experience"})
 		}
 		for _, dim := range listDims {
+			if dim == "experience" && aud != "all" {
+				continue
+			}
 			for _, sort := range []string{"volume", "change"} {
+				if dim == "experience" && sort == "change" { // pages by views only
+					continue
+				}
 				reqs = append(reqs, []string{"list", "dim", dim, "sort", sort, "limit", "6"},
 					[]string{"list", "dim", dim, "sort", sort, "limit", "500"})
 			}

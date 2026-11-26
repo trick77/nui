@@ -37,6 +37,10 @@ type dimSpec struct {
 	need int64
 	// durations: rows carry percentiles. failedB: b counts the failed calls.
 	durations, failedB bool
+	// sample and units are a percentile's raw values and what turns them into the histogram's (nil: dur_ms as it
+	// is). With units the rows are their samples alone: no sums are read raw.
+	sample []string
+	units  func(vals []any) (int64, bool)
 	// name turns the SQL key into the row's, where that is the server's to say: rows of one name are one.
 	name func(string) string
 	// value and second pick the row's figures from the sums and the distinct count.
@@ -243,9 +247,11 @@ func (s *Server) scanDim(ctx context.Context, q *query, sc scan, w window, short
 		for _, pc := range pieces(part.lo, part.hi) {
 			add := newSums()
 			raw := func() error {
-				if err := s.scanPiece(ctx, stmt, append([]any{q.site.ID, ms(pc[0]), ms(pc[1])}, sc.args...), sc.name, add); err != nil ||
-					!sc.durations {
-					return err
+				if sc.units == nil {
+					if err := s.scanPiece(ctx, stmt, append([]any{q.site.ID, ms(pc[0]), ms(pc[1])}, sc.args...), sc.name,
+						add); err != nil || !sc.durations {
+						return err
+					}
 				}
 				return s.scanDurations(ctx, q, sc, pc[0], pc[1], add)
 			}
@@ -476,6 +482,10 @@ const maxLimit = 500
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request, q *query) {
 	v := r.URL.Query()
 	dim := v.Get("dim")
+	if dim == "experience" { // a row of several lists' figures
+		s.handleExperienceList(w, r, q)
+		return
+	}
 	d, ok := dims[dim]
 	if !ok {
 		apix.Error(w, http.StatusBadRequest, "unknown dim")
@@ -719,9 +729,7 @@ func (s *Server) cheapLabels(dim string, rows []listRow) {
 		}
 	case "pages", "entry":
 		for i := range rows {
-			if l, err := url.PathUnescape(rows[i].Key); err == nil {
-				rows[i].Label = strings.ToValidUTF8(l, "�")
-			}
+			rows[i].Label = pageLabel(rows[i].Key)
 		}
 	case "services":
 		// A name today's list no longer knows keeps none of it.
@@ -737,6 +745,14 @@ func (s *Server) cheapLabels(dim string, rows []listRow) {
 			}
 		}
 	}
+}
+
+// pageLabel is a page or template as shown: decoded, the key itself when it does not decode.
+func pageLabel(key string) string {
+	if l, err := url.PathUnescape(key); err == nil {
+		return strings.ToValidUTF8(l, "�")
+	}
+	return key
 }
 
 // bots is the current bot list, nil without one.

@@ -60,7 +60,9 @@ func TestExport(t *testing.T) {
 	}
 	for _, k := range []string{"sites", "overview?aud=bots&cmp=yoy&range=24h&site=lens.example.com",
 		"visitor?aud=all&cmp=prev&key=203.0.113.5&range=24h&site=lens.example.com",
-		"watch?aud=all&cmp=prev&range=24h&site=console.example.com"} {
+		"watch?aud=all&cmp=prev&range=24h&site=console.example.com",
+		"experience?aud=all&cmp=prev&range=24h&site=console.example.com",
+		"list?aud=all&cmp=prev&dim=experience&limit=6&range=24h&site=lens.example.com&sort=volume"} {
 		if e, ok := idx.Responses[k]; !ok || e.Status != http.StatusOK {
 			t.Errorf("%s: %+v", k, e)
 		}
@@ -68,6 +70,10 @@ func TestExport(t *testing.T) {
 	// A site without a feed answers the server-only panels 404, as the server does.
 	if e := idx.Responses["classes?aud=all&cmp=prev&range=24h&site=console.example.com"]; e.Status != http.StatusNotFound {
 		t.Errorf("classes without a feed: %+v", e)
+	}
+	// An API has no pages to experience.
+	if e := idx.Responses["experience?aud=all&cmp=prev&range=24h&site=api.example.com"]; e.Status != http.StatusNotFound {
+		t.Errorf("experience of an API: %+v", e)
 	}
 	for k, e := range idx.Responses {
 		a, err := os.ReadFile(filepath.Join(dirs[0], e.File))

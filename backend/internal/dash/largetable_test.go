@@ -74,7 +74,7 @@ func TestReadsBesideWriter(t *testing.T) {
 	for _, rng := range []string{"24h", "30d"} {
 		for _, c := range [][]string{{"overview"}, {"noteworthy"}, {"classes"}, {"status"}, {"clients"}, {"visitors"},
 			{"visitor", "key", "192.0.2.200"}, {"log"}, {"domain"}, {"error", "key", "Script error."},
-			{"list", "dim", "pages"}, {"list", "dim", "services"}} {
+			{"list", "dim", "pages"}, {"list", "dim", "services"}, {"experience"}, {"list", "dim", "experience"}} {
 			code, body := r.getFrom(t, SourceAuto, c[0], p(feedSite, append([]string{"range", rng}, c[1:]...)...))
 			if code != 200 {
 				t.Errorf("%s %v: %d %v", rng, c, code, body)
@@ -160,7 +160,8 @@ func TestLargeTable(t *testing.T) {
 	for dim := range dims {
 		calls = append(calls, call{"list", long("dim", dim)})
 	}
-	calls = append(calls, call{"list", long("dim", "pages", "within", "/:text")})
+	calls = append(calls, call{"list", long("dim", "pages", "within", "/:text")}, call{"experience", long()},
+		call{"experience", long("cmp", "yoy")}, call{"list", long("dim", "experience")})
 	// 7d reads raw where 12mo reads the aggregates (the latest-client split, the hours, a list, the table), the
 	// same under every source: asked once, raw.
 	week := func(kv ...string) map[string]string { return p(feedSite, append([]string{"range", "7d"}, kv...)...) }
@@ -203,7 +204,8 @@ func TestLargeTable(t *testing.T) {
 			}
 			d := time.Since(start)
 			took += d
-			t.Logf("%s %s %s %s: %v", srcName[src], c.ep, c.params["dim"], c.params["aud"], d.Round(time.Millisecond))
+			t.Logf("%s %s %s %s: %v, %d statements", srcName[src], c.ep, c.params["dim"], c.params["aud"],
+				d.Round(time.Millisecond), count.Load()-before)
 		}
 		t.Logf("%s: every call in %v", srcName[src], took.Round(time.Millisecond))
 		stop()

@@ -125,6 +125,7 @@ func TestSourcesAgree(t *testing.T) {
 				}
 			})
 			t.Logf("%d requests, %d asked from both sources", total, len(asked))
+			experienced(t, asked)
 			// Three entries a day per list part: the same store, rebuilt.
 			for _, tbl := range []string{"agg_day", "agg_hour", "agg_list", "agg_addr"} {
 				if _, err := st.DB.ExecContext(t.Context(), `DELETE FROM `+tbl); err != nil { //nolint:gosec // fixed names
@@ -372,7 +373,7 @@ func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard)
 	num := func(v any) float64 { f, _ := v.(float64); return f }
 	rngs, cmps := []string{"30d", "90d", "12mo"}, []string{"prev", "yoy"}
 	today := w.Anchor.UnixMilli() / 86_400_000
-	anyCut, listed := false, map[string]bool{}
+	anyCut, anyNull, listed := false, false, map[string]bool{}
 	for _, s := range w.Sites {
 		for _, rng := range rngs {
 			for _, c := range cmps {
@@ -385,7 +386,8 @@ func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard)
 				collapsed := cutKeys(t, st, ids[s.Domain].ID, spans)
 				anyCut = anyCut || len(collapsed["pages"]) > 0
 				for _, dim := range listDims {
-					if dim == "refused" { // per address, from agg_addr: never cut
+					// refused is per address, from agg_addr: never cut. experience compares nothing: asked once.
+					if dim == "refused" || dim == "experience" && c != "prev" {
 						continue
 					}
 					params := map[string]string{"site": s.Domain, "range": rng, "cmp": c, "tz": "UTC", "dim": dim,
@@ -394,6 +396,10 @@ func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard)
 					rb, gb := answer(t, raw, "list", params), answer(t, aggs, "list", params)
 					rawRows, gotRows := byKey(rb), byKey(gb)
 					listed[dim] = listed[dim] || len(rawRows) > 0
+					if dim == "experience" {
+						anyNull = topThreeExperience(t, where, rawRows, gotRows, collapsed) || anyNull
+						continue
+					}
 					dfield, cfield := distinctField(dim), "second" // the distinct figure, the counted one
 					if dfield == "second" {
 						cfield = "value"
@@ -459,6 +465,76 @@ func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard)
 	if !listed["services"] {
 		t.Error("no known bot by service in the history")
 	}
+	if !anyNull {
+		t.Error("no experience figure left out for a page in Other")
+	}
+}
+
+// experienced checks the answers agreed on what people experienced with samples, over aggregated ranges: every vital
+// measured, a visit's engaged time, a page with its figures.
+func experienced(t *testing.T, asked map[string]map[string]any) {
+	t.Helper()
+	var sampled [len(agg.Vitals)]bool
+	engaged, pages := false, false
+	for key, body := range asked {
+		if strings.Contains(key, "range=24h") || strings.Contains(key, "range=7d") {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(key, "experience?"):
+			engaged = engaged || body["engaged_ms"] != nil
+			for i, v := range body["vitals"].([]any) {
+				if n, _ := v.(map[string]any)["n"].(float64); n > 0 {
+					sampled[i] = true
+				}
+			}
+		case strings.HasPrefix(key, "list?") && strings.Contains(key, "dim=experience"):
+			for _, row := range rows(body) {
+				pages = pages || row["engaged"] != nil && row["lcp"] != nil && row["inp"] != nil && row["cls"] != nil
+			}
+		}
+	}
+	if sampled != [len(agg.Vitals)]bool{true, true, true, true, true} || !engaged || !pages {
+		t.Errorf("experience without samples: vitals %v, engaged %v, a page's figures %v", sampled, engaged, pages)
+	}
+}
+
+// expCells are the experience list's figures by the dimension whose Other may hold part of them.
+var expCells = map[string]string{"engaged": "engaged", "lcp": "vital_lcp", "loads": "vital_lcp", "inp": "vital_inp",
+	"cls": "vital_cls"}
+
+// topThreeExperience checks the experience list over aggregates kept to three entries a day: every row is raw's key,
+// a figure either raw's or null where its dimension cut the page, never partial; a page none cut is raw's row and is
+// listed. It reports whether a figure was left out.
+func topThreeExperience(t *testing.T, where string, raw, got map[string]map[string]any,
+	collapsed map[string]map[uint64]bool) (anyNull bool) {
+	t.Helper()
+	cutIn := func(k, dim string) bool { return collapsed[dim][agg.Hash(k)] }
+	for k, r := range raw {
+		if _, ok := got[k]; !ok && !cutIn(k, "engaged") && !cutIn(k, "vital_lcp") && !cutIn(k, "vital_inp") &&
+			!cutIn(k, "vital_cls") {
+			t.Errorf("%s: %s, never cut, missing from the aggregates: raw %v", where, k, r)
+		}
+	}
+	for k, g := range got {
+		r, ok := raw[k]
+		if !ok {
+			t.Errorf("%s: %s is no raw key", where, k)
+			continue
+		}
+		if !cutIn(k, "engaged") && g["views"] != r["views"] {
+			t.Errorf("%s %s, never cut: views %v, raw %v", where, k, g["views"], r["views"])
+		}
+		for field, dim := range expCells {
+			switch {
+			case g[field] == nil && cutIn(k, dim):
+				anyNull = true
+			case fmt.Sprint(g[field]) != fmt.Sprint(r[field]):
+				t.Errorf("%s %s: %s %v, raw %v", where, k, field, g[field], r[field])
+			}
+		}
+	}
+	return anyNull
 }
 
 func isNew(change any) bool {
