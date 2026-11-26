@@ -1797,27 +1797,32 @@ func (s *Server) actorDays(ctx context.Context, q *query, key string, parts []ac
 	return out, nil
 }
 
-// hours is the actor's activity per hour of the viewer's day over [from, to), as levels 0-4: index only, one
-// statement.
+// hours is the actor's activity per hour of the viewer's day over [from, to), as levels 0-4: index only, a
+// statement per window as the actions beside it (a flood's address over months held the WAL in one).
 func (s *Server) hours(ctx context.Context, q *query, key string, from, to time.Time) ([]int, error) {
+	counts := make([]int64, 24)
 	// By the quarter hour: a zone's offset is a multiple of it, so a quarter lies in one local hour (an hour of UTC
 	// spans two in India's).
-	rows, err := s.query(ctx, `SELECT ts / 900000, COUNT(*) FROM event
-		WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ? GROUP BY 1`, q.site.ID, key, ms(from), ms(to))
-	if err != nil {
-		return nil, err
+	window := func(win [2]int64) error {
+		rows, err := s.query(ctx, `SELECT ts / 900000, COUNT(*) FROM event
+			WHERE site_id = ? AND ip_key = ? AND ts >= ? AND ts < ? GROUP BY 1`, q.site.ID, key, win[0], win[1])
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var quarter, n int64
+			if err := rows.Scan(&quarter, &n); err != nil {
+				return err
+			}
+			counts[time.Unix(quarter*900, 0).In(q.loc).Hour()] += n
+		}
+		return rows.Err()
 	}
-	defer func() { _ = rows.Close() }()
-	counts := make([]int64, 24)
-	for rows.Next() {
-		var quarter, n int64
-		if err := rows.Scan(&quarter, &n); err != nil {
+	for _, win := range windows(ms(from), ms(to), actorSpan) {
+		if err := window(win); err != nil {
 			return nil, err
 		}
-		counts[time.Unix(quarter*900, 0).In(q.loc).Hour()] += n
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	top := slices.Max(counts)
 	levels := make([]int, 24)
