@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/trick77/trakk/backend/internal/apix"
 )
@@ -61,10 +62,17 @@ func Client(ua string) string {
 		}
 		return m[1]
 	}
-	if len(ua) > 40 {
-		return ua[:40]
+	// At most 40 bytes, whole runes only: half a rune is invalid UTF-8, which JSON turns into U+FFFD. A stray byte
+	// decodes one byte wide, so the cut drops at most the rune that crosses 40, valid or not.
+	n := 0
+	for n < len(ua) {
+		_, w := utf8.DecodeRuneInString(ua[n:])
+		if n+w > 40 {
+			break
+		}
+		n += w
 	}
-	return ua
+	return ua[:n]
 }
 
 // ParseUA reads browser, operating system and device class from a user agent, coarse on purpose.

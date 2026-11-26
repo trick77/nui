@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/trick77/trakk/backend/internal/refdata"
 	"github.com/trick77/trakk/backend/internal/sites"
@@ -1217,15 +1218,24 @@ func TestClientAndUA(t *testing.T) {
 		"Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)": "Googlebot/2.1",
 		"(weird)":                     "(weird)",
 		"!" + strings.Repeat("x", 60): "!" + strings.Repeat("x", 39),
-		"UptimeRobot":                 "UptimeRobot",
-		petalUA:                       "PetalBot",
+		// The cut keeps whole runes: 14 × 中 is 42 bytes, half a rune is invalid UTF-8.
+		strings.Repeat("中", 14): strings.Repeat("中", 13),
+		// Invalid input: no worse than a byte cut, never empty, a valid prefix kept whole.
+		strings.Repeat("\x80", 50):                                strings.Repeat("\x80", 40),
+		strings.Repeat("中", 13) + "x" + strings.Repeat("\x80", 5): strings.Repeat("中", 13) + "x",
+		"UptimeRobot": "UptimeRobot",
+		petalUA:       "PetalBot",
 		"Mozilla/5.0 (compatible; Foo-Preview/1.0; +https://foo.example/info)":   "Foo-Preview/1.0",
 		"Mozilla/5.0 (compatible; Barkrowler/0.9; +https://babbar.tech/crawler)": "Barkrowler/0.9",
 		// A phone named CUBOT is a browser, not a bot.
 		"Mozilla/5.0 (Linux; Android 9; CUBOT X19) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36": "Chrome" + ensp + "·" + ensp + "Android",
 	} {
-		if got := Client(ua); got != want {
+		got := Client(ua)
+		if got != want {
 			t.Errorf("Client(%q) = %q, want %q", ua, got, want)
+		}
+		if len(got) > 40 || utf8.ValidString(ua) && !utf8.ValidString(got) {
+			t.Errorf("Client(%q) = %q: over 40 bytes or invalid UTF-8", ua, got)
 		}
 	}
 	for ua, want := range map[string]string{
