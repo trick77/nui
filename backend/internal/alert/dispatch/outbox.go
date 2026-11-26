@@ -224,12 +224,14 @@ func (e *Engine) render(items []*store.Alert) (title, body string, sev alert.Sev
 	}
 	var b strings.Builder
 	sites := map[int64]bool{}
+	for _, a := range items { // those past maxLines too: the link is to all of them
+		sites[a.SiteID] = true
+	}
 	for i, a := range items {
 		if i == maxLines {
 			fmt.Fprintf(&b, "\nand %d more\n", len(items)-maxLines)
 			break
 		}
-		sites[a.SiteID] = true
 		if i > 0 {
 			b.WriteByte('\n')
 		}
