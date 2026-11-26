@@ -16,6 +16,7 @@ import (
 
 	"github.com/trick77/trakk/backend/internal/alert"
 	"github.com/trick77/trakk/backend/internal/app"
+	"github.com/trick77/trakk/backend/internal/plancheck"
 )
 
 // purgeDays fills a site with n events on each of the days from first to last and builds each day clean by builder
@@ -722,6 +723,105 @@ func TestPruneAge_KeepsFigures(t *testing.T) {
 		if n := countRows(t, st, q, young); n == 0 {
 			t.Errorf("%s: the young day's rows went", q)
 		}
+	}
+}
+
+// Age retention takes the actor classes and the model usage of every site, an inactive one too, a chunk per
+// statement on the site's index: never one write over the whole table.
+func TestPruneAge_ClassesAndUsage(t *testing.T) {
+	st := open(t)
+	sites, err := st.SyncSites(t.Context(), []Site{{Domain: "a.example.com", Kind: "site", PathRules: "[]"},
+		{Domain: "b.example.com", Kind: "site", PathRules: "[]"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SyncSites(t.Context(), []Site{{Domain: "a.example.com", Kind: "site", PathRules: "[]"}}); err != nil {
+		t.Fatal(err)
+	}
+	today := time.Now().UnixMilli() / dayMS
+	young := today - 30
+	tx, err := st.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range sites {
+		// Two old days of 1300 keys: more than a chunk per site.
+		for _, d := range []int64{today - 800, today - 799, young} {
+			n := 1300
+			if d == young {
+				n = 5
+			}
+			for i := range n {
+				if _, err := tx.Exec(`INSERT INTO actor_class (site_id, ip_key, day, class, updated_at) VALUES (?, ?, ?, 'bot', 1)`,
+					s.ID, fmt.Sprintf("10.%d.%d.0/24", i/256, i%256), d); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		for _, d := range []int64{today - 800, today - 400, today - 36, young} {
+			if _, err := tx.Exec(`INSERT INTO llm_usage (site_id, day, calls) VALUES (?, ?, 1)`, s.ID, d); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var n int64
+	stmts := traced(t, st, func() {
+		if n, err = st.PruneAge(t.Context(), time.UnixMilli((today-35)*dayMS)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if n != 2*(2600+3) {
+		t.Errorf("pruned %d, want %d", n, 2*(2600+3))
+	}
+	for _, s := range sites {
+		if c := countRows(t, st, `SELECT COUNT(*) FROM actor_class WHERE site_id = ? AND day < ?`, s.ID, young); c != 0 {
+			t.Errorf("%s: %d old actor classes left", s.Domain, c)
+		}
+		if c := countRows(t, st, `SELECT COUNT(*) FROM actor_class WHERE site_id = ? AND day = ?`, s.ID, young); c != 5 {
+			t.Errorf("%s: %d young actor classes, want 5", s.Domain, c)
+		}
+		if c := countRows(t, st, `SELECT COUNT(*) FROM llm_usage WHERE site_id = ? AND day < ?`, s.ID, young); c != 0 {
+			t.Errorf("%s: %d old usage days left", s.Domain, c)
+		}
+		if c := countRows(t, st, `SELECT COUNT(*) FROM llm_usage WHERE site_id = ? AND day = ?`, s.ID, young); c != 1 {
+			t.Errorf("%s: %d young usage days, want 1", s.Domain, c)
+		}
+	}
+	// Each delete searches the site's key: the classes by actor_class_day, two chunks a site.
+	deletes := map[string]int{}
+	for _, q := range stmts {
+		norm := strings.Join(strings.Fields(q), " ")
+		tbl := ""
+		for _, name := range []string{"actor_class", "llm_usage"} {
+			if strings.HasPrefix(norm, "DELETE FROM "+name+" ") {
+				tbl = name
+			}
+		}
+		if tbl == "" {
+			continue
+		}
+		deletes[tbl]++
+		plan, err := plancheck.Explain(t.Context(), st.DB, q)
+		if err != nil {
+			t.Fatalf("explain %s: %v", norm, err)
+		}
+		index := false
+		for _, d := range plan {
+			if strings.HasPrefix(d, "SCAN ") {
+				t.Errorf("%s: %s\nplan: %v", d, norm, plan)
+			}
+			index = index || strings.HasPrefix(d, "SEARCH "+tbl+" USING ") && strings.Contains(d, "(site_id=? AND day<?)") &&
+				(tbl != "actor_class" || strings.Contains(d, "INDEX actor_class_day"))
+		}
+		if !index {
+			t.Errorf("no index range on the site's old days: %s\nplan: %v", norm, plan)
+		}
+	}
+	if deletes["actor_class"] != 4 || deletes["llm_usage"] != 2 {
+		t.Errorf("deletes %v, want 4 actor_class (2 chunks a site), 2 llm_usage", deletes)
 	}
 }
 

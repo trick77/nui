@@ -76,6 +76,15 @@ func AgeFloor(now time.Time, months int) int64 {
 const delHostsBefore = `DELETE FROM script_host WHERE site_id = ?1 AND host IN
 	(SELECT host FROM script_host WHERE site_id = ?1 AND last_seen < ?2 LIMIT ?3)`
 
+// delClassesBefore deletes a chunk of a site's actor classes older than a day (?1 site, ?2 day, ?3 chunk):
+// actor_class_day finds them, a day holds hundreds of thousands of address keys on a busy site.
+const delClassesBefore = `DELETE FROM actor_class WHERE site_id = ?1 AND (ip_key, day) IN
+	(SELECT ip_key, day FROM actor_class WHERE site_id = ?1 AND day < ?2 LIMIT ?3)`
+
+// delUsageBefore deletes a chunk of a site's model usage older than a day (?1 site, ?2 day, ?3 chunk).
+const delUsageBefore = `DELETE FROM llm_usage WHERE site_id = ?1 AND day IN
+	(SELECT day FROM llm_usage WHERE site_id = ?1 AND day < ?2 LIMIT ?3)`
+
 // PruneAge deletes what is older than before (BACKEND_RETENTION_MONTHS): events, and the per-address aggregates with
 // the actor classes and the model's usage (they name addresses as the events do), and the watch state idle since.
 // The other aggregates and the collector counters stay; the size cap never cuts the watch state (it is bounded per
@@ -84,7 +93,8 @@ const delHostsBefore = `DELETE FROM script_host WHERE site_id = ?1 AND host IN
 func (s *Store) PruneAge(ctx context.Context, before time.Time) (int64, error) {
 	cut := before.UnixMilli() / dayMS * dayMS
 	var total int64
-	// Per site: event_site_ts finds the old rows; ts alone has no index and would scan the table.
+	// Per site, inactive ones too (sites are never deleted): event_site_ts finds the old rows, the other tables'
+	// site-led keys theirs; ts or day alone has no index and would scan the table in one long write.
 	sites, err := s.Sites(ctx)
 	if err != nil {
 		return 0, err
@@ -98,7 +108,8 @@ func (s *Store) PruneAge(ctx context.Context, before time.Time) (int64, error) {
 		for _, del := range []struct {
 			q   string
 			cut int64
-		}{{delAggAddrBefore, cut / dayMS}, {delHostsBefore, cut}} {
+		}{{delAggAddrBefore, cut / dayMS}, {delClassesBefore, cut / dayMS}, {delUsageBefore, cut / dayMS},
+			{delHostsBefore, cut}} {
 			for {
 				n, err := s.execRows(ctx, del.q, st.ID, del.cut, retentionChunk)
 				total += n
@@ -112,11 +123,6 @@ func (s *Store) PruneAge(ctx context.Context, before time.Time) (int64, error) {
 					return total, ctx.Err()
 				}
 			}
-		}
-	}
-	for _, q := range []string{`DELETE FROM actor_class WHERE day < ?`, `DELETE FROM llm_usage WHERE day < ?`} {
-		if _, err := s.DB.ExecContext(ctx, q, cut/dayMS); err != nil {
-			return total, err
 		}
 	}
 	// Findings only: a host row's first_seen is the host's merged first sight, a long-known host's open-day row stays
