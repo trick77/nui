@@ -167,7 +167,6 @@ type tile struct {
 	Prev    *float64 `json:"prev"`
 	Change  change   `json:"change"`
 	Verdict string   `json:"verdict"`
-	Sub     string   `json:"sub"`
 	// Series is the figure of each slot, Mean its moving mean; PrevMean the comparison's, Delta the one against the
 	// other.
 	Series   []float64 `json:"series"`

@@ -345,7 +345,7 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 	}
 	// feed: the site has a server feed configured, so a null server source is one that has not delivered yet.
 	sources := map[string]any{"browser": source(browser, s.now()), "server": nil, "feed": q.site.HasFeed,
-		"script": "/trakk.js", "build": version.String(), "first": nil}
+		"script": "/trakk.js", "build": version.String()}
 	if q.site.HasFeed {
 		sources["server"] = source(server, s.now())
 	}
@@ -355,7 +355,6 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 	}
 	if figures > 0 {
 		figuresSince = iso(time.UnixMilli(figures))
-		sources["first"] = figuresSince
 	}
 	// Raw events are kept the raw days, at most the months (age retention takes raw too); until the purge's first
 	// start is recorded (or while it cannot be read: retention warns) nothing is purged, raw is kept the months.
