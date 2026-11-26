@@ -22,7 +22,10 @@ export default function App() {
   useEffect(() => {
     const ctl = new AbortController();
     api.me(ctl.signal).then(
-      (me) => setAuth({ state: "in", me }),
+      (me) => {
+        setLost(false);
+        setAuth({ state: "in", me });
+      },
       (e: Error) => {
         if (ctl.signal.aborted) return;
         setLost(round > 0 && e instanceof ApiError && e.status === 401);

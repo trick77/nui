@@ -1265,6 +1265,17 @@ describe("capture", () => {
     document.body.innerHTML = "";
   });
 
+  it("counts a middle click on a link, not a right click", async () => {
+    const t = boot();
+    document.body.innerHTML = '<a id="out" href="https://example.org/">x</a>';
+    const out = document.getElementById("out")!;
+    for (const button of [2, 1])
+      out.dispatchEvent(new MouseEvent("auxclick", { bubbles: true, button }));
+    const ev = await flushed(t);
+    expect(ev.filter((e) => e.k === "outbound_click")).toHaveLength(1);
+    document.body.innerHTML = "";
+  });
+
   it("records forms and search terms", async () => {
     const t = boot();
     document.body.innerHTML =

@@ -83,8 +83,9 @@ Custom events, for actions the defaults miss (a signup, a plan chosen):
 window.trakk.event("signup", { plan: "pro" });
 ```
 
-The name is clipped to 128 bytes; props follow the README's limits for `p` (64 keys, 50 array items, 8 levels,
-4 KiB). Never put personal data in a name or props. Calls before the script has loaded need a stub, replayed on
+The name is clipped to 128 bytes. Props are flat: the first 32 keys (64 bytes each), a string clipped to 512 bytes
+(2048 under `url`, `ref`, `src` and `href`), an object or array kept as its JSON in such a string. Props over 4 KiB
+are dropped whole (`{"dropped": true}`). Never put personal data in a name or props. Calls before the script has loaded need a stub, replayed on
 load (the first 50):
 
 ```html

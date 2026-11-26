@@ -572,10 +572,6 @@ table.t tbody tr.click:hover,
 table.t tbody tr.sel {
   background: var(--color-active);
 }
-table.t th button {
-  all: unset;
-  cursor: pointer;
-}
 
 .pill {
   display: inline-flex;

@@ -372,23 +372,6 @@ export function Empty({ children }: { children: ReactNode }) {
   return <p className="m-0 py-3 text-[13px] text-muted">{children}</p>;
 }
 
-// Loading, failure, nothing, or the content: the four states of a panel.
-export function Loadable<T>({
-  data,
-  error,
-  h,
-  children,
-}: {
-  data: T | null;
-  error: Error | null;
-  h: number;
-  children: (d: T) => ReactNode;
-}) {
-  if (error) return <ErrorBox error={error} />;
-  if (!data) return <Skeleton h={h} />;
-  return <>{children(data)}</>;
-}
-
 // A tooltip that follows the pointer: fixed, flipped to
 // the left near the window's right edge.
 export type TipData = {
