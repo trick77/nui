@@ -657,3 +657,36 @@ func TestBaselineWaitsForHeld(t *testing.T) {
 		t.Fatalf("messages %+v", msgs)
 	}
 }
+
+// A new level rule with too few days to compare: each pass a baseline, its quiet note shown all the same, never
+// sent; the rule gone, the note leaves with it.
+func TestQuietNoteShown(t *testing.T) {
+	file := `{` + ops + `, "rules": [{"name": "lvl", "on": "level.requests", "window": "1h", "factor": 3}]}`
+	r := newRig(t, file)
+	r.src.occ["lvl"] = []alert.Occurrence{{Hold: true, Wait: true},
+		{Key: noComparison, Quiet: true, Text: "Requests: no comparison, fewer than 3 days with figures before"}}
+	r.step(0)
+	r.step(5 * time.Minute)
+	page, err := r.st.AlertPage(t.Context(), nil, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 1 || page[0].Key != noComparison || page[0].State != store.AlertOnce || page[0].Due != "" ||
+		page[0].LeftAt != nil {
+		t.Fatalf("alerts page %+v", page)
+	}
+	if msgs := r.rec.Messages(); len(msgs) != 0 {
+		t.Fatalf("a quiet note sent: %+v", msgs)
+	}
+	// Restarted without the rule: its note closes, in silence.
+	c := alert.Parse([]byte(`{`+ops+`, "rules": []}`), alert.Known{Domains: []string{"example.com"}})
+	r.e = New(Options{Store: r.st, Sites: r.e.o.Sites, Config: c, Senders: r.rec.Senders(c), Board: r.board,
+		Source: r.src, PublicFQDN: "trakk.example.com", Log: slog.New(slog.DiscardHandler)})
+	r.step(5 * time.Minute)
+	if in, _ := r.st.InSet(t.Context(), "lvl", r.site); len(in) != 0 {
+		t.Errorf("the rule gone, its note still in its set: %+v", in)
+	}
+	if msgs := r.rec.Messages(); len(msgs) != 0 {
+		t.Errorf("messages %+v", msgs)
+	}
+}
