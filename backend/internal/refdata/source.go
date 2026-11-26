@@ -46,7 +46,7 @@ type Options struct {
 	Client *http.Client
 	// URLs override the sources (tests); empty fields keep the defaults.
 	Crawlers, Monitoring, Networks, Countries string
-	// Every is the refresh interval, a day by default.
+	// Every is the age a cached source is fetched again at, a day by default; Run looks every Every/rechecks.
 	Every time.Duration
 	Log   *slog.Logger
 	// Report takes each refresh that fetched something (job.failed, refdata): a failed download or parse opens it,
@@ -146,21 +146,34 @@ func (d *Data) logRejected(what string, r Rejected) {
 	}
 }
 
-// Run refreshes every source once now when its cache is missing or stale, then every Options.Every, until ctx
-// ends. A failed refresh logs and keeps the last good data: the network never stops the service.
+// rechecks is how often within Options.Every Run looks again: every 15 minutes of a day.
+const rechecks = 96
+
+// Run refreshes every source whose cache is missing or older than Options.Every, now and at each recheck until ctx
+// ends. A failed refresh logs and keeps the last good data: the network never stops the service. It is tried again
+// at the next recheck, not an interval later: a download failing at a first start left a day's events without
+// network and country. Each further failure doubles the wait, up to the interval: a tarball that arrives and does
+// not parse is not pulled 96 times a day.
 func (d *Data) Run(ctx context.Context) {
+	wait := d.o.Every / rechecks
 	for {
-		d.Refresh(ctx)
-		if !run.Sleep(ctx, d.o.Every) {
+		if d.refresh(ctx) {
+			wait = d.o.Every / rechecks
+		}
+		if !run.Sleep(ctx, wait) {
 			return
 		}
+		wait = min(2*wait, d.o.Every)
 	}
 }
 
 // Refresh fetches the sources whose cache is older than Options.Every. Every download is parsed before it replaces
 // the cached copy: one that does not parse (an error page served with 200, a truncated file) is discarded, and the
 // last good copy stays on disk and in memory.
-func (d *Data) Refresh(ctx context.Context) {
+func (d *Data) Refresh(ctx context.Context) { d.refresh(ctx) }
+
+// refresh is Refresh, and whether nothing it tried failed.
+func (d *Data) refresh(ctx context.Context) (ok bool) {
 	tried := false
 	var errs []error
 	warn := func(what string, err error) {
@@ -168,6 +181,7 @@ func (d *Data) Refresh(ctx context.Context) {
 		d.warn(what, err)
 	}
 	defer func() {
+		ok = errors.Join(errs...) == nil
 		if tried && ctx.Err() == nil {
 			alert.Fail(d.o.Report, alert.JobRefdata, errors.Join(errs...))
 		}
@@ -193,6 +207,7 @@ func (d *Data) Refresh(ctx context.Context) {
 		}
 		warn(src.name, d.refreshOne(ctx, src.url, src.file, src.install))
 	}
+	return true
 }
 
 // refreshOne downloads one source, parses the download and only then moves it in place and installs it.
