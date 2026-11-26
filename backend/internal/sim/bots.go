@@ -124,7 +124,7 @@ func (w *World) automation(p *dayPlan, s *Site, d int64) {
 		}
 		for i := range n {
 			add(record{t: start.Add(time.Duration(i) * 800 * time.Millisecond), ip: WalkerAddr, ua: WalkerUA,
-				method: "GET", path: fmt.Sprintf("/api/v1/ip/10.0.%d.%d", i/250, i%250), route: "GET /api/v1/ip/{addr}",
+				method: "GET", path: fmt.Sprintf("/api/v1/ip/192.0.2.%d", i%256), route: "GET /api/v1/ip/{addr}",
 				status: 401, dur: 2, bytes: 31})
 		}
 	}
