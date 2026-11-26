@@ -569,6 +569,33 @@ func TestPass_FeedOnlyAndPageScraper(t *testing.T) {
 	}
 }
 
+// A feed batch without usable times is dated to its arrival: its calls share one millisecond, which says nothing of
+// their pace. The same calls a millisecond apart are a machine's.
+func TestPass_MachinePaceNeedsSpan(t *testing.T) {
+	r := newRig(t, true)
+	at := r.now.UnixMilli()
+	var evs []store.Event
+	for i := range machineRequests {
+		same := req("192.0.2.130", browserUA, "", fmt.Sprintf("/api/items/%d", i), 200, "")
+		same.Method, same.TS = "GET", at
+		spread := req("192.0.2.131", browserUA, "", fmt.Sprintf("/api/items/%d", i), 200, "")
+		spread.Method, spread.TS = "GET", at-int64(i)
+		evs = append(evs, same, spread)
+	}
+	r.insert(t, evs...)
+	if err := r.c.Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	classes, _ := r.st.ActorClasses(t.Context(), r.site.ID, at/dayMS)
+	if a := classes["192.0.2.130"]; slices.Contains(a.Reasons, reasonMachinePace) ||
+		slices.Contains(a.Reasons, "rapid requests") {
+		t.Errorf("one millisecond: %+v", a)
+	}
+	if a := classes["192.0.2.131"]; a.Class != "unknown" || len(a.Reasons) == 0 || a.Reasons[0] != reasonMachinePace {
+		t.Errorf("a millisecond apart: %+v", a)
+	}
+}
+
 // loomUA is an MCP client naming its repository: a contact URL, which marks automation in any other client.
 const loomUA = "loom/0.14.8 (+https://github.com/example/loom)"
 
