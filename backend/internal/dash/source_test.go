@@ -1333,6 +1333,33 @@ func TestSources_StitchRawGone(t *testing.T) {
 	}
 }
 
+// The detail sums a key over every audience: a bot's session crossing midnight from an aggregate day whose raw is
+// gone into a raw day is one visit with the people's audience too.
+func TestSources_StitchRawGoneAud(t *testing.T) {
+	r, insert := exactRig(t)
+	ev := func(ts int64, sid string, cls int) store.Event {
+		return store.Event{TS: ts, Source: "browser", Kind: "page_view", Visitor: "v1", SID: sid, IP: "192.0.2.63",
+			IPKey: "192.0.2.63", Template: "/", Cls: cls}
+	}
+	insert(ev(at("2026-11-17T23:50:00Z"), "s1", store.ClsBot), ev(at("2026-11-18T00:10:00Z"), "s1", store.ClsBot),
+		ev(at("2026-11-18T10:00:00Z"), "s2", store.ClsHuman))
+	r.build(t)
+	site, _ := r.s.Sites.Lookup(feedSite)
+	for _, q := range []string{`DELETE FROM event WHERE ts < ` + fmt.Sprint(at("2026-11-18T00:00:00Z")),
+		`UPDATE agg_day SET raw = 0 WHERE day = ` + fmt.Sprint(at("2026-11-17T00:00:00Z")/dayMS)} {
+		if _, err := r.s.DB.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, aud := range []string{"all", "humans"} {
+		q := &query{site: site, aud: aud, p: newPeriod("7d", "off", r.s.now(), time.UTC)}
+		a, err := r.server(SourceAuto).actorOne(t.Context(), q, "192.0.2.63")
+		if err != nil || a == nil || a.visits != 2 {
+			t.Errorf("%s: detail %+v %v; want 2 visits", aud, a, err)
+		}
+	}
+}
+
 // A session carried into an aggregate day from a day read from nowhere (its raw cut, never built) is a visit: the
 // table and the detail stitch only onto a day they counted.
 func TestSources_StitchAfterGap(t *testing.T) {
