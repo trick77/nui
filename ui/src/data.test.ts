@@ -31,6 +31,7 @@ import {
   storedAudience,
   storedRange,
   tabTitle,
+  type View,
   viewHref,
 } from "./state";
 
@@ -454,7 +455,7 @@ describe("state", () => {
         cmp: "off",
       }),
     ).toBe("/dashboard/?site=a.example.com&range=30d&aud=bots&cmp=off");
-    // The log keeps domain and range; audience and comparison drop.
+    // The log keeps domain, range, audience and comparison.
     expect(
       viewHref("/dashboard/", {
         ...v,
@@ -462,12 +463,13 @@ describe("state", () => {
         site: "a.example.com",
         range: "7d",
         aud: "bots",
+        cmp: "yoy",
         log: { addr: "2001:db8::/64", path: "/AS:n" },
       }),
     ).toBe(
-      "/dashboard/log?site=a.example.com&range=7d&addr=2001%3Adb8%3A%3A%2F64&path=%2FAS%3An",
+      "/dashboard/log?site=a.example.com&range=7d&aud=bots&cmp=yoy&addr=2001%3Adb8%3A%3A%2F64&path=%2FAS%3An",
     );
-    // The alerts keep domain and range, never a log filter.
+    // The alerts keep them too, never a log filter.
     const alerts = {
       ...v,
       page: "alerts" as const,
@@ -476,11 +478,36 @@ describe("state", () => {
       log: { addr: "192.0.2.1" },
     };
     expect(viewHref("/dashboard/", alerts)).toBe(
-      "/dashboard/alerts?site=a.example.com&range=30d",
+      "/dashboard/alerts?site=a.example.com&range=30d&aud=all",
     );
     expect(viewHref("/dashboard/", { ...alerts, all: true })).toBe(
-      "/dashboard/alerts?site=a.example.com&range=30d&all=1",
+      "/dashboard/alerts?site=a.example.com&range=30d&aud=all&all=1",
     );
+    // All sites is the alerts' own, the dashboard never writes it.
+    expect(
+      viewHref("/dashboard/", { ...alerts, page: "dash", all: true }),
+    ).toBe("/dashboard/?site=a.example.com&range=30d&aud=all");
+  });
+
+  it("keeps audience and comparison through the log and the alerts", () => {
+    // Another audience remembered than the one shown: a URL that drops it
+    // would come back with the remembered one.
+    storeAudience("humans");
+    const dash = parseView(
+      "/dashboard/",
+      "?site=a.example.com&range=30d&aud=bots&cmp=yoy",
+    );
+    const back = (v: View) => {
+      const u = new URL(viewHref("/dashboard/", v), "https://example.com");
+      return parseView(u.pathname, u.search);
+    };
+    const log = { ...dash, page: "log" as const, log: { addr: "192.0.2.1" } };
+    expect(back(log)).toEqual(log);
+    const alerts = { ...dash, page: "alerts" as const };
+    expect(back(alerts)).toEqual(alerts);
+    expect(back({ ...alerts, all: true })).toEqual({ ...alerts, all: true });
+    // Out of the log, the dashboard as it was.
+    expect(back({ ...back(log), page: "dash", log: {} })).toEqual(dash);
   });
 
   it("names the domain and the log's address in the tab title", () => {

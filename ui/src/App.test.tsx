@@ -2013,7 +2013,9 @@ describe("alerts page", () => {
     await waitFor(() =>
       expect(window.location.pathname).toBe("/dashboard/alerts"),
     );
-    expect(window.location.search).toBe("?site=lens.example.com&range=30d");
+    expect(window.location.search).toBe(
+      "?site=lens.example.com&range=30d&aud=all",
+    );
     const p = await alerts();
     await within(p).findByText("50 alerts shown");
     expect(screen.getByRole("link", { name: "Alerts" })).toHaveAttribute(
@@ -2116,7 +2118,9 @@ describe("alerts page", () => {
     await waitFor(() =>
       expect(lastCall("/api/dash/alerts").get("site")).toBe("lens.example.com"),
     );
-    expect(window.location.search).toBe("?site=lens.example.com&range=7d");
+    expect(window.location.search).toBe(
+      "?site=lens.example.com&range=7d&aud=all",
+    );
     await waitFor(() => expect(within(p).queryByText("Instance")).toBeNull());
     fireEvent.click(within(p).getByRole("button", { name: "All sites" }));
     await waitFor(() => expect(window.location.search).toContain("all=1"));
