@@ -119,8 +119,30 @@ type Named struct {
 	// Declared is whether the service's agents differ in purpose, those of both listings and those left out counted:
 	// the purpose then rests on the user agent alone, the address list cannot tell them apart.
 	Declared bool
+	// Group is the purpose's group (PurposeGroup), for a service the one all its purposes share, those of both
+	// listings and those left out counted: "" when they differ or one has none.
+	Group string
 	// Agent is whether the name is an agent's. An agent named like its own service is the agent.
 	Agent bool
+}
+
+// PurposeGroup is a purpose's group, its part before the first "-" ("ai" of "ai-training"), "" without one.
+func PurposeGroup(purpose string) string {
+	g, _, _ := strings.Cut(purpose, "-")
+	return g
+}
+
+// sharedGroup is the group every purpose of a set has, "" when they differ, one has none or there are none.
+func sharedGroup(purposes map[string]bool) string {
+	shared := ""
+	for pu := range purposes {
+		g := PurposeGroup(pu)
+		if g == "" || (shared != "" && g != shared) {
+			return ""
+		}
+		shared = g
+	}
+	return shared
 }
 
 // ByName is what a service's or an agent's name stands for, spelled exactly as the list's first spelling: services

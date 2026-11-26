@@ -78,8 +78,10 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request, q *query) {
 		args = append(args, p, p, p)
 	}
 	// Exact: an event's name (a script error's message), an account, an operation, a call's endpoint (a row of the
-	// endpoints list), a failure's reason (of the failures list).
+	// endpoints list), a failure's reason (of the failures list), a bot list name (of the services list, its server
+	// rows as the list counts them).
 	for _, f := range []struct{ param, cond string }{{"name", "name = ?"}, {"account", "account = ?"}, {"op", "op = ?"},
+		{"service", "svc = ? AND source = 'server'"},
 		{"endpoint", callWhere + " AND " + endpointSQL + " = ?"},
 		{"failure", callWhere + " AND " + failedSQL + " AND " + failureSQL + " = ?"}} {
 		if x := v.Get(f.param); x != "" {

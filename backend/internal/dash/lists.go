@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/trick77/trakk/backend/internal/agg"
 	"github.com/trick77/trakk/backend/internal/apix"
 	"github.com/trick77/trakk/backend/internal/classify"
+	"github.com/trick77/trakk/backend/internal/refdata"
 	"github.com/trick77/trakk/backend/internal/store"
 )
 
@@ -30,9 +32,11 @@ type dimSpec struct {
 	distinct string
 	server   bool
 	upBad    bool
-	// api marks the figures of calls: they need a day's aggregates from apiBuilder on. durations: rows carry
-	// percentiles. failedB: b counts the failed calls.
-	api, durations, failedB bool
+	// need is the builder a day's aggregate rows of the list must come from (0: any): a day an older one built holds
+	// none of them.
+	need int64
+	// durations: rows carry percentiles. failedB: b counts the failed calls.
+	durations, failedB bool
 	// name turns the SQL key into the row's, where that is the server's to say: rows of one name are one.
 	name func(string) string
 	// value and second pick the row's figures from the sums and the distinct count.
@@ -70,14 +74,21 @@ var dims = map[string]dimSpec{
 		sub: "CASE WHEN kind = 'js_error' THEN 'js' ELSE 'server ' || status END", a: "COUNT(*)", b: "0",
 		distinct: "actor", upBad: true, value: countA, second: countD},
 	"endpoints": {where: callWhere, key: endpointSQL, sub: "op", a: "COUNT(*)", b: "SUM(" + failedSQL + ")",
-		distinct: "ip_key", server: true, api: true, durations: true, failedB: true, value: countA, second: countD},
+		distinct: "ip_key", server: true, need: apiBuilder, durations: true, failedB: true, value: countA, second: countD},
 	"accounts": {where: callWhere + " AND account != ''", key: "account", a: "COUNT(*)", b: "SUM(" + failedSQL + ")",
-		distinct: "ip_key", server: true, api: true, failedB: true, value: countA, second: countD},
+		distinct: "ip_key", server: true, need: apiBuilder, failedB: true, value: countA, second: countD},
 	"agents": {where: callWhere, key: "ua", name: classify.Client, a: "COUNT(*)", b: "SUM(" + failedSQL + ")",
-		distinct: "ip_key", server: true, api: true, failedB: true, value: countA, second: countD},
+		distinct: "ip_key", server: true, need: apiBuilder, failedB: true, value: countA, second: countD},
 	"failures": {where: callWhere + " AND " + failedSQL, key: failureSQL, a: "COUNT(*)", b: "0",
-		distinct: "ip_key", server: true, api: true, upBad: true, value: countA, second: countD},
+		distinct: "ip_key", server: true, need: apiBuilder, upBad: true, value: countA, second: countD},
+	// The known bots and probes by the bot list's name (event.svc): their requests, refusals (b) and addresses.
+	"services": {where: "source = 'server' AND svc != ''", key: "svc",
+		sub: "CASE WHEN cls = " + strconv.Itoa(store.ClsMonitor) + " THEN 'monitor' ELSE 'bot' END", a: "COUNT(*)",
+		b: "SUM(status >= 400)", distinct: "ip_key", server: true, need: servicesBuilder, value: countA, second: countD},
 }
+
+// servicesBuilder is the first agg.Version whose days hold the services list.
+const servicesBuilder = 4
 
 // distinctExpr is the SQL a list's distinct count runs on. "visitor" is who the Visitors tile counts: a browser's
 // own id, never the hash a server request carries (one person loading one page would count twice), and for the
@@ -128,6 +139,9 @@ func (o *otherSums) empty() bool { return o.entries == 0 && !o.partial }
 type listSums struct {
 	m     map[string]*keySums
 	other otherSums
+	// since is the end of the latest piece a builder older than the list's need made, its raw gone: the figures begin
+	// there (zero: none), scanDim drops what it read before.
+	since time.Time
 }
 
 func newSums() *listSums { return &listSums{m: map[string]*keySums{}} }
@@ -157,6 +171,9 @@ func (l *listSums) merge(o *listSums) {
 	l.other.entries += o.other.entries
 	l.other.partial = l.other.partial || o.other.partial
 	l.other.unlisted = max(l.other.unlisted, o.other.unlisted)
+	if o.since.After(l.since) {
+		l.since = o.since
+	}
 	for h := range o.other.hashes {
 		if l.other.hashes == nil {
 			l.other.hashes = map[uint64]struct{}{}
@@ -202,9 +219,10 @@ func (s *Server) scanDim(ctx context.Context, q *query, sc scan, w window, short
 	if err != nil {
 		return err
 	}
-	if sc.api {
-		pl.need = apiBuilder
-		defer func() { pl.need = 0 }()
+	if sc.need > 0 {
+		was := pl.need
+		pl.need = sc.need
+		defer func() { pl.need = was }()
 	}
 	sub := "''"
 	if sc.dimSpec.sub != "" {
@@ -234,18 +252,25 @@ func (s *Server) scanDim(ctx context.Context, q *query, sc scan, w window, short
 			if sc.dim == "" {
 				err = raw()
 			} else {
+				older := pl.older
 				err = pl.read(ctx, pc[0], pc[1], readSpan, short, func() (bool, error) {
 					if sc.dim == "refused" {
 						return s.refusedDay(ctx, q, ms(pc[0])/dayMS, add)
 					}
 					return s.scanDay(ctx, q, sc, ms(pc[0])/dayMS, add)
 				}, raw)
+				if pl.older > older {
+					add.since = pc[1]
+				}
 			}
 			if err != nil {
 				return err
 			}
 			for j, m := range into {
 				if j == 0 || !part.open {
+					if !add.since.IsZero() { // the figures begin after it: what came before is dropped, as since says
+						*m = listSums{m: map[string]*keySums{}}
+					}
 					m.merge(add)
 				}
 			}
@@ -412,6 +437,17 @@ type listRow struct {
 	Failed *float64 `json:"failed,omitempty"`
 	P50    *int64   `json:"p50,omitempty"`
 	P95    *int64   `json:"p95,omitempty"`
+	// Category, Service, Declared and Says are the services list's, from today's bot list, never stored: the name's
+	// purpose as the list spells it, the service of an agent named otherwise, whether the purpose is only what the
+	// client declares (the service's addresses serve several), and the host its clients most often name in
+	// Signature-Agent (sigAgent), a claim nothing checks.
+	Category string `json:"category,omitempty"`
+	Service  string `json:"service,omitempty"`
+	Declared bool   `json:"declared,omitempty"`
+	Says     string `json:"says,omitempty"`
+	// group is the services row's purpose group (refdata.Named.Group): its category's, for a service without one the
+	// group all its purposes share. What cat= and groups go by; not shown, cat= picks a tab's rows.
+	group string
 }
 
 type listResp struct {
@@ -419,6 +455,14 @@ type listResp struct {
 	Other  other     `json:"other"`
 	Total  int       `json:"total"`
 	Server bool      `json:"server"`
+	// Groups are the services list's purpose groups over all its rows in the range (refdata.Named.Group), sorted:
+	// what cat= can pick. Absent without one.
+	Groups []string `json:"groups,omitempty"`
+	// Since is set when the figures begin only within the range (days an older builder made without the list, their
+	// raw gone), as the overview's period.since; PrevSince the same of the comparison, whose figures then hold no
+	// change (null on every row).
+	Since     any `json:"since"`
+	PrevSince any `json:"prev_since"`
 }
 
 type other struct {
@@ -454,7 +498,11 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request, q *query) {
 		return
 	}
 	o := listOpts{scan: scanOf(dim), sortBy: sortBy, limit: limit,
-		needle: foldSpaces(strings.ToLower(v.Get("q")))}
+		needle: foldSpaces(strings.ToLower(v.Get("q"))), cat: v.Get("cat")}
+	if o.cat != "" && (dim != "services" || !groupRE.MatchString(o.cat)) {
+		apix.Error(w, http.StatusBadRequest, "cat is a purpose group, for dim=services")
+		return
+	}
 	within := v.Get("within")
 	if within != "" {
 		if dim != "pages" && dim != "entry" {
@@ -513,8 +561,12 @@ type listOpts struct {
 	scan
 	sortBy string
 	limit  int
-	needle string // lower-case, spaces folded: a substring of key and label, applied before the top-N
+	needle string // lower-case, spaces folded: a substring of key, label, service or category, before the top-N
+	cat    string // the services' purpose group, applied before the top-N
 }
+
+// groupRE is a purpose group: a bot list purpose's first word (refdata.PurposeGroup).
+var groupRE = regexp.MustCompile(`^[a-z][a-z0-9]{0,31}$`)
 
 // figure is a key's value in a list.
 func (d dimSpec) figure(g *keySums) int64 { return d.value(g.a, g.b, g.d.count()) }
@@ -580,11 +632,25 @@ func (s *Server) list(ctx context.Context, q *query, dim string, o listOpts) (li
 		rows = append(rows, row)
 	}
 	s.cheapLabels(dim, rows)
+	var groups []string
+	if dim == "services" {
+		for _, r := range rows {
+			if r.group != "" && !slices.Contains(groups, r.group) {
+				groups = append(groups, r.group)
+			}
+		}
+		slices.Sort(groups)
+	}
+	if o.cat != "" {
+		rows = slices.DeleteFunc(rows, func(r listRow) bool { return r.group != o.cat })
+	}
 	if o.needle != "" {
 		rows = slices.DeleteFunc(rows, func(r listRow) bool {
-			// Folded as the needle: a client's key holds en spaces around its dot, a typed one plain ones.
-			return !strings.Contains(foldSpaces(strings.ToLower(r.Key)), o.needle) &&
-				!strings.Contains(foldSpaces(strings.ToLower(r.Label)), o.needle)
+			// Folded as the needle: a client's key holds en spaces around its dot, a typed one plain ones. A known
+			// bot's service and category too.
+			return !slices.ContainsFunc([]string{r.Key, r.Label, r.Service, r.Category}, func(s string) bool {
+				return strings.Contains(foldSpaces(strings.ToLower(s)), o.needle)
+			})
 		})
 	}
 	slices.SortFunc(rows, func(a, b listRow) int {
@@ -598,7 +664,8 @@ func (s *Server) list(ctx context.Context, q *query, dim string, o listOpts) (li
 		}
 		return cmp.Compare(a.Key, b.Key)
 	})
-	resp := listResp{Rows: []listRow{}, Total: len(rows)}
+	resp := listResp{Rows: []listRow{}, Total: len(rows), Groups: groups, Since: iso(cur.since),
+		PrevSince: iso(prevClosed.since)}
 	// The keys only the aggregates' Other rows hold: part of every share's base, as raw's unmatched rows are, but no
 	// search can match them. Their count is the listed hashes no row shows; with a day's Other past the listing
 	// bound, a lower bound: the larger of that and the most keys one such day held less every row shown (a key can
@@ -606,7 +673,7 @@ func (s *Server) list(ctx context.Context, q *query, dim string, o listOpts) (li
 	if co := &cur.other; !co.empty() {
 		sum += d.value(co.a, co.b, co.n)
 	}
-	if co := &cur.other; !co.empty() && o.needle == "" {
+	if co := &cur.other; !co.empty() && o.needle == "" && o.cat == "" {
 		hidden := int64(len(co.hashes))
 		for _, r := range rows {
 			if _, ok := co.hashes[agg.Hash(r.Key)]; ok {
@@ -656,7 +723,28 @@ func (s *Server) cheapLabels(dim string, rows []listRow) {
 				rows[i].Label = strings.ToValidUTF8(l, "�")
 			}
 		}
+	case "services":
+		// A name today's list no longer knows keeps none of it.
+		bots := s.bots()
+		for i := range rows {
+			n, ok := bots.ByName(rows[i].Key)
+			if !ok {
+				continue
+			}
+			rows[i].Category, rows[i].Declared, rows[i].group = n.Purpose, n.Purpose != "" && n.Declared, n.Group
+			if n.Agent && n.Service != rows[i].Key {
+				rows[i].Service = n.Service
+			}
+		}
 	}
+}
+
+// bots is the current bot list, nil without one.
+func (s *Server) bots() *refdata.Bots {
+	if s.Ref == nil {
+		return nil
+	}
+	return s.Ref.Bots()
 }
 
 // changeRank orders rows by change: new first, then the largest growth.
@@ -727,6 +815,8 @@ func (s *Server) richLabels(ctx context.Context, q *query, dim string, o listOpt
 			}
 			rows[i].Entry = &e
 		}
+	case "services":
+		return s.servicesSay(ctx, q, rows)
 	case "probed":
 		if s.Model == nil {
 			return nil

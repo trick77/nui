@@ -340,10 +340,12 @@ func (b *Bots) nameAgents(declared map[*Provider][]agentDecl) {
 			}
 		}
 		for _, a := range p.Agents {
-			b.names[a.Name] = Named{Service: p.Name, Class: p.Class, Purpose: a.Purpose, Declared: differ, Agent: true}
+			b.names[a.Name] = Named{Service: p.Name, Class: p.Class, Purpose: a.Purpose, Declared: differ,
+				Group: PurposeGroup(a.Purpose), Agent: true}
 		}
 		if _, ok := b.names[p.Name]; !ok {
-			b.names[p.Name] = Named{Service: p.Name, Class: p.Class, Purpose: shared, Declared: differ}
+			b.names[p.Name] = Named{Service: p.Name, Class: p.Class, Purpose: shared, Declared: differ,
+				Group: sharedGroup(purposes[p.Name])}
 		}
 	}
 }

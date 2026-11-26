@@ -392,16 +392,18 @@ func TestBots_ByName(t *testing.T) {
 	for name, want := range map[string]Named{
 		// Purposes differ, counting the agents left out: only the user agent tells them apart.
 		"Alpha":       {Service: "Alpha", Class: "bot", Declared: true},
-		"Alpha-Index": {Service: "Alpha", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		"Alpha-Index": {Service: "Alpha", Class: "bot", Purpose: "search", Declared: true, Group: "search", Agent: true},
 		// The first of two agents of one name.
-		"Alpha-News": {Service: "Alpha", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		"Alpha-News": {Service: "Alpha", Class: "bot", Purpose: "search", Declared: true, Group: "search", Agent: true},
 		"Beta":       {Service: "Beta", Class: "bot", Declared: true},
-		"Beta-Train": {Service: "Beta", Class: "bot", Purpose: "ai-training", Declared: true, Agent: true},
-		"Beta-Ask":   {Service: "Beta", Class: "bot", Purpose: "ai-assistant", Declared: true, Agent: true},
+		"Beta-Train": {Service: "Beta", Class: "bot", Purpose: "ai-training", Declared: true, Group: "ai", Agent: true},
+		"Beta-Ask":   {Service: "Beta", Class: "bot", Purpose: "ai-assistant", Declared: true, Group: "ai", Agent: true},
 		// An agent named like its own service is the agent, spelled as the service.
-		"ClaudeBot":   {Service: "ClaudeBot", Class: "bot", Purpose: "ai-training", Declared: true, Agent: true},
-		"Claude-User": {Service: "ClaudeBot", Class: "bot", Purpose: "ai-assistant", Declared: true, Agent: true},
-		"Delta":       {Service: "Delta", Class: "bot", Purpose: "search", Agent: true},
+		"ClaudeBot": {Service: "ClaudeBot", Class: "bot", Purpose: "ai-training", Declared: true, Group: "ai",
+			Agent: true},
+		"Claude-User": {Service: "ClaudeBot", Class: "bot", Purpose: "ai-assistant", Declared: true, Group: "ai",
+			Agent: true},
+		"Delta": {Service: "Delta", Class: "bot", Purpose: "search", Group: "search", Agent: true},
 		// Every agent left out, their purposes still the service's.
 		"Eta": {Service: "Eta", Class: "bot", Declared: true},
 		// An agent without a purpose: the service shares the "".
@@ -409,15 +411,16 @@ func TestBots_ByName(t *testing.T) {
 		"Gamma-Bot": {Service: "Gamma", Class: "bot", Agent: true},
 		// Agents of no use still declare their purpose.
 		"Iota":     {Service: "Iota", Class: "bot", Declared: true},
-		"Iota-Bot": {Service: "Iota", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		"Iota-Bot": {Service: "Iota", Class: "bot", Purpose: "search", Declared: true, Group: "search", Agent: true},
 		// Listed twice: the first listing's class and agents, the purposes of both.
 		"Theta":     {Service: "Theta", Class: "bot", Declared: true},
-		"Theta-Bot": {Service: "Theta", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		"Theta-Bot": {Service: "Theta", Class: "bot", Purpose: "search", Declared: true, Group: "search", Agent: true},
 		// Named like another service: the service, the agent dropped; named like an earlier agent: that one.
-		"Zeta":        {Service: "Zeta", Class: "bot"},
-		"Shared":      {Service: "Alpha", Class: "bot", Purpose: "search", Declared: true, Agent: true},
-		"Probe":       {Service: "Probe", Class: "monitor", Purpose: "uptime"},
-		"Probe-Check": {Service: "Probe", Class: "monitor", Purpose: "uptime", Agent: true},
+		"Zeta":   {Service: "Zeta", Class: "bot"},
+		"Shared": {Service: "Alpha", Class: "bot", Purpose: "search", Declared: true, Group: "search", Agent: true},
+		// The agents left out share the kept one's purpose.
+		"Probe":       {Service: "Probe", Class: "monitor", Purpose: "uptime", Group: "uptime"},
+		"Probe-Check": {Service: "Probe", Class: "monitor", Purpose: "uptime", Group: "uptime", Agent: true},
 	} {
 		if got, ok := b.ByName(name); !ok || got != want {
 			t.Errorf("ByName(%s) = %+v %v, want %+v", name, got, ok, want)
@@ -486,22 +489,34 @@ func TestBots_ByName(t *testing.T) {
 }
 
 // A service's purposes are every agent's it declares: one of no use without a purpose is the unknown one, one name
-// twice with two purposes is both.
+// twice with two purposes is both. Purposes that differ can share their group.
 func TestBots_AgentPurposes(t *testing.T) {
 	b, err := parseBots([]byte(`{"services":{
 		"Kappa":{"ipv4":["192.0.2.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Kappa*"],
 		  "agents":[{"name":"Kappa-Bot","pattern":"*Kappa-Bot*","purpose":"search"},{"name":"Kappa-Odd"}]},
 		"Lambda":{"ipv4":["198.51.100.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Lambda*"],
 		  "agents":[{"name":"Lambda-Bot","pattern":"*Lambda-Bot*","purpose":"search"},
-		    {"name":"Lambda-Bot","pattern":"*Lambda-Ask*","purpose":"ai-assistant"}]}}}`), []byte(monitoring))
+		    {"name":"Lambda-Bot","pattern":"*Lambda-Ask*","purpose":"ai-assistant"}]},
+		"Mu":{"ipv4":["198.51.101.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Mu*"],
+		  "agents":[{"name":"Mu-Train","pattern":"*Mu-Train*","purpose":"ai-training"},
+		    {"name":"Mu-Ask","pattern":"*Mu-Ask*","purpose":"ai-assistant"},
+		    {"name":"Mu-Odd","purpose":"ai-search"}]},
+		"Nu":{"ipv4":["198.51.102.0/24"],"ip_list_authoritative":true,"user_agent_patterns":["*Nu*"],
+		  "agents":[{"name":"Nu-Train","pattern":"*Nu-Train*","purpose":"ai-training"},{"name":"Nu-Odd"}]}}}`),
+		[]byte(monitoring))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]Named{
 		"Kappa":      {Service: "Kappa", Class: "bot", Declared: true},
-		"Kappa-Bot":  {Service: "Kappa", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		"Kappa-Bot":  {Service: "Kappa", Class: "bot", Purpose: "search", Declared: true, Group: "search", Agent: true},
 		"Lambda":     {Service: "Lambda", Class: "bot", Declared: true},
-		"Lambda-Bot": {Service: "Lambda", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		"Lambda-Bot": {Service: "Lambda", Class: "bot", Purpose: "search", Declared: true, Group: "search", Agent: true},
+		// No purpose, one group: the one left out counted too.
+		"Mu":       {Service: "Mu", Class: "bot", Declared: true, Group: "ai"},
+		"Mu-Train": {Service: "Mu", Class: "bot", Purpose: "ai-training", Declared: true, Group: "ai", Agent: true},
+		// One agent without a purpose: no group.
+		"Nu": {Service: "Nu", Class: "bot", Declared: true},
 	} {
 		if got, ok := b.ByName(name); !ok || got != want {
 			t.Errorf("ByName(%s) = %+v %v, want %+v", name, got, ok, want)
@@ -564,13 +579,13 @@ func TestBots_AgentFirstDeclaration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]Named{
-		"Xi-Bot": {Service: "Xi", Class: "bot", Purpose: "search", Declared: true, Agent: true},
+		"Xi-Bot": {Service: "Xi", Class: "bot", Purpose: "search", Declared: true, Group: "search", Agent: true},
 		// Its only pattern declares another purpose: the agent stands, no user agent names it.
-		"Xi-Odd":  {Service: "Xi", Class: "bot", Purpose: "ai-training", Declared: true, Agent: true},
-		"xi-none": {Service: "Ypsilon", Class: "bot", Purpose: "search", Agent: true},
+		"Xi-Odd":  {Service: "Xi", Class: "bot", Purpose: "ai-training", Declared: true, Group: "ai", Agent: true},
+		"xi-none": {Service: "Ypsilon", Class: "bot", Purpose: "search", Group: "search", Agent: true},
 		// Listed twice, one purpose across both: shared.
-		"Omicron":     {Service: "Omicron", Class: "bot", Purpose: "search"},
-		"Omicron-Bot": {Service: "Omicron", Class: "bot", Purpose: "search", Agent: true},
+		"Omicron":     {Service: "Omicron", Class: "bot", Purpose: "search", Group: "search"},
+		"Omicron-Bot": {Service: "Omicron", Class: "bot", Purpose: "search", Group: "search", Agent: true},
 	} {
 		if got, ok := b.ByName(name); !ok || got != want {
 			t.Errorf("ByName(%s) = %+v %v, want %+v", name, got, ok, want)

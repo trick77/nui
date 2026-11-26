@@ -21,14 +21,14 @@ import (
 )
 
 // distinctDims are the lists whose rows hold a distinct count (pages, entry, referrers, countries: visitors;
-// networks: addresses; events, outbound, probed, errors: their second figure), merged from sketches; refused is
-// counts only.
+// networks: addresses; events, outbound, probed, errors, services: their second figure), merged from sketches;
+// refused is counts only.
 var distinctDims = map[string]bool{"pages": true, "entry": true, "referrers": true, "countries": true,
-	"networks": true, "events": true, "outbound": true, "probed": true, "errors": true}
+	"networks": true, "events": true, "outbound": true, "probed": true, "errors": true, "services": true}
 
 // countValued are the lists whose value is a count: rows and Other add up to the raw total however many entries
 // a day keeps.
-var countValued = map[string]bool{"events": true, "outbound": true, "probed": true, "errors": true}
+var countValued = map[string]bool{"events": true, "outbound": true, "probed": true, "errors": true, "services": true}
 
 // agreeCase is one zone and comparison of TestSourcesAgree, and its ranges.
 type agreeCase struct {
@@ -372,7 +372,7 @@ func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard)
 	num := func(v any) float64 { f, _ := v.(float64); return f }
 	rngs, cmps := []string{"30d", "90d", "12mo"}, []string{"prev", "yoy"}
 	today := w.Anchor.UnixMilli() / 86_400_000
-	anyCut := false
+	anyCut, listed := false, map[string]bool{}
 	for _, s := range w.Sites {
 		for _, rng := range rngs {
 			for _, c := range cmps {
@@ -393,6 +393,7 @@ func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard)
 					where := fmt.Sprint(params)
 					rb, gb := answer(t, raw, "list", params), answer(t, aggs, "list", params)
 					rawRows, gotRows := byKey(rb), byKey(gb)
+					listed[dim] = listed[dim] || len(rawRows) > 0
 					dfield, cfield := distinctField(dim), "second" // the distinct figure, the counted one
 					if dfield == "second" {
 						cfield = "value"
@@ -454,6 +455,9 @@ func topThree(t *testing.T, st *store.Store, w *sim.World, raw, aggs *Dashboard)
 	}
 	if !anyCut {
 		t.Fatal("no page cut at three entries a day")
+	}
+	if !listed["services"] {
+		t.Error("no known bot by service in the history")
 	}
 }
 

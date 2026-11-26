@@ -25,7 +25,7 @@ var (
 	audiences = []string{"all", "humans", "bots"}
 	compares  = []string{"prev", "yoy", "off"}
 	listDims  = []string{"pages", "entry", "events", "outbound", "referrers", "networks", "countries", "probed",
-		"refused", "errors", "endpoints", "accounts", "failures", "agents"}
+		"refused", "errors", "endpoints", "accounts", "failures", "agents", "services"}
 	visitorSorts = []string{"requests", "refused", "events", "views"}
 )
 

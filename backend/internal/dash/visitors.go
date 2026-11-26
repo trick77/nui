@@ -1526,6 +1526,12 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 	}
 	// "What it does" as the table's row has it: the computed sentence, the model's when its reading resolves.
 	row.Does.Text = doesText(row, counts)
+	// Who it says it is: shown beside the row, never part of it (the model reads the row).
+	says, err := s.actorSays(ctx, q.site.ID, key, since, q.p.win.End, a.last)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	detailSince, err := pl.detailSince(ctx, q.p.win.From)
 	if err != nil {
 		s.fail(w, r, err)
@@ -1534,7 +1540,7 @@ func (s *Server) handleVisitor(w http.ResponseWriter, r *http.Request, q *query)
 	resp := map[string]any{"key": key, "class": row.Class, "network": row.Network, "network_kind": row.NetworkKind,
 		"country": row.Country, "client": row.Client, "signals": row.Signals, "requests": row.Requests,
 		"addresses": addrs, "hours": hours, "trail": tr.lines, "trail_next": tr.next, "reading": nil,
-		"client_gen": nil, "does": &row.Does, "from": ms(q.p.win.From), "detail_since": detailSince}
+		"client_gen": nil, "does": &row.Does, "from": ms(q.p.win.From), "detail_since": detailSince, "says": says}
 	if s.Model != nil && s.Model.Configured() {
 		one := []visitorRow{row}
 		s.labelClients(ctx, q.site.ID, one)
