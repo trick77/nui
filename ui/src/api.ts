@@ -436,7 +436,12 @@ export type Domain = {
     botlist: { services: number; updated: string | null };
     networks: { updated: string | null };
     tz: string;
-    llm: { calls_today: number; budget: number; configured: boolean };
+    llm: {
+      calls_today: number;
+      budget: number;
+      spent: boolean;
+      configured: boolean;
+    };
   };
   // Missing from a backend older than alerts: as not configured.
   notify?: Notify;

@@ -69,7 +69,7 @@ func (f *fakeModel) Labels(_ context.Context, _ int64, _ string, values []string
 	}
 	return out
 }
-func (f *fakeModel) Usage(context.Context, int64) (int64, int64) { return 3, 200 }
+func (f *fakeModel) Usage(context.Context, int64) (int64, int64, bool) { return 3, 200, false }
 
 type rig struct {
 	s     *Server

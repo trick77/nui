@@ -1616,7 +1616,7 @@ function domain(site: string, feed: boolean, script: boolean): Domain {
       botlist: { services: 24, updated: "2026-11-22T03:00:00Z" },
       networks: { updated: "2026-11-22T03:00:00Z" },
       tz: "Europe/Zurich",
-      llm: { calls_today: 41, budget: 200, configured: true },
+      llm: { calls_today: 41, budget: 200, spent: false, configured: true },
     },
   };
 }

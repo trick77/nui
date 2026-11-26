@@ -443,18 +443,22 @@ func (v *Eval) silent(ctx context.Context, now time.Time, r alert.Rule, site *si
 	return out, true, nil
 }
 
-// budget is llm.budget: the site's model calls today at the daily budget.
+// budget is llm.budget: the site's model budget for today, calls or tokens, spent.
 func (v *Eval) budget(ctx context.Context, site *sites.Site) []alert.Occurrence {
 	if v.model == nil || !v.model.Configured() {
 		return nil
 	}
-	calls, budget := v.model.Usage(ctx, site.ID)
-	if budget <= 0 || calls < budget {
+	calls, budget, spent := v.model.Usage(ctx, site.ID)
+	if !spent {
 		return nil
 	}
 	f := float64(calls)
-	return []alert.Occurrence{{Text: "The model's daily budget is spent: no new briefing or reading until midnight UTC",
-		Figure: &f, Unit: "calls", Target: &alert.Target{Panel: "domain", Filter: map[string]string{}}}}
+	occ := alert.Occurrence{Text: "The model's daily budget is spent: no new briefing or reading until midnight UTC",
+		Figure: &f, Unit: "calls", Target: &alert.Target{Panel: "domain", Filter: map[string]string{}}}
+	if calls < budget {
+		occ.Detail = "The tokens ran out with calls to spare"
+	}
+	return []alert.Occurrence{occ}
 }
 
 // errorLevel is the trigger of the script errors' level: read by ErrorLevels, not a metric of Levels.

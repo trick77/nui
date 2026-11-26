@@ -311,7 +311,10 @@ export function DomainFooter() {
                     [
                       "Model budget",
                       x.rules.llm.configured
-                        ? `${num(x.rules.llm.calls_today)} of ${num(x.rules.llm.budget)} calls today`
+                        ? `${num(x.rules.llm.calls_today)} of ${num(x.rules.llm.budget)} calls today` +
+                          (x.rules.llm.spent
+                            ? ", spent until midnight UTC"
+                            : "")
                         : joinSep([
                             "no model configured",
                             "computed texts only",
