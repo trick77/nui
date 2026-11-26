@@ -562,11 +562,10 @@ func TestSources_RawSpan(t *testing.T) {
 		t.Errorf("within detail_since %v, %d rows", in["detail_since"], len(listRows(in)))
 	}
 	_, dom := r.get(t, "domain", p(feedSite, "range", "30d", "tz", "UTC"))
-	st, src := dom["storage"].(map[string]any), dom["sources"].(map[string]any)
+	st := dom["storage"].(map[string]any)
 	if st["oldest"] != detailSince || st["figures_since"] == nil ||
-		st["figures_since"].(string) >= st["oldest"].(string) || src["first"] != st["figures_since"] ||
-		num64(st["raw_days"]) < 750 {
-		t.Errorf("storage %v, first %v", st, src["first"])
+		st["figures_since"].(string) >= st["oldest"].(string) || num64(st["raw_days"]) < 750 {
+		t.Errorf("storage %v", st)
 	}
 }
 

@@ -1598,7 +1598,6 @@ function domain(site: string, feed: boolean, script: boolean): Domain {
       feed: FEEDS.includes(site),
       script: "/trakk.js",
       build: "3f2a91c",
-      first: FIGURES_SINCE,
     },
     storage: {
       events: feed ? 1284551 : 398211,
@@ -1706,9 +1705,7 @@ function alert(
   return {
     id,
     site,
-    rule: kind.replace(".", "-"),
     kind,
-    key: "",
     severity,
     state: cleared != null ? "cleared" : "once",
     text: "",
@@ -1729,7 +1726,6 @@ function alert(
 // than a page.
 const ALERTS: Alert[] = [
   alert(414, "lens.example.com", "script.new", "normal", 20, {
-    key: "cdn.evil.example",
     text: "New script host: cdn.evil.example",
     figure: 4,
     unit: "addresses",
@@ -1747,7 +1743,6 @@ const ALERTS: Alert[] = [
     target: { panel: "errors", filter: {} },
   }),
   alert(412, "lens.example.com", "error.new", "high", 38, {
-    key: 'TypeError: cannot read "prefixes"',
     state: "open",
     last: 4,
     text: 'New error: TypeError: cannot read "prefixes"',
@@ -1758,7 +1753,6 @@ const ALERTS: Alert[] = [
     target: { panel: "errors", filter: {} },
   }),
   alert(411, "lens.example.com", "spike.addr", "normal", 52, {
-    key: "198.51.100.7",
     state: "open",
     last: 6,
     text: "198.51.100.7 (AS64510 Example Cloud)",
@@ -1797,14 +1791,12 @@ const ALERTS: Alert[] = [
     target: { panel: "log", filter: { kind: "request", asn: "64510" } },
   }),
   alert(407, "lens.example.com", "probe.new", "low", 240, {
-    key: "GET /.env",
     text: "New probed path: GET /.env",
     figure: 212,
     unit: "probes",
     target: { panel: "probed", filter: {} },
   }),
   alert(406, "console.example.com", "source.silent", "high", 420, {
-    key: "browser",
     last: 400,
     cleared: 375,
     text: "No browser events for 45 minutes",
@@ -1814,13 +1806,11 @@ const ALERTS: Alert[] = [
     target: { panel: "domain", filter: {} },
   }),
   alert(405, "", "job.failed", "high", 610, {
-    key: "aggregate",
     text: "The daily aggregate build failed",
     detail: "database is locked",
     delivery: sent(609, OPS, MAIL, { name: "pager", ok: true }),
   }),
   alert(404, "lens.example.com", "referrer.new", "low", 900, {
-    key: "news.ycombinator.com",
     text: "New referrer: news.ycombinator.com",
     figure: 749,
     unit: "visitors",
@@ -1852,14 +1842,12 @@ const ALERTS: Alert[] = [
     delivery: sent(1699, OPS, MAIL),
   }),
   alert(400, "api.example.com", "endpoint.new", "low", 1900, {
-    key: "POST /api/v1/whois/batch",
     text: "New endpoint: POST /api/v1/whois/batch",
     figure: 96,
     unit: "calls",
     target: { panel: "endpoints", filter: {} },
   }),
   alert(399, "api.example.com", "failure.new", "normal", 2000, {
-    key: "invalid_params",
     text: "New failure reason: invalid_params",
     figure: 44,
     unit: "calls",
@@ -1927,7 +1915,6 @@ const ALERTS: Alert[] = [
   }),
   // A kind this UI does not know yet: shown by its id.
   alert(390, "lens.example.com", "country.new", "low", 3700, {
-    key: "IS",
     text: "New country: Iceland",
     figure: 3,
     unit: "visitors",
@@ -1951,7 +1938,6 @@ const ALERTS: Alert[] = [
   ),
   // Older than any range the log shows: no jump.
   alert(341, "lens.example.com", "error.new", "normal", 92 * 24 * 60, {
-    key: "TypeError: gone",
     text: "New error: TypeError: gone",
     figure: 4,
     unit: "times",

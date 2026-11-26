@@ -412,8 +412,6 @@ export type Domain = {
     feed: boolean;
     script: string;
     build: string;
-    // The first figure: figures_since.
-    first: string | null;
   };
   storage: {
     // Raw events: how many, the oldest, how long they are kept.
@@ -494,9 +492,7 @@ export type DeliveryState = "sent" | "partial" | "failed" | "pending" | "none";
 export type Alert = {
   id: number;
   site: string;
-  rule: string;
   kind: string;
-  key: string;
   severity: Severity;
   state: AlertState;
   text: string;
