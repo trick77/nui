@@ -11,7 +11,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -86,12 +85,10 @@ var (
 	}
 )
 
-// botRole is a bot actor's identity: which list entry it is, its user agent, the ranges it sends from.
+// botRole is a bot actor's identity: its user agent and the ranges it sends from.
 type botRole struct {
-	Name string
-	UA   string
-	V4   []netip.Prefix
-	V6   []netip.Prefix
+	UA string
+	V4 []netip.Prefix
 }
 
 // roleChoices are the candidates for each bot role, the world's own last: with a real bot list loaded the actors
@@ -122,11 +119,8 @@ const (
 // Reference is the reference data a world runs against: loaded from a directory through refdata, and the bot roles
 // resolved against its bot list.
 type Reference struct {
-	Dir  string
-	Data *refdata.Data
-	// World is true when the directory holds the simulator's own data, false for real (ipverse) data, whose
-	// networks and countries do not cover documentation addresses.
-	World bool
+	Dir   string
+	Data  *refdata.Data
 	roles map[string]botRole
 }
 
@@ -153,7 +147,6 @@ func OpenReference(dir string) (*Reference, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", dir, err)
 	}
-	ref.World = slices.ContainsFunc(bots.Providers, func(p *refdata.Provider) bool { return p.Name == "Examplebot" })
 	for role, choices := range roleChoices {
 		for _, c := range choices {
 			// The list must take the user agent for this service, or the actor would be an impostor.
@@ -161,12 +154,10 @@ func OpenReference(dir string) (*Reference, error) {
 			if !ok || p.Name != c.name {
 				continue
 			}
-			r := botRole{Name: c.name, UA: c.ua}
+			r := botRole{UA: c.ua}
 			for _, x := range p.Ranges {
 				if x.Addr().Is4() {
 					r.V4 = append(r.V4, x)
-				} else {
-					r.V6 = append(r.V6, x)
 				}
 			}
 			if len(r.V4) > 0 {

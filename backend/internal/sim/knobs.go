@@ -247,16 +247,18 @@ func (k Knobs) World(ref *Reference, now time.Time) (*World, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A scenario moved to after the anchor expects nothing: its expectations are the history's, asked at the anchor
+	// (sim check with such a knob set failed on every world).
 	live := func(name string, from, to time.Duration) {
 		for _, s := range sc {
 			if s.Name == name {
-				s.From, s.To = from, to
+				s.From, s.To, s.expect = from, to, nil
 				return
 			}
 		}
 		for _, c := range catalogue {
 			if c.Name == name {
-				c.From, c.To = from, to
+				c.From, c.To, c.expect = from, to, nil
 				sc = append(sc, &c)
 			}
 		}

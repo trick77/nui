@@ -16,8 +16,6 @@ type Scenario struct {
 	Story string
 	// From and To bound the window, relative to the anchor; both zero: the whole time.
 	From, To time.Duration
-	// Domain is the site it acts on, "" for the scenario's own choice.
-	Domain string
 	// MinDays is the history the expectations need.
 	MinDays int
 	expect  func(w *World, sc *Scenario) []Expectation
@@ -35,9 +33,6 @@ func (s *Scenario) covers(anchor, t time.Time) bool {
 
 // site reports whether the scenario acts on s.
 func (s *Scenario) site(w *World, site *Site) bool {
-	if s.Domain != "" {
-		return site.Domain == s.Domain
-	}
 	switch s.Name {
 	case "late-feed":
 		// The last site with a feed: a product added later.
