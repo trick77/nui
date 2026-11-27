@@ -32,6 +32,9 @@ type dimSpec struct {
 	distinct string
 	server   bool
 	upBad    bool
+	// neutral: a change is no verdict either way (known bots, as classVerdict's): their volume is their operators'
+	// business, more AI crawling no good news, less search crawling no bad news.
+	neutral bool
 	// need is the builder a day's aggregate rows of the list must come from (0: any): a day an older one built holds
 	// none of them.
 	need int64
@@ -88,7 +91,8 @@ var dims = map[string]dimSpec{
 	// The known bots and probes by the bot list's name (event.svc): their requests, refusals (b) and addresses.
 	"services": {where: "source = 'server' AND svc != ''", key: "svc",
 		sub: "CASE WHEN cls = " + strconv.Itoa(store.ClsMonitor) + " THEN 'monitor' ELSE 'bot' END", a: "COUNT(*)",
-		b: "SUM(status >= 400)", distinct: "ip_key", server: true, need: servicesBuilder, value: countA, second: countD},
+		b: "SUM(status >= 400)", distinct: "ip_key", server: true, neutral: true, need: servicesBuilder, value: countA,
+		second: countD},
 }
 
 // servicesBuilder is the first agg.Version whose days hold the services list.
@@ -629,7 +633,10 @@ func (s *Server) list(ctx context.Context, q *query, dim string, o listOpts) (li
 			p = float64(d.figure(pg))
 		}
 		row.Change = sumChange(c, p, cmpOn && !prevClosed.other.hides(k) && !closed.other.hides(k))
-		row.Verdict = verdict(row.Change, d.upBad)
+		row.Verdict = "flat"
+		if !d.neutral {
+			row.Verdict = verdict(row.Change, d.upBad)
+		}
 		if d.failedB {
 			f := round1(pct(float64(g.b), float64(g.a)))
 			row.Failed = &f
