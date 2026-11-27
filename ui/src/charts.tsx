@@ -730,13 +730,17 @@ const SHADE = [
 ];
 
 // Ranked rows, a bar behind each label scaled to the largest, the shade
-// stepping down the sequential blue ramp by rank; "Other" grey.
+// stepping down the sequential blue ramp by rank; "Other" grey. Count, share
+// and change each in a column of their own, the label in what is left.
 export function BarRows({
   rows,
   other,
+  changes,
 }: {
   rows: BarRow[];
   other?: { count: number; value: number } | null;
+  // The change column: the caller's call, as its full list's.
+  changes: boolean;
 }) {
   const max = Math.max(1, ...rows.map((r) => r.value), other?.value ?? 0);
   return (
@@ -768,14 +772,14 @@ export function BarRows({
               animationDelay: `${i * 50}ms`,
             }}
           />
-          <span className="truncate">{r.label}</span>
-          <span className="val">
-            {num(r.value)}
-            {r.share != null && <small>{pct(r.share)}</small>}
-            <b>
+          <span className="l">{r.label}</span>
+          <span className="n">{num(r.value)}</span>
+          {r.share != null && <span className="s">{pct(r.share)}</span>}
+          {changes && (
+            <span className="d">
               <Delta change={r.change} verdict={r.verdict} />
-            </b>
-          </span>
+            </span>
+          )}
         </div>
       ))}
       {other && other.count > 0 && (
@@ -788,11 +792,8 @@ export function BarRows({
               animationDelay: `${rows.length * 50}ms`,
             }}
           />
-          <span className="text-muted">{`Other${SEP}${num(other.count)}`}</span>
-          <span className="val">
-            {num(other.value)}
-            <b />
-          </span>
+          <span className="l text-muted">{`Other${SEP}${num(other.count)}`}</span>
+          <span className="n">{num(other.value)}</span>
         </div>
       )}
     </div>

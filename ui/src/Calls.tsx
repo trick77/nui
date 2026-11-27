@@ -32,13 +32,8 @@ const addresses: Col = {
   cell: (r) => num(r.second),
 };
 
-function useChange(): Col[] {
-  return useDash().scope.cmp !== "off" ? [changeCol] : [];
-}
-
 function EndpointsPanel({ head }: { head?: ReactNode }) {
   const { openLog } = useDash();
-  const delta = useChange();
   return (
     <TopList
       id="endpoints-panel"
@@ -53,7 +48,7 @@ function EndpointsPanel({ head }: { head?: ReactNode }) {
         failed,
         { head: "Median", num: true, cell: (r) => ms(r.p50) },
         { head: "95th", num: true, cell: (r) => ms(r.p95) },
-        ...delta,
+        changeCol,
       ]}
       onRow={(r) => openLog({ endpoint: r.key })}
       empty="No calls in this range."
@@ -63,7 +58,6 @@ function EndpointsPanel({ head }: { head?: ReactNode }) {
 
 function FailuresPanel({ head }: { head?: ReactNode }) {
   const { openLog } = useDash();
-  const delta = useChange();
   return (
     <TopList
       id="failures-panel"
@@ -71,7 +65,12 @@ function FailuresPanel({ head }: { head?: ReactNode }) {
       head={head}
       sources={["server"]}
       tabs={[{ key: "failures", label: "Failures", dim: "failures" }]}
-      cols={[keyed("Reason"), { ...calls, head: "Count" }, addresses, ...delta]}
+      cols={[
+        keyed("Reason"),
+        { ...calls, head: "Count" },
+        addresses,
+        changeCol,
+      ]}
       onRow={(r) => openLog({ failure: r.key })}
       empty="No call failed in this range."
     />
@@ -95,7 +94,6 @@ export function Endpoints() {
 
 function ApiPanels() {
   const { openLog } = useDash();
-  const delta = useChange();
   return (
     <>
       <EndpointsPanel />
@@ -105,7 +103,7 @@ function ApiPanels() {
           title="Accounts"
           sources={["server"]}
           tabs={[{ key: "accounts", label: "Accounts", dim: "accounts" }]}
-          cols={[keyed("Account"), calls, addresses, failed, ...delta]}
+          cols={[keyed("Account"), calls, addresses, failed, changeCol]}
           onRow={(r) => openLog({ account: r.key, calls: "1" })}
           empty="No call of an account in this range."
         />
@@ -117,7 +115,7 @@ function ApiPanels() {
           title="Clients"
           sources={["server"]}
           tabs={[{ key: "agents", label: "Clients", dim: "agents" }]}
-          cols={[keyed("Client"), calls, addresses, failed, ...delta]}
+          cols={[keyed("Client"), calls, addresses, failed, changeCol]}
           empty="No calls in this range."
         />
       </div>

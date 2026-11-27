@@ -4,7 +4,14 @@
 // cuts; the UI only draws what it was given.
 
 import { type ReactNode, useEffect, useState } from "react";
-import { api, type Dim, type List, type ListRow, listScope } from "./api";
+import {
+  api,
+  type Compare,
+  type Dim,
+  type List,
+  type ListRow,
+  listScope,
+} from "./api";
 import { BarRows } from "./charts";
 import { SEP, changeText, joinSep, num, pct, rawSince } from "./format";
 import { useApi, useDebounced } from "./hooks";
@@ -30,12 +37,23 @@ export type Col<R = ListRow> = {
   show?: (rows: R[]) => boolean;
 };
 
-// A row's change against the comparison period.
+// A row's change against the comparison period. A list gives it a column
+// only where changeShown says so.
 export const changeCol: Col = {
   head: "Change",
   num: true,
   cell: (r) => <Delta change={r.change} verdict={r.verdict} />,
 };
+
+// Whether an answer's rows get a change column, the same for a card and its
+// full list: the comparison on, figures in it (prev_since unset) and a
+// change in some row (the backend nulls them all for a gap).
+export function changeShown(
+  cmp: Compare,
+  l: Pick<List, "rows" | "prev_since">,
+): boolean {
+  return cmp !== "off" && !l.prev_since && l.rows.some((r) => r.change);
+}
 
 export type ListTab = {
   key: string;
@@ -103,6 +121,7 @@ export function TopList({
   head,
   cols,
   label,
+  note,
   onRow,
   expand,
   groups,
@@ -123,6 +142,9 @@ export function TopList({
   // A table when cols are given, ranked bars otherwise.
   cols?: Col[];
   label?: (r: ListRow) => ReactNode;
+  // The text label shows after the row's name, for the bar's title: a long
+  // label is cut.
+  note?: (r: ListRow) => string | null | undefined;
   onRow?: (r: ListRow) => void;
   // Rows the backend marks expandable open into their raw values.
   expand?: boolean;
@@ -171,6 +193,7 @@ export function TopList({
       ]
     : tabs;
   const compare = scope.cmp !== "off";
+  const changes = !!l.data && changeShown(scope.cmp, l.data);
   return (
     <Panel id={id} label={title} className="card" busy={busy || l.loading}>
       <CardHead
@@ -235,18 +258,20 @@ export function TopList({
                 label: label ? label(r) : r.label,
                 value: r.value,
                 share: r.share,
-                change: compare ? r.change : null,
+                change: changes ? r.change : null,
                 verdict: r.verdict,
                 onClick: onRow ? () => onRow(r) : undefined,
                 title: joinSep([
                   r.label,
+                  note?.(r),
                   num(r.value),
                   pct(r.share),
-                  r.change && changeText(r.change),
+                  changes && r.change && changeText(r.change),
                   onRow && "click for the log",
                 ]),
               }))}
               other={l.data.other}
+              changes={changes}
             />
           )}
           {l.data.total > l.data.rows.length && (
@@ -297,14 +322,15 @@ function RowsTable({
   expand?: Dim;
   sort: Sort;
 }) {
+  const { scope } = useDash();
   const [open, setOpen] = useState<string | null>(null);
-  // A comparison without figures (prev_since) leaves every change null.
   const cols = allCols.filter(
     (c) =>
-      (!c.show || c.show(list.rows)) && !(list.prev_since && c === changeCol),
+      (!c.show || c.show(list.rows)) &&
+      (c !== changeCol || changeShown(scope.cmp, list)),
   );
   return (
-    <table className="t">
+    <table className="t ranked">
       <TableHead cols={cols} />
       <tbody>
         {list.rows.map((r, i) => (

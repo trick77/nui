@@ -736,6 +736,14 @@ const LISTS: Record<string, ListRow[]> = {
     row("google.com", 402, null, { pct: -6 }, "bad"),
     row("news.ycombinator.com", 188, null, { new: true }, "good"),
     row("duckduckgo.com", 96, null, { pct: 9 }, "good"),
+    // A host longer than a half-width card.
+    row(
+      "newsletter-archive.community-forum.regional-chapter.example.org",
+      80,
+      null,
+      { new: true },
+      "good",
+    ),
     row("console.example.com", 71, null, { pct: -14 }, "bad"),
     row("bing.com", 22, null, { pct: 1 }, "flat"),
     row("reddit.com", 12, null, { new: true }, "good"),
@@ -757,6 +765,12 @@ const LISTS: Record<string, ListRow[]> = {
     row("64503", 140, null, { pct: 41 }, "good", {
       label: "AS64503 Example University",
       sub: "education",
+    }),
+    // A name of several words, longer than a half-width card.
+    row("64506", 120, null, { pct: 7 }, "good", {
+      label:
+        "AS64506 Example Regional Broadband and Fiber Cooperative of the Northern Valleys",
+      sub: "isp",
     }),
     row("64504", 90, null, { pct: 0 }, "flat", {
       label: "AS64504 Example Telecom",
@@ -789,10 +803,37 @@ const LISTS: Record<string, ListRow[]> = {
       gen: null,
       sub: "403",
     }),
+    // Long templates, one without a break: the figures stay in their
+    // columns, the label is cut.
+    row(
+      "GET /wp-content/uploads/:n/:n/618_1_wandtattoo_ich_kann.gif",
+      40,
+      1,
+      { new: true },
+      "bad",
+      { gen: "generic numeric path probe", sub: "404" },
+    ),
+    row(
+      "GET /wp-content/uploads/:n/:n/7538fc932280-e1585485028145-:hash.jpg",
+      38,
+      1,
+      { pct: 200 },
+      "bad",
+      { sub: "404" },
+    ),
     row("GET /admin", 31, 4, { pct: -30 }, "good", {
       gen: "admin panel guess",
       sub: "404",
     }),
+    row("GET /:n/:n", 12, 1, { new: true }, "bad", { sub: "404" }),
+    row(
+      "GET /wp-content/uploads/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0_thumbnail.jpg",
+      9,
+      1,
+      { new: true },
+      "bad",
+      { sub: "404" },
+    ),
   ],
   refused: [
     row("198.51.100.7", 2338, null, { pct: 640 }, "bad", {
@@ -1151,7 +1192,8 @@ function list(q: URLSearchParams, feed: boolean): List | null {
     dim === "endpoints" && !within && q.get("range") === "12mo"
       ? ENDPOINTS_PREV_SINCE
       : null;
-  if (prevSince)
+  // No comparison, no change, as the backend answers.
+  if (prevSince || q.get("cmp") === "off")
     rows = rows.map((r) => ({ ...r, change: null, verdict: "flat" as const }));
   if (dim === "errors" && !feed) rows = rows.filter((r) => r.sub === "js");
   if (q.get("sub")) rows = rows.filter((r) => r.sub === q.get("sub"));
@@ -1202,7 +1244,9 @@ function services(q: URLSearchParams): List {
   let rows = LISTS.services
     .filter((r) => range !== "24h" || r.sub !== "monitor")
     .map((r) =>
-      since.prev_since ? { ...r, change: null, verdict: "flat" as const } : r,
+      since.prev_since || q.get("cmp") === "off"
+        ? { ...r, change: null, verdict: "flat" as const }
+        : r,
     );
   const groups = [
     ...new Set(rows.map((r) => SERVICE_GROUP[r.key]).filter(Boolean)),

@@ -8,7 +8,13 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type Panel, type Watch, type WatchHost, setFetcher } from "./api";
+import {
+  type List,
+  type Panel,
+  type Watch,
+  type WatchHost,
+  setFetcher,
+} from "./api";
 import { jumpRange } from "./AlertsPage";
 import App from "./App";
 import { MainChart, StackChart, scaleLines } from "./charts";
@@ -1150,6 +1156,144 @@ describe("dashboard on a domain with a server feed", () => {
     expect(
       within(d).getByText("raw older than 90 days is deleted from 29.11.2026"),
     ).toBeInTheDocument();
+  });
+
+  it("keeps a bar list's figures in columns of their own", async () => {
+    const cells = (r: Element) =>
+      [...r.children].filter((c) => c.tagName !== "I").map((c) => c.className);
+    start();
+    const probed = await screen.findByRole("region", { name: "Probed paths" });
+    const path = "GET /wp-content/uploads/:n/:n/618_1_wandtattoo_ich_kann.gif";
+    const long = await within(probed).findByText(path);
+    const rows = [...probed.querySelectorAll(".bl > .r")];
+    expect(rows).toHaveLength(7);
+    // The label the only flexible cell, cut after two lines; count, share
+    // and change each a cell of its own beside it, never inside it.
+    for (const r of rows.slice(0, -1)) {
+      expect(cells(r)).toEqual(["l", "n", "s", "d"]);
+      expect(r.querySelector(".l :is(.n, .s, .d, .delta)")).toBeNull();
+    }
+    const row = long.closest(".r")!;
+    // The whole label, note too, where it is cut.
+    expect(row.getAttribute("title")).toContain(
+      `${path}${SEP}generic numeric path probe`,
+    );
+    expect(row.querySelector(":scope > .n")).toHaveTextContent("40");
+    expect(row.querySelector(":scope > .s")).toHaveTextContent(pct(1));
+    expect(row.querySelector(":scope > .d")).toHaveTextContent("new");
+    // Other's figure stands in the count column.
+    const other = rows[rows.length - 1];
+    expect(cells(other)).toEqual(["l text-muted", "n"]);
+    expect(other.querySelector(":scope > .n")).toHaveTextContent("52");
+    cleanup();
+
+    // Without a comparison no change column, in the full table neither.
+    start("/dashboard/?cmp=off");
+    const p2 = await screen.findByRole("region", { name: "Probed paths" });
+    await within(p2).findByText(path);
+    for (const r of p2.querySelectorAll(".bl > .r"))
+      expect(cells(r)).not.toContain("d");
+    fireEvent.click(within(p2).getByRole("button", { name: /Show all 9/ }));
+    const dlg = screen.getByRole("dialog");
+    await within(dlg).findByText(path);
+    // Its labels wrap anywhere: a path without a break widens no table.
+    expect(within(dlg).getByRole("table")).toHaveClass("ranked");
+    expect(
+      within(dlg)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Name", "Count", "Share"]);
+  });
+
+  it("gates a list's change column one way, its card and full list alike", async () => {
+    const path = "GET /wp-content/uploads/:n/:n/618_1_wandtattoo_ich_kann.gif";
+    // The comparison on, but every change nulled for a gap, or no figures
+    // in the comparison.
+    for (const edit of [
+      (l: List) => {
+        l.rows = l.rows.map((r) => ({ ...r, change: null }));
+      },
+      (l: List) => {
+        l.rows = l.rows.map((r) => ({ ...r, change: null }));
+        l.prev_since = "2026-11-02T23:00:00Z";
+      },
+    ]) {
+      window.history.replaceState(null, "", "/dashboard/");
+      const fx = fixtureFetch();
+      setFetcher(async (u, i) => {
+        const res = await fx(u, i);
+        if (!/\/api\/dash\/list\?.*\bdim=probed\b/.test(u)) return res;
+        const l = (await res.json()) as List;
+        edit(l);
+        return new Response(JSON.stringify(l), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+      render(<App />);
+      const probed = await screen.findByRole("region", {
+        name: "Probed paths",
+      });
+      await within(probed).findByText(path);
+      for (const r of probed.querySelectorAll(".bl > .r")) {
+        expect(r.querySelector(":scope > .d")).toBeNull();
+        // No change named either: a share is the one percentage.
+        expect(r.getAttribute("title") ?? "").not.toMatch(/new|%.*%/);
+      }
+      fireEvent.click(
+        within(probed).getByRole("button", { name: /Show all 9/ }),
+      );
+      const dlg = screen.getByRole("dialog");
+      await within(dlg).findByText(path);
+      expect(
+        within(dlg)
+          .getAllByRole("columnheader")
+          .map((h) => h.textContent),
+      ).toEqual(["Name", "Count", "Share"]);
+      cleanup();
+    }
+  });
+
+  it("names in a bar's title what its row shows, the note too", async () => {
+    start();
+    const probed = await screen.findByRole("region", { name: "Probed paths" });
+    const env = (await within(probed).findByText("GET /.env")).closest(".r")!;
+    expect(env.getAttribute("title")).toContain(
+      `GET /.env${SEP}looking for leaked secrets${SEP}`,
+    );
+    expect(env.getAttribute("title")).toContain(`${SEP}new${SEP}`);
+    // The model's note, cut, says itself whole where it is hovered.
+    expect(
+      within(probed).getByText("generic numeric path probe"),
+    ).toHaveAttribute(
+      "title",
+      "generic numeric path probe (written by the model)",
+    );
+    // A note that is no model's: the network after the address.
+    const refused = screen.getByRole("region", {
+      name: "Refused requests by address",
+    });
+    const addr = (await within(refused).findByText("198.51.100.7")).closest(
+      ".r",
+    )!;
+    expect(addr.getAttribute("title")).toContain(
+      `198.51.100.7${SEP}AS64510 Example Cloud${SEP}`,
+    );
+    cleanup();
+
+    // Without a comparison the title names no change: the row shows none.
+    start("/dashboard/?cmp=off");
+    const p2 = await screen.findByRole("region", { name: "Probed paths" });
+    const env2 = (await within(p2).findByText("GET /.env")).closest(".r")!;
+    expect(env2.getAttribute("title")).toBe(
+      joinSep([
+        "GET /.env",
+        "looking for leaked secrets",
+        "96",
+        pct(4),
+        "click for the log",
+      ]),
+    );
   });
 
   it("shows no figures row for a domain without data", async () => {
