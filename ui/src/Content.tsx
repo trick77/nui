@@ -14,7 +14,6 @@ const mono = (s: string) => (
 
 export function Content({ watch }: { watch: Loaded<Watch> }) {
   const { feed, openLog, scope } = useDash();
-  const cmp = scope.cmp !== "off";
   // What people experienced: no figure of bots'.
   const people = scope.aud !== "bots";
   const pageCols: Col[] = [
@@ -29,7 +28,7 @@ export function Content({ watch }: { watch: Loaded<Watch> }) {
       cell: (r) => pct(r.entry),
       show: (rows) => rows.some((r) => r.entry != null),
     },
-    ...(cmp ? [changeCol] : []),
+    changeCol,
   ];
   const eventCols: Col[] = [
     {
@@ -45,7 +44,7 @@ export function Content({ watch }: { watch: Loaded<Watch> }) {
     },
     { head: "Count", num: true, cell: (r) => num(r.value) },
     { head: "Visitors", num: true, cell: (r) => num(r.second) },
-    ...(cmp ? [changeCol] : []),
+    changeCol,
   ];
   return (
     <>

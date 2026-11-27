@@ -313,6 +313,7 @@ export function GenText({
   text,
   className = "",
   hang = false,
+  cut = false,
 }: {
   gen: string | null | undefined;
   text: string;
@@ -320,11 +321,16 @@ export function GenText({
   // A block whose mark hangs in a margin every text of it keeps, marked or
   // not: wrapped lines and unmarked rows start where the marked text does.
   hang?: boolean;
+  // Text that may be cut: its title, over the row's, carries it whole.
+  cut?: boolean;
 }) {
   const h = hang ? "hang " : "";
   if (gen)
     return (
-      <span className={`${h}gen ${className}`} title="Written by the model">
+      <span
+        className={`${h}gen ${className}`}
+        title={cut ? `${gen} (written by the model)` : "Written by the model"}
+      >
         {gen}
       </span>
     );

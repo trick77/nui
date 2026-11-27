@@ -263,9 +263,11 @@ function TrafficPanels({ classes }: { classes: Loaded<Classes> }) {
                 gen={r.gen}
                 text={r.sub}
                 className="ml-2 text-[12px] text-muted"
+                cut
               />
             </>
           )}
+          note={(r) => r.gen || r.sub}
           onRow={(r) => openLog({ path: r.key })}
           empty="Nothing probed in this range."
         />
@@ -301,6 +303,7 @@ function TrafficPanels({ classes }: { classes: Loaded<Classes> }) {
               )}
             </>
           )}
+          note={(r) => r.sub}
           onRow={(r) => openLog({ addr: r.key })}
           empty="Nothing refused in this range."
         />
@@ -327,7 +330,7 @@ const CLASS_OF_SUB: Record<string, ClassKey> = {
 // The known bots and uptime probes by the bot list's name. What a row says
 // beyond the name is the list's today, and what its clients claim.
 function Services() {
-  const { scope, openLog } = useDash();
+  const { openLog } = useDash();
   return (
     <TopList
       id="services-panel"
@@ -373,7 +376,7 @@ function Services() {
         },
         { head: "Requests", num: true, cell: (r) => num(r.value) },
         { head: "Addresses", num: true, cell: (r) => num(r.second) },
-        ...(scope.cmp !== "off" ? [changeCol] : []),
+        changeCol,
       ]}
       onRow={(r) => openLog({ service: r.key })}
       empty="No known bot or uptime probe in this range."
