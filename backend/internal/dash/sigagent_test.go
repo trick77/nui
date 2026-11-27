@@ -302,6 +302,12 @@ func TestServicesPrevSince(t *testing.T) {
 	if cb := rowsByKey(before)["ClaudeBot"]; cb["change"] == nil || before["prev_since"] != nil {
 		t.Fatalf("before: %v", before)
 	}
+	// A known bot's change is no verdict either way.
+	for k, row := range rowsByKey(before) {
+		if row["change"] != nil && row["verdict"] != "flat" {
+			t.Errorf("%s verdict %v", k, row["verdict"])
+		}
+	}
 	// 7d's closed part is the 16th to the 21st, compared with the 9th to the 14th.
 	site, _ := r.s.Sites.Lookup(feedSite)
 	from := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
@@ -318,6 +324,35 @@ func TestServicesPrevSince(t *testing.T) {
 	for k, row := range rowsByKey(after) {
 		if row["change"] != nil || num64(row["value"]) != num64(rowsByKey(before)[k]["value"]) {
 			t.Errorf("%s %v, was %v", k, row, rowsByKey(before)[k])
+		}
+	}
+}
+
+// A known bot's rise and fall are no verdict either way.
+func TestServicesChangeFlat(t *testing.T) {
+	t.Parallel()
+	r := servicesRig(t, nil)
+	r.s.Source = SourceRaw
+	// 7d's closed part (the 17th to the 21st here) holds 25 of ClaudeBot's requests and 10 of Searchy's; the 9th to
+	// the 14th 10 and 20.
+	site, _ := r.s.Sites.Lookup(feedSite)
+	ts := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC).UnixMilli()
+	var evs []store.Event
+	for svc, n := range map[string]int{"ClaudeBot": 10, "Searchy": 20} {
+		for range n {
+			evs = append(evs, store.Event{SiteID: site.ID, TS: ts, Source: "server", Kind: "request", IP: "192.0.2.9",
+				IPKey: "192.0.2.9", UA: svc + "/1.0", Path: "/x", Template: "GET /x", Method: "GET", Status: 200,
+				Cls: store.ClsBot, Svc: svc, Props: `{}`})
+		}
+	}
+	if err := r.s.DB.InsertEvents(t.Context(), evs); err != nil {
+		t.Fatal(err)
+	}
+	_, body := r.get(t, "list", p(feedSite, "dim", "services", "range", "7d", "tz", "UTC", "limit", "50"))
+	for k, want := range map[string]float64{"ClaudeBot": 150, "Searchy": -50} {
+		row := rowsByKey(body)[k]
+		if c, _ := row["change"].(map[string]any); c["pct"] != want || row["verdict"] != "flat" {
+			t.Errorf("%s %v", k, row)
 		}
 	}
 }

@@ -834,14 +834,14 @@ const LISTS: Record<string, ListRow[]> = {
   ],
   // The bot list's names: an agent with the service behind it, a purpose
   // only declared where the service's addresses serve several, what its
-  // clients say in Signature-Agent.
+  // clients say in Signature-Agent. A change is no verdict either way.
   services: [
-    row("Googlebot", 1904, 6, { pct: 4 }, "good", {
+    row("Googlebot", 1904, 6, { pct: 4 }, "flat", {
       sub: "bot",
       service: "Google",
       category: "search",
     }),
-    row("GPTBot", 1240, 18, { pct: 35 }, "good", {
+    row("GPTBot", 1240, 18, { pct: 35 }, "flat", {
       sub: "bot",
       service: "OpenAI",
       category: "ai-training",
@@ -851,13 +851,13 @@ const LISTS: Record<string, ListRow[]> = {
       sub: "monitor",
       category: "monitoring",
     }),
-    row("OAI-SearchBot", 410, 7, { new: true }, "good", {
+    row("OAI-SearchBot", 410, 7, { new: true }, "flat", {
       sub: "bot",
       service: "OpenAI",
       category: "ai-search",
       declared: true,
     }),
-    row("ChatGPT-User", 96, 31, { pct: -12 }, "bad", {
+    row("ChatGPT-User", 96, 31, { pct: -12 }, "flat", {
       sub: "bot",
       service: "OpenAI",
       category: "ai-assistant",
@@ -865,8 +865,8 @@ const LISTS: Record<string, ListRow[]> = {
       says: "chatgpt.com",
     }),
     // A service whose agents differ in purpose but share its group.
-    row("Perplexity", 61, 5, { pct: 8 }, "good", { sub: "bot" }),
-    row("MJ12bot", 44, 3, { pct: -30 }, "bad", { sub: "bot" }),
+    row("Perplexity", 61, 5, { pct: 8 }, "flat", { sub: "bot" }),
+    row("MJ12bot", 44, 3, { pct: -30 }, "flat", { sub: "bot" }),
   ],
   agents: [
     row("lens-cli/2.0.1", 1480, 8, { pct: 6 }, "good", { failed: 3.1 }),

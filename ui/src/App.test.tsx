@@ -1753,6 +1753,9 @@ describe("known bots by service", () => {
     expect(user.cells[0].textContent).toBe(
       `ChatGPT-UserOpenAI${SEP}ai-assistantdeclared${SEP}says it is chatgpt.com`,
     );
+    // A rise or a fall, no verdict either way.
+    for (const r of [gpt, user])
+      expect(r.querySelector(".delta")).toHaveClass("flat");
     // A long host breaks anywhere rather than widen the table.
     expect(within(user).getByText("chatgpt.com")).toHaveClass(
       "font-mono",
