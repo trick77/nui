@@ -62,7 +62,8 @@ func ageFloor(now time.Time, months int) int64 { return store.AgeFloor(now, mont
 // yet is store.ErrNotDue, and the cap waits for it. The wait is bounded: the cap asks for days before its tail and
 // the day after each, and lastDue is at least the day before the tail at any time and the tail's first from 02:00
 // UTC on, so only the tail's first day is ever not due, and only from 00:00 to 02:00 (TestCover_WaitBounded). A day
-// waiting for the bot list (Options.Name) is an error: the cap's round ends there, the raw stays.
+// waiting for the bot list (Options.Name) is store.ErrUnnamed, told without reading the day: the cap keeps its raw;
+// the job reports the wait.
 func Cover(st *store.Store, o Options) func(ctx context.Context, site, day int64) error {
 	now := o.Now
 	if now == nil {
@@ -78,6 +79,9 @@ func Cover(st *store.Store, o Options) func(ctx context.Context, site, day int64
 			return nil
 		}
 		_, err := b.buildIfNeeded(ctx, site, day)
+		if errors.Is(err, classify.ErrNoBotList) {
+			return fmt.Errorf("%w: %w", store.ErrUnnamed, err)
+		}
 		return err
 	}
 }

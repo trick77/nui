@@ -336,22 +336,27 @@ type capRun struct {
 	o RetentionOptions
 	// floor is AgeFloor: older raw is age retention's, deleted within a day and never built.
 	floor int64
+	// unnamed are the site-days Cover answered ErrUnnamed for this round: not asked again (each ask reads the day).
+	unnamed map[[2]int64]bool
 }
 
-// capStep is one kind of row the cap deletes: oldest finds a site's oldest day before the tail that still has such
-// rows (at orders it against the other sites', dim is a list's dimension), del deletes a chunk of them.
+// capStep is one kind of row the cap deletes: oldest finds a site's oldest day from from (the raw step's, past the
+// days it passed over; the others take 0) and before the tail that still has such rows (at orders it against the
+// other sites', dim is a list's dimension), del deletes a chunk of them.
 type capStep struct {
 	what   string
-	oldest func(ctx context.Context, s *Store, site, tail int64) (day, at int64, dim string, ok bool, err error)
+	oldest func(ctx context.Context, s *Store, site, from, tail int64) (day, at int64, dim string, ok bool, err error)
 	del    func(ctx context.Context, s *Store, c *capRun, site, day int64, dim string) (int64, error)
 }
 
 // capSteps are what the cap deletes, in order: raw before the aggregates (the figures outlive it, as age retention
 // has it), then the per-address rows, the lists, the hours: the finest grain first.
 var capSteps = []capStep{
-	{what: "raw events", oldest: func(ctx context.Context, s *Store, site, tail int64) (int64, int64, string, bool, error) {
+	{what: "raw events", oldest: func(ctx context.Context, s *Store, site, from, tail int64) (int64, int64, string, bool,
+		error) {
 		var ts sql.NullInt64
-		err := s.DB.QueryRowContext(ctx, `SELECT MIN(ts) FROM event WHERE site_id = ?`, site).Scan(&ts)
+		err := s.DB.QueryRowContext(ctx, `SELECT MIN(ts) FROM event WHERE site_id = ? AND ts >= ?`, site, from*dayMS).
+			Scan(&ts)
 		return ts.Int64 / dayMS, ts.Int64, "", ts.Valid && ts.Int64 < tail*dayMS, err
 	}, del: capRaw},
 	// A day's per-address rows go together, the day's other figures stay readable: its address answers are empty,
@@ -373,11 +378,53 @@ var capSteps = []capStep{
 // ErrNotDue is Cover's answer for a day the aggregate job does not build yet but will: the cap waits for it.
 var ErrNotDue = errors.New("day not due for building yet")
 
-// capStalled is the cap's raw step at a day it may not delete: not built, and Cover did not build it. wait: Cover
-// answered ErrNotDue for it or the day after; else no Cover, or a write raced the build.
+// ErrUnnamed is Cover's answer for a day whose bots wait for the bot list's names (no list loaded): a wait, no
+// failure. The cap keeps the day's raw until a build with the list (capUnnamed).
+var ErrUnnamed = errors.New("day waits for the bot list")
+
+// capWhy is why the cap's raw step may not delete a day.
+type capWhy int
+
+const (
+	// capNotBuilt: no Cover, Cover built nothing, or a write raced the build. The site's raw step ends.
+	capNotBuilt capWhy = iota
+	// capNotDue: Cover answered ErrNotDue for the day or the one after. The site's raw step ends, the round waits.
+	capNotDue
+	// capUnnamed: Cover answered ErrUnnamed for the day, which holds a frozen, clean build to read meanwhile. The
+	// site's raw step passes over it, the round waits.
+	capUnnamed
+	// capUnnamedEnds: Cover answered ErrUnnamed for the day or the one after, and the one that waits has no frozen,
+	// clean build: passed over, it would read empty once a later day's raw is cut (the dashboard reads raw only from
+	// after the newest cut day). The site's raw step ends, the round waits.
+	capUnnamedEnds
+)
+
+// capStalled is the cap's raw step at a day it may not delete: not built, and Cover did not build it. at is the day
+// its warning names: the one that waits for the bot list, else day. resume is, for capUnnamed, the first day the
+// site's raw step goes on from.
 type capStalled struct {
-	site, day int64
-	wait      bool
+	site, day, at int64
+	why           capWhy
+	resume        int64
+}
+
+// capWarn is a stalled or waiting site's warning, once per reason (RetentionOptions.capStalls).
+type capWarn struct {
+	site int64
+	why  capWhy
+}
+
+var capWarnings = [...]string{
+	capNotBuilt: "Size cap reached: the site's oldest raw day's figures are not built, its raw from there stays until " +
+		"they are",
+	capNotDue: "Size cap waits: the day after the site's oldest raw day is not due for building yet, no aggregate goes " +
+		"and the database stays over the cap until it is",
+	capUnnamed: "Size cap waits: a day of the site's waits for the bot list, its raw stays and the cap passes over it " +
+		"(its older figures read meanwhile), no aggregate goes and the database may stay over the cap until a list is " +
+		"loaded",
+	capUnnamedEnds: "Size cap waits: a day of the site's waits for the bot list and has no figures to read meanwhile, " +
+		"the site's raw from there stays, no aggregate goes and the database may stay over the cap until a list is " +
+		"loaded",
 }
 
 func (e capStalled) Error() string {
@@ -388,7 +435,8 @@ func (e capStalled) Error() string {
 // it goes as it would within a day. A later day goes once dayCoverage passes (a cut day always); else Cover builds
 // it and the day after, and it goes if it passes then. A day that still does not is capStalled: the site's raw step
 // ends there for this round. From 00:00 to 02:00 UTC the day after the oldest one the cap may cut is the tail's
-// first, not due yet (ErrNotDue): a wait that ends by itself, as the job or the next round's Cover builds it then.
+// first, not due yet (ErrNotDue): a wait that ends by itself, as the job or the next round's Cover builds it then. A
+// day whose bots, or the day after's, wait for the bot list (ErrUnnamed): capUnnamed.
 func capRaw(ctx context.Context, s *Store, c *capRun, site, day int64, _ string) (int64, error) {
 	if day < c.floor {
 		return s.deleteEvents(ctx, dayEvents, site, day*dayMS, (day+1)*dayMS)
@@ -397,12 +445,20 @@ func capRaw(ctx context.Context, s *Store, c *capRun, site, day int64, _ string)
 	if err != nil || cv == covered {
 		return n, err
 	}
-	wait := false
+	why := capNotBuilt
 	if c.o.Cover != nil {
 		for _, d := range []int64{day, day + 1} {
-			if err := c.o.Cover(ctx, site, d); errors.Is(err, ErrNotDue) {
-				wait = true
-			} else if err != nil {
+			err := ErrUnnamed
+			if !c.unnamed[[2]int64{site, d}] {
+				err = c.o.Cover(ctx, site, d)
+			}
+			switch {
+			case errors.Is(err, ErrNotDue):
+				why = capNotDue
+			case errors.Is(err, ErrUnnamed):
+				c.unnamed[[2]int64{site, d}] = true
+				return s.capUnnamed(ctx, c, site, day, d)
+			case err != nil:
 				return 0, err
 			}
 		}
@@ -410,7 +466,31 @@ func capRaw(ctx context.Context, s *Store, c *capRun, site, day int64, _ string)
 			return n, err
 		}
 	}
-	return 0, capStalled{site, day, wait}
+	return 0, capStalled{site: site, day: day, at: day, why: why}
+}
+
+// capUnnamed is capRaw at a day whose bots (waits: day), or the day after's (waits: day + 1), wait for the bot list.
+// The day after waiting, Cover may have just built day, and that one's older clean build lets day go: tried again.
+// Else a waiting day with a frozen, clean build (an older builder's) is passed over, its raw kept: the later days'
+// figures were built against it, the dashboard reads its own figures meanwhile, it goes once a list is loaded. One
+// without such a build ends the site's raw step: with a later day cut it would read empty.
+func (s *Store) capUnnamed(ctx context.Context, c *capRun, site, day, waits int64) (int64, error) {
+	if waits > day {
+		if n, cv, err := s.purgeChunk(ctx, site, day, c.o.Builder, true); err != nil || cv == covered {
+			return n, err
+		}
+	}
+	stalled := capStalled{site: site, day: day, at: waits, why: capUnnamedEnds}
+	if waits == day {
+		days, err := s.AggDays(ctx, site, day, day)
+		if err != nil {
+			return 0, err
+		}
+		if d := days[day]; d.Frozen && d.Dirty == AggClean {
+			stalled.why, stalled.resume = capUnnamed, day+1
+		}
+	}
+	return 0, stalled
 }
 
 // cutAddrs deletes a site-day's per-address rows, all of them in one transaction with the day's mark (addrs_cut):
@@ -473,7 +553,7 @@ const (
 )
 
 // capFloor is a lower bound of the bytes the aggregate steps can never free: each site's raw from rawFrom (the tail,
-// or the day its raw step stopped at) on and the actor classes, which no step touches. Text bytes plus the floors
+// or the first day its raw step stopped at) on and the actor classes, which no step touches. Text bytes plus the floors
 // above: no page, cell or integer bytes beyond them, so the real size is larger and a cap below the bound is out of
 // reach for certain; between the bound and the real size the steps still delete in vain. A raw day per statement,
 // actor classes a month (dash's classDays).
@@ -511,8 +591,9 @@ func (s *Store) capFloor(ctx context.Context, sites map[string]Site, rawFrom map
 }
 
 // minDay is an oldest finder from one MIN statement on a table's primary key (one index probe), its unit per day.
-func minDay(q string, perDay int64) func(context.Context, *Store, int64, int64) (int64, int64, string, bool, error) {
-	return func(ctx context.Context, s *Store, site, tail int64) (int64, int64, string, bool, error) {
+func minDay(q string, perDay int64) func(context.Context, *Store, int64, int64, int64) (int64, int64, string, bool,
+	error) {
+	return func(ctx context.Context, s *Store, site, _, tail int64) (int64, int64, string, bool, error) {
 		var v sql.NullInt64
 		err := s.DB.QueryRowContext(ctx, q, site).Scan(&v)
 		day := v.Int64 / perDay
@@ -522,7 +603,7 @@ func minDay(q string, perDay int64) func(context.Context, *Store, int64, int64) 
 
 // oldestList is the oldest day of a site's list rows: agg_list's key starts with (site_id, dim, day), so one MIN per
 // dimension, the dimensions found by skipping along the key.
-func oldestList(ctx context.Context, s *Store, site, tail int64) (int64, int64, string, bool, error) {
+func oldestList(ctx context.Context, s *Store, site, _, tail int64) (int64, int64, string, bool, error) {
 	var best int64
 	var bestDim string
 	found := false
@@ -553,11 +634,15 @@ func oldestList(ctx context.Context, s *Store, site, tail int64) (int64, int64, 
 // deleting aggregates can still reach the target (capFloor): figures deleted in vain are lost for good. A site whose
 // raw step stops at a day it may not delete (capStalled) keeps its raw from there on for this round, and no aggregate
 // of its from that day on goes (the job builds those days); the other sites and the aggregate steps go on, unless a
-// site's day only waits to fall due (capStalled.wait): then the round deletes no aggregate, since within two hours
+// site's day only waits to fall due (capNotDue): then the round deletes no aggregate, since within two hours
 // that day's raw can go instead (whether it is enough is not checked), and the database stays over the cap
-// meanwhile. agg_day stays: it says which days were built, and
-// which the cap cut. Each step warns once when it first deletes, a stalled or waiting site once per day it stops at
-// (o.capStalls across rounds); it returns the events and rows deleted.
+// meanwhile. A day waiting for the bot list is passed over where it has figures to read (capUnnamed: the site's raw
+// step goes on with its later days), else it ends the site's raw step (capUnnamedEnds); either way no aggregate of
+// the site's from that day on goes, and the round deletes no aggregate either: that raw goes once a list is loaded,
+// the aggregates would be lost for good. agg_day stays: it says which days were built, and which the cap cut. Each
+// step warns once when it first deletes, a stalled or waiting site once per reason and the first day it names
+// (o.capStalls across rounds); it returns the events and rows deleted. Waits are no error: the aggregate job reports
+// a day waiting for the bot list, db.size_cap a database left over the cap.
 func (s *Store) EnforceCap(ctx context.Context, o RetentionOptions, now time.Time) (int64, error) {
 	maxBytes, log := o.MaxBytes, o.Log
 	if log == nil {
@@ -580,13 +665,16 @@ func (s *Store) EnforceCap(ctx context.Context, o RetentionOptions, now time.Tim
 	}
 	today := now.UnixMilli() / dayMS
 	tail, target := today-(CapTail-1), maxBytes*9/10
-	c := &capRun{o: o, floor: AgeFloor(now, o.Months)}
+	c := &capRun{o: o, floor: AgeFloor(now, o.Months), unnamed: map[[2]int64]bool{}}
 	stalls := o.capStalls
 	if stalls == nil {
-		stalls = map[int64]int64{}
+		stalls = map[capWarn]int64{}
 	}
-	// rawFrom is each site's oldest day whose raw stays this round: the tail, or the day its raw step stopped at.
-	rawFrom := map[int64]int64{}
+	seen := map[capWarn]bool{} // this round's
+	// rawFrom is each site's oldest day whose raw stays this round: the tail, or the first day its raw step stopped
+	// at or passed over. next is the day a site's raw step looks on from, past the days it passed over; ended, the
+	// sites whose raw step stopped.
+	rawFrom, next, ended := map[int64]int64{}, map[int64]int64{}, map[int64]bool{}
 	for _, st := range sites {
 		rawFrom[st.ID] = tail
 	}
@@ -594,11 +682,7 @@ func (s *Store) EnforceCap(ctx context.Context, o RetentionOptions, now time.Tim
 	waiting := false
 	for i, step := range capSteps {
 		if i == 1 {
-			for _, st := range sites {
-				if _, ok := stalls[st.ID]; ok && rawFrom[st.ID] == tail {
-					delete(stalls, st.ID) // not stalled this round
-				}
-			}
+			maps.DeleteFunc(stalls, func(k capWarn, _ int64) bool { return !seen[k] }) // not stalled this round
 			if waiting && used > target {
 				return total, nil
 			}
@@ -621,10 +705,14 @@ func (s *Store) EnforceCap(ctx context.Context, o RetentionOptions, now time.Tim
 			var dim string
 			found := false
 			for _, st := range sites {
-				if i == 0 && rawFrom[st.ID] < tail {
-					continue // stalled
+				from, until := int64(0), rawFrom[st.ID]
+				if i == 0 {
+					if ended[st.ID] {
+						continue
+					}
+					from, until = next[st.ID], tail
 				}
-				d, a, dm, ok, err := step.oldest(ctx, s, st.ID, rawFrom[st.ID])
+				d, a, dm, ok, err := step.oldest(ctx, s, st.ID, from, until)
 				if err != nil {
 					return total, err
 				}
@@ -639,23 +727,22 @@ func (s *Store) EnforceCap(ctx context.Context, o RetentionOptions, now time.Tim
 			total += n
 			var stalled capStalled
 			if errors.As(err, &stalled) {
-				rawFrom[stalled.site] = stalled.day
-				waiting = waiting || stalled.wait
-				// Once per site, day and reason: a day that waited and then stalls says so too.
-				seen := stalled.day
-				if stalled.wait {
-					seen = ^stalled.day
+				// The site's first such day: no aggregate of its from there on goes, the later days cut since included.
+				rawFrom[stalled.site] = min(rawFrom[stalled.site], stalled.day)
+				if stalled.why == capUnnamed {
+					next[stalled.site] = stalled.resume
+				} else {
+					ended[stalled.site] = true
 				}
-				if last, ok := stalls[stalled.site]; !ok || last != seen {
-					stalls[stalled.site] = seen
-					msg := "Size cap reached: the site's oldest raw day's figures are not built, its raw from there " +
-						"stays until they are"
-					if stalled.wait {
-						msg = "Size cap waits: the day after the site's oldest raw day is not due for building yet, no " +
-							"aggregate goes and the database stays over the cap until it is"
+				waiting = waiting || stalled.why != capNotBuilt
+				// Once per site, reason and the round's first day: a day that waited and then stalls says so too.
+				if k := (capWarn{stalled.site, stalled.why}); !seen[k] {
+					seen[k] = true
+					if last, ok := stalls[k]; !ok || last != stalled.at {
+						stalls[k] = stalled.at
+						log.Warn(capWarnings[stalled.why], "site", stalled.site, "day",
+							time.UnixMilli(stalled.at*dayMS).UTC().Format(time.DateOnly), "max_mb", maxBytes>>20)
 					}
-					log.Warn(msg, "site", stalled.site, "day",
-						time.UnixMilli(stalled.day*dayMS).UTC().Format(time.DateOnly), "max_mb", maxBytes>>20)
 				}
 				continue
 			}
@@ -827,23 +914,23 @@ type RetentionOptions struct {
 	// Builder is the aggregate build code's version (agg.Version): only a day built clean by it lets its raw go.
 	Builder int64
 	// Cover builds a site-day's aggregates when the aggregate job would (due, not before its age floor), so the cap
-	// can delete its raw; store does not import agg. A day not due yet: ErrNotDue, and the cap waits for it. nil: the
-	// cap deletes no raw it finds unbuilt.
+	// can delete its raw; store does not import agg. A day not due yet: ErrNotDue, and the cap waits for it; one whose
+	// bots wait for the bot list: ErrUnnamed, and the cap keeps its raw. nil: the cap deletes no raw it finds unbuilt.
 	Cover func(ctx context.Context, site, day int64) error
 	// MaxBytes caps what the rows take (0: no cap).
 	MaxBytes int64
 	// CapEvery is how often the cap is checked (UsedBytes is three pragmas): five minutes by default, so the disk
 	// bound is the cap plus minutes of intake, not a day of it (two hours of it from 00:00 to 02:00 UTC, while a
-	// round waits). Age retention runs on the first check and daily.
+	// round waits; while days wait for the bot list, until it loads). Age retention runs on the first check and daily.
 	CapEvery time.Duration
 	Now      func() time.Time
 	Log      *slog.Logger
 	// Report takes each round's outcome (job.failed: retention, purge) and whether the rows are over the cap
 	// (db.size_cap).
 	Report alert.Reporter
-	// capStalls is, per site, the day the cap's raw step last stopped at, complemented while it only waits
-	// (RunRetention keeps it across rounds): its warning once per reason, not every few minutes.
-	capStalls map[int64]int64
+	// capStalls is, per site and reason, the first day the cap's raw step last stopped at or passed over
+	// (RunRetention keeps it across rounds): its warning once, not every few minutes.
+	capStalls map[capWarn]int64
 }
 
 // logWaits says once per site and day where the purge stopped: waiting for the job (info), or at a day nothing will
@@ -878,7 +965,7 @@ func (s *Store) RunRetention(ctx context.Context, o RetentionOptions) {
 	if o.Log == nil {
 		o.Log = slog.Default()
 	}
-	o.capStalls = map[int64]int64{}
+	o.capStalls = map[capWarn]int64{}
 	// A database that held events before Trakk switched incremental auto-vacuum on keeps its mode: switching needs a
 	// full VACUUM, which locks the collector out for minutes and needs the file's size again in free disk. Retention
 	// runs without it: deleted pages are reused by new rows (the cap counts the rows, not the file), the file does

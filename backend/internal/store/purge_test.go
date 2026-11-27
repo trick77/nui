@@ -460,7 +460,7 @@ func TestEnforceCap_StallOneSite(t *testing.T) {
 	keptA := addrs(a, stuck)
 	var logs bytes.Buffer
 	o := coverOpts(st, RetentionOptions{Months: 25, Builder: 1, Log: slog.New(slog.NewTextHandler(&logs, nil)),
-		capStalls: map[int64]int64{}})
+		capStalls: map[capWarn]int64{}})
 	cover := o.Cover
 	o.Cover = func(ctx context.Context, site, day int64) error {
 		if site == a {
@@ -545,7 +545,7 @@ func TestEnforceCap_Wait(t *testing.T) {
 			kept, events := aggs(), countRows(t, st, `SELECT COUNT(*) FROM event`)
 			var logs bytes.Buffer
 			o := RetentionOptions{Months: 25, Builder: 1, Log: slog.New(slog.NewTextHandler(&logs, nil)),
-				capStalls: map[int64]int64{},
+				capStalls: map[capWarn]int64{},
 				Cover: func(_ context.Context, _, day int64) error {
 					if c.notDue && day == stuck+1 {
 						return ErrNotDue
@@ -574,6 +574,103 @@ func TestEnforceCap_Wait(t *testing.T) {
 			if strings.Count(out, "Size cap waits") != 1 || strings.Contains(out, "deleting") ||
 				strings.Contains(out, "exceed") {
 				t.Errorf("warnings:\n%s", out)
+			}
+		})
+	}
+}
+
+// A site's day whose bots wait for the bot list (Cover: ErrUnnamed), the round no failure, no aggregate deleted while
+// it waits (the raw goes once a list is loaded), the wait warned once across rounds, naming the waiting day. With a
+// frozen, clean build (an older builder's) the day is passed over: the day before it goes (the waiting day's build
+// covers it), the site's later days go too, the waiting day's raw stays. Never built, or dirty, it would read empty
+// with a later day cut: the site's raw step ends at the day before it, the other site's raw goes all the same. Once
+// Cover builds the day, its raw and the day before's go.
+func TestEnforceCap_PassesOverUnnamed(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		prep   string // what the waiting day's agg_day row is made
+		passes bool
+	}{
+		{"clean older build", ``, true},
+		{"never built", `DELETE FROM agg_day WHERE site_id = ? AND day = ?`, false},
+		{"dirty", `UPDATE agg_day SET dirty = 1 WHERE site_id = ? AND day = ?`, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := open(t)
+			sites, err := st.SyncSites(t.Context(), []Site{{Domain: "a.example.com", Kind: "site", PathRules: "[]"},
+				{Domain: "b.example.com", Kind: "site", PathRules: "[]"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			a, b := sites["a.example.com"].ID, sites["b.example.com"].ID
+			now := time.Now()
+			today := now.UnixMilli() / dayMS
+			// Built by builder 1, the cap's builder 2: every day before the tail is Cover's to build.
+			purgeDays(t, st, a, today-8, today, 60)
+			purgeDays(t, st, b, today-8, today, 60)
+			unnamed := today - 7
+			if c.prep != "" {
+				if _, err := st.DB.Exec(c.prep, a, unnamed); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var logs bytes.Buffer
+			o := coverOpts(st, RetentionOptions{Months: 25, Builder: 2, Log: slog.New(slog.NewTextHandler(&logs, nil)),
+				capStalls: map[capWarn]int64{}})
+			var listed bool
+			asked := 0
+			cover := o.Cover
+			o.Cover = func(ctx context.Context, site, day int64) error {
+				if site == a && day == unnamed && !listed {
+					asked++
+					return fmt.Errorf("%w: test", ErrUnnamed)
+				}
+				return cover(ctx, site, day)
+			}
+			used, _ := st.UsedBytes(t.Context())
+			o.MaxBytes = used / 3
+			for i := range 2 {
+				if n, err := st.EnforceCap(t.Context(), o, now); err != nil || i == 0 && n == 0 {
+					t.Fatalf("cap, round %d: %d deleted, %v", i, n, err)
+				}
+			}
+			if after, _ := st.UsedBytes(t.Context()); after <= o.MaxBytes {
+				t.Fatalf("under the cap after the first round: %d, the second passed over nothing", after)
+			}
+			if asked > 2 {
+				t.Errorf("the waiting day asked for %d times in two rounds", asked)
+			}
+			left := map[int64]map[int64]int{a: rawDays(t, st, a), b: rawDays(t, st, b)}
+			for d := today - 8; d <= today; d++ {
+				if wantA := !c.passes || d == unnamed || d > today-CapTail; (left[a][d] != 0) != wantA {
+					t.Errorf("site a, day %d: %d events", d-today, left[a][d])
+				}
+				if wantB := d > today-CapTail; (left[b][d] != 0) != wantB {
+					t.Errorf("site b, day %d: %d events", d-today, left[b][d])
+				}
+			}
+			// Cover's rebuilds replace rows (none here); the cap's own deletes mark their days.
+			if n := countRows(t, st, `SELECT COUNT(*) FROM agg_day WHERE addrs_cut = 1 OR dirty = ?`,
+				AggWriting); n != 0 {
+				t.Errorf("%d days lost aggregates to the cap", n)
+			}
+			out := logs.String()
+			want, other := "cap passes over it", "no figures to read"
+			if !c.passes {
+				want, other = other, want
+			}
+			named := "day=" + time.UnixMilli(unnamed*dayMS).UTC().Format(time.DateOnly)
+			if strings.Count(out, "waits for the bot list") != 1 || strings.Count(out, want) != 1 ||
+				strings.Contains(out, other) || !strings.Contains(out, named) || strings.Contains(out, "aggregates") ||
+				strings.Contains(out, "its raw from there stays") {
+				t.Errorf("warnings:\n%s", out)
+			}
+			listed = true
+			if _, err := st.EnforceCap(t.Context(), o, now); err != nil {
+				t.Fatal(err)
+			}
+			if left := rawDays(t, st, a); left[today-8] != 0 || left[unnamed] != 0 {
+				t.Errorf("site a with the day built: %v", left)
 			}
 		})
 	}

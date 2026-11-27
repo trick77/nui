@@ -184,6 +184,16 @@ func (b *Builder) buildDay(ctx context.Context, site, day int64) (bool, error) {
 			return false, err
 		}
 	}
+	// A day that waits says so before the day's read: the job and the cap ask for it every few minutes.
+	if noList {
+		bots, err := hasBots(ctx, st, site, day)
+		if err != nil {
+			return false, err
+		}
+		if bots {
+			return false, fmt.Errorf("its bots wait for their names: %w", classify.ErrNoBotList)
+		}
+	}
 	d := newDayBuild(site, day)
 	pre, err := d.load(ctx, st)
 	if err != nil {
@@ -193,6 +203,7 @@ func (b *Builder) buildDay(ctx context.Context, site, day int64) (bool, error) {
 		return pre.Dirty != store.AggWriting, st.ClearAggDirty(ctx, site, day)
 	}
 	// Frozen without a list, its bots would never be named (the purge waits for a built day, Run reports the wait).
+	// Checked again on the read: a restamp may have made a bot since hasBots.
 	if noList && d.bots {
 		return false, fmt.Errorf("its bots wait for their names: %w", classify.ErrNoBotList)
 	}
@@ -218,6 +229,24 @@ func (b *Builder) buildDay(ctx context.Context, site, day int64) (bool, error) {
 		b.beforeWrite(&w)
 	}
 	return st.WriteAggDay(ctx, w)
+}
+
+// hasBots reports whether a site-day holds a bot's or a probe's row: one range of event_site_ts, stopped at the first
+// such row.
+func hasBots(ctx context.Context, st *store.Store, site, day int64) (bool, error) {
+	rows, err := query(ctx, st.DB, `SELECT EXISTS (SELECT 1 FROM event WHERE site_id = ? AND ts >= ? AND ts < ?
+		AND cls IN (?, ?))`, site, day*dayMS, (day+1)*dayMS, store.ClsBot, store.ClsMonitor)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ok bool
+	if rows.Next() {
+		if err := rows.Scan(&ok); err != nil {
+			return false, err
+		}
+	}
+	return ok, rows.Err()
 }
 
 // load reads the day's state, the day before's sessions and the day's rows in one read transaction: one snapshot,

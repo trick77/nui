@@ -282,9 +282,11 @@ The release that adds services and page experience applies two migrations at its
 day with raw in the background and names the stored events of known bots and probes by the bot list, newest day first
 (the job `names`), rebuilding each day it names. While no bot list is loaded, a day with a bot's or a probe's rows
 waits unbuilt, its raw kept: `agg` reports failing, `names` too once it has waited an hour, and the size cap, once
-reached, stops at such a day, deleting no aggregates either: `retention` reports failing and the database stays over
-the cap. The Web Vitals count only from that release's script, which measures CLS and INP the standard way: a
-browser still holding an older copy sends none that count.
+reached, deletes no aggregates meanwhile and keeps such a day's raw: it passes over the day and cuts the site's later
+days' raw where an older release built figures for it (shown meanwhile, not its raw), else it stops at the day for
+that site and goes on with the other sites. If that is not enough, the database stays over the cap (`db.size_cap`)
+until a list is loaded. The Web Vitals count only from that release's script, which measures CLS and INP the
+standard way: a browser still holding an older copy sends none that count.
 
 ### Notifications
 

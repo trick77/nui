@@ -1,6 +1,7 @@
 package dash
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1012,6 +1013,68 @@ func TestSources_CapCutDay(t *testing.T) {
 	_, dom := r.get(t, "domain", params)
 	if st := dom["storage"].(map[string]any); st["figures_since"] != "2026-11-11T10:00:00Z" || st["oldest"] != nil {
 		t.Errorf("storage %v", st)
+	}
+}
+
+// A day waiting for the bot list keeps its raw while the size cap cuts the later days' only where it has a frozen,
+// clean build: the dashboard reads raw from after the newest cut day, so the day reads that build (an older
+// builder's) and its figures stand. Never built, the cap cuts no later day of the site and the day reads its raw.
+func TestSources_CapPassedOverDay(t *testing.T) {
+	for _, built := range []bool{true, false} {
+		r, insert := exactRig(t)
+		view := func(ts int64, ip string) store.Event {
+			return store.Event{TS: ts, Source: "browser", Kind: "page_view", Visitor: ip, SID: ip, IP: ip, IPKey: ip,
+				Template: "/", Path: "/", Cls: store.ClsHuman}
+		}
+		insert(view(at("2026-11-10T08:00:00Z"), "192.0.2.80"), view(at("2026-11-11T10:00:00Z"), "192.0.2.81"),
+			view(at("2026-11-12T10:00:00Z"), "192.0.2.82"))
+		r.build(t)
+		wait := at("2026-11-10T00:00:00Z") / dayMS
+		prep := `UPDATE agg_day SET builder = builder - 1 WHERE day = ?` // an older release's clean build
+		if !built {
+			prep = `DELETE FROM agg_day WHERE day = ?`
+		}
+		if _, err := r.s.DB.DB.Exec(prep, wait); err != nil {
+			t.Fatal(err)
+		}
+		views := func() float64 {
+			t.Helper()
+			code, ov := r.getFrom(t, SourceAuto, "overview", p(feedSite, "range", "30d", "tz", "UTC"))
+			if code != 200 {
+				t.Fatalf("overview: %d %v", code, ov)
+			}
+			for _, x := range ov["tiles"].([]any) {
+				if m := x.(map[string]any); m["key"] == "views" {
+					return num64(m["value"])
+				}
+			}
+			return -1
+		}
+		if v := views(); v != 3 {
+			t.Fatalf("built %v, before the cap: %v views", built, v)
+		}
+		used, _ := r.s.DB.UsedBytes(t.Context())
+		if _, err := r.s.DB.EnforceCap(t.Context(), store.RetentionOptions{MaxBytes: used / 100, Months: 25,
+			Builder: agg.Version, Log: slog.New(slog.DiscardHandler),
+			Cover: func(_ context.Context, _, day int64) error {
+				if day == wait {
+					return store.ErrUnnamed
+				}
+				return nil
+			}}, r.s.now()); err != nil {
+			t.Fatal(err)
+		}
+		var waiting, later int
+		if err := r.s.DB.DB.QueryRow(`SELECT COUNT(*) FILTER (WHERE ts < ?), COUNT(*) FILTER (WHERE ts >= ?)
+			FROM event`, (wait+1)*dayMS, (wait+1)*dayMS).Scan(&waiting, &later); err != nil {
+			t.Fatal(err)
+		}
+		if waiting != 1 || (later == 0) == !built {
+			t.Errorf("built %v: raw left on the waiting day %d, after it %d", built, waiting, later)
+		}
+		if v := views(); v != 3 {
+			t.Errorf("built %v, after the cap: %v views, want 3", built, v)
+		}
 	}
 }
 
