@@ -446,6 +446,9 @@ body:has(.gate) {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   border-bottom: 1px solid var(--color-border);
+  /* The selected tile's bar rises over its neighbours, not over the page's
+     sticky head. */
+  isolation: isolate;
 }
 /* Every row filled, never a lone tile. A five-digit figure beside its spark
    takes about 230px (measured). Five tiles (an API, a website without a
@@ -490,7 +493,21 @@ body:has(.gate) {
   flex-direction: column;
   justify-content: flex-start;
   padding: 16px 18px 14px;
-  box-shadow: inset -1px 0 0 var(--color-border-soft);
+  position: relative;
+  /* The dividers: a line left of the tile and one above it, outside, on its
+     neighbour's edge. With every row filled, a row's first tile's and the
+     first row's lines fall on the panel's border, which the hero clips: no
+     line at the row's end, none doubled on the tiles' bottom border. That
+     holds while the tiles sit flush in the panel's top left corner: nothing
+     above or beside them inside it. */
+  box-shadow:
+    -1px 0 0 var(--color-border-soft),
+    0 -1px 0 var(--color-border-soft);
+}
+/* Inside the tile, a pixel clear of the bar and the dividers: the hero clips
+   what lies past the panel's edge. */
+.tile:focus-visible {
+  outline-offset: -5px;
 }
 .tile:hover {
   background: rgba(255, 255, 255, 0.025);
@@ -501,9 +518,15 @@ body:has(.gate) {
     rgba(57, 135, 229, 0.16),
     rgba(57, 135, 229, 0) 85%
   );
-  box-shadow:
-    inset 0 2px 0 var(--color-s1),
-    inset -1px 0 0 var(--color-border-soft);
+}
+/* Above the next tile's divider, which lies on the tile's last column. */
+.tile[aria-pressed="true"]::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--color-s1);
+  z-index: 1;
 }
 .tile-value {
   font: 500 30px var(--font-serif);
