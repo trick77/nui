@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -271,9 +272,14 @@ func TestLiveCommand(t *testing.T) {
 	}
 }
 
+// The world at the tests' anchor, not the wall clock: the hours a one-day history steps the alert engine through and
+// the runs the day's draws place decide what the rules see.
 func TestServer(t *testing.T) {
 	k := sim.DefaultKnobs()
-	k.Days, k.Scale, k.Port, k.Speed, k.SlowMS = 1, 0.3, 9099, 3600, 1
+	k.Start, k.Days, k.Scale, k.Port, k.Speed, k.SlowMS = anchor, 1, 1.5, 9099, 3600, 1
+	if raceOn {
+		k.Scale = 0.3 // the rules' passes are checked without -race (ship.yaml's step)
+	}
 	s, err := NewServer(k, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -307,11 +313,11 @@ func TestServer(t *testing.T) {
 	}
 	// The alert engine stepped through the history: every rule of the world's notify file passed but the requests'
 	// drop, whose baseline waits for days to compare with that one day of history lacks: known (checked at 0), not
-	// passed yet.
-	var passed, drop int
-	if err := st.DB.QueryRow(`SELECT COUNT(DISTINCT rule), COUNT(DISTINCT CASE WHEN rule = 'requests-drop' THEN rule END)
-		FROM alert_rule WHERE checked_at > 0`).Scan(&passed, &drop); err != nil || passed != 23 || drop != 0 {
-		t.Errorf("rules passed: %d (the drop %d), %v", passed, drop, err)
+	// passed yet. The API's failing level waits for its 20 calls an hour as well, which a stepped hour has only with an
+	// integration's run in it. Hourly anchors over two weeks, seed 1, without that pass: 152 of 336 at scale 0.3, 7 of
+	// 336 at 1, 3 of 1008 at 1.5 (minutes 07, 30, 52). The anchor's is one of those that have it.
+	if waiting := unpassed(t, st); !raceOn && !slices.Equal(waiting, []string{"requests-drop"}) {
+		t.Errorf("rules without a pass: %v, want [requests-drop]", waiting)
 	}
 	reg, _ := sites.New(rows)
 	counters := ingest.NewCounters(nil)
@@ -319,11 +325,57 @@ func TestServer(t *testing.T) {
 		Browser: ingest.BrowserTiers(cfg.TrustedHops, nil), Feed: ingest.FeedLimiter(nil), TrustedHops: cfg.TrustedHops}
 	h := s.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) }),
 		sim.Handlers{Browser: http.HandlerFunc(c.HandleBrowser), Feed: http.HandlerFunc(c.HandleFeed)})
-	time.Sleep(500 * time.Millisecond) // half an hour of the world after serving began
+	time.Sleep(500 * time.Millisecond) // half an hour of the world after serving began: the anchor's afternoon
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/dash/sites", nil))
 	if rec.Code != http.StatusTeapot || c.Writer.Queued() == 0 || rec.Header().Get(PIDHeader) != strconv.Itoa(os.Getpid()) {
 		t.Errorf("wrapped: %d, queued %d", rec.Code, c.Writer.Queued())
+	}
+}
+
+// unpassed are the notify file's rules without a pass in st, in the file's order.
+func unpassed(t *testing.T, st *store.Store) []string {
+	t.Helper()
+	var nf struct{ Rules []struct{ Name string } }
+	if err := json.Unmarshal([]byte(NotifyFile), &nf); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.DB.Query(`SELECT DISTINCT rule FROM alert_rule WHERE checked_at > 0`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	passed := map[string]bool{}
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			t.Fatal(err)
+		}
+		passed[r] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, r := range nf.Rules {
+		if !passed[r.Name] {
+			out = append(out, r.Name)
+		}
+	}
+	return out
+}
+
+// Without BACKEND_SIM_START (server -sim, make sim) the world is anchored at the now it is given.
+func TestServerAnchorsAtNow(t *testing.T) {
+	t.Parallel()
+	now := anchor.Add(-3*time.Hour - 17*time.Minute)
+	s, err := NewServer(sim.DefaultKnobs(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if !s.World.Anchor.Equal(now) {
+		t.Errorf("anchor %v, want %v", s.World.Anchor, now)
 	}
 }
 
