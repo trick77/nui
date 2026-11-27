@@ -784,8 +784,16 @@ func TestRun_WaitsForBotList(t *testing.T) {
 	}
 
 	cover := Cover(st, Options{Now: func() time.Time { return anchor }, Name: name})
-	if err := cover(t.Context(), id, bots); !errors.Is(err, classify.ErrNoBotList) || state(bots).Frozen {
+	// The wait is told from one ask for the day's bots, not from a read of the day.
+	var reads []string
+	TraceSQL = func(q string, _ []any) { reads = append(reads, q) }
+	err := cover(t.Context(), id, bots)
+	TraceSQL = nil
+	if !errors.Is(err, classify.ErrNoBotList) || !errors.Is(err, store.ErrUnnamed) || state(bots).Frozen {
 		t.Fatalf("Cover without a list: %v, %+v", err, state(bots))
+	}
+	if len(reads) != 1 || !strings.Contains(reads[0], "cls IN") {
+		t.Errorf("reads of a waiting day: %q", reads)
 	}
 	var events int
 	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE ts >= ? AND ts < ?`, bots*dayMS, (bots+1)*dayMS).
@@ -1130,5 +1138,94 @@ func TestRetention_CapWaitsForDue(t *testing.T) {
 	if strings.Count(out, "Size cap waits") != 1 || strings.Count(out, "deleting the oldest raw events") != 1 ||
 		strings.Contains(out, "aggregates stay") || strings.Contains(out, "alone exceed") {
 		t.Errorf("warnings:\n%s", out)
+	}
+}
+
+// Every day built by an older builder, the cap's oldest raw day has bots and no bot list is loaded: the real Cover
+// does not rebuild it, the cap passes over it (its older build stands to read), its raw whole, and cuts the later
+// days' (rebuilt against it, their figures whole), the round no failure and no aggregate deleted. Once a list is
+// loaded the cap builds that day, named, and cuts it; the job leaves the day after clean.
+func TestRetention_CapPassesOverBotListWait(t *testing.T) {
+	st := openStore(t)
+	id := site(t, st)
+	discard := slog.New(slog.DiscardHandler)
+	today := anchor.UnixMilli() / dayMS
+	tail := today - (store.CapTail - 1)
+	wait := today - 7
+	padded(t, st, id, wait, wait, 2000) // most of the raw: the later days' alone do not reach the target
+	padded(t, st, id, wait+1, today, 300)
+	insert(t, st, store.Event{SiteID: id, TS: wait*dayMS + 500, Source: "server", Kind: "request", IP: "192.0.2.250",
+		IPKey: "192.0.2.250", UA: "Examplebot/1", Template: "/", Status: 200, Cls: store.ClsBot})
+	var listed atomic.Bool
+	name := func(ctx context.Context, site, day int64) (int64, error) {
+		if !listed.Load() {
+			return 0, classify.ErrNoBotList
+		}
+		return st.NameSvcDay(ctx, site, day, func(_, _ string, cls int) string {
+			if cls == store.ClsBot {
+				return "Examplebot"
+			}
+			return ""
+		})
+	}
+	raw := func(d int64) (n int) {
+		t.Helper()
+		if err := st.DB.QueryRow(`SELECT COUNT(*) FROM event WHERE ts >= ? AND ts < ?`, d*dayMS, (d+1)*dayMS).
+			Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if _, err := (&job{b: &Builder{Store: st, version: Version - 1}, log: discard}).passes(t.Context(),
+		lastDue(anchor), 0); err != nil {
+		t.Fatal(err)
+	}
+	used, _ := st.UsedBytes(t.Context())
+	var logs bytes.Buffer
+	o := store.RetentionOptions{Months: 25, Builder: Version, MaxBytes: used / 4,
+		Log:   slog.New(slog.NewTextHandler(&logs, nil)),
+		Cover: Cover(st, Options{Months: 25, Now: func() time.Time { return anchor }, Name: name})}
+	if n, err := st.EnforceCap(t.Context(), o, anchor); err != nil || n == 0 {
+		t.Fatalf("cap without a list: %d deleted, %v", n, err)
+	}
+	if day, hours := dayEvents(t, st, id, wait); raw(wait) != 2001 || !day.Frozen || day.Dirty != store.AggClean ||
+		day.Builder != Version-1 || hours != 2001 {
+		t.Errorf("the waiting day: %d of 2001 events, %+v, %d in its hours", raw(wait), day, hours)
+	}
+	for d := wait + 1; d < tail; d++ {
+		if day, hours := dayEvents(t, st, id, d); raw(d) != 0 || day.Raw || !day.BuiltBy(Version) || day.AddrsCut ||
+			hours != 300 {
+			t.Errorf("day %d: %d events left, %+v, %d in its hours", d-today, raw(d), day, hours)
+		}
+	}
+	if out := logs.String(); strings.Count(out, "cap passes over it") != 1 || strings.Contains(out, "aggregates") ||
+		strings.Contains(out, "exceed") {
+		t.Errorf("warnings:\n%s", out)
+	}
+
+	listed.Store(true)
+	used, _ = st.UsedBytes(t.Context())
+	o.MaxBytes = used - 1
+	if n, err := st.EnforceCap(t.Context(), o, anchor); err != nil || n == 0 {
+		t.Fatalf("cap with a list: %d deleted, %v", n, err)
+	}
+	if after, _ := st.UsedBytes(t.Context()); after > o.MaxBytes*9/10 {
+		t.Errorf("used %d with a list, target %d", after, o.MaxBytes*9/10)
+	}
+	// A chunk of it at least: the cap stops at the target, part-way through the day.
+	if day, hours := dayEvents(t, st, id, wait); raw(wait) == 2001 || day.Raw || !day.BuiltBy(Version) || hours != 2001 {
+		t.Errorf("the waited day with a list: %d events left, %+v, %d in its hours", raw(wait), day, hours)
+	}
+	var svc string
+	if err := st.DB.QueryRow(`SELECT key FROM agg_list WHERE site_id = ? AND dim = 'services' AND day = ?`, id, wait).
+		Scan(&svc); err != nil || svc != "Examplebot" {
+		t.Errorf("services: %q, %v", svc, err)
+	}
+	if _, err := (&job{b: &Builder{Store: st, Name: name}, log: discard}).passes(t.Context(), lastDue(anchor),
+		0); err != nil {
+		t.Fatal(err)
+	}
+	if day, _ := dayEvents(t, st, id, wait+1); day.Dirty != store.AggClean || !day.Frozen {
+		t.Errorf("the day after: %+v", day)
 	}
 }

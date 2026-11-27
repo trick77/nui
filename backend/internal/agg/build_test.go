@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -1083,6 +1084,22 @@ func TestBuild_Plans(t *testing.T) {
 	buildAll(t, st, TopK)
 	if len(seen) < 2 {
 		t.Fatalf("%d statements traced", len(seen))
+	}
+	// Without a bot list a build first asks whether the day waits.
+	noList := &Builder{Store: st, Name: func(context.Context, int64, int64) (int64, error) {
+		return 0, classify.ErrNoBotList
+	}}
+	for _, sd := range siteDays(t, st) {
+		if _, err := noList.BuildDay(t.Context(), sd.site, sd.day); err != nil && !errors.Is(err, classify.ErrNoBotList) {
+			t.Fatal(err)
+		}
+	}
+	asked := false
+	for q := range seen {
+		asked = asked || strings.Contains(q, "cls IN (?, ?)")
+	}
+	if !asked {
+		t.Error("no ask for the day's bots traced")
 	}
 	// The day's read takes the experience's fields, never props whole: a day's props are most of its bytes.
 	read := false
