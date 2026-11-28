@@ -106,6 +106,10 @@ type Bots struct {
 	// service's second listing. Apart from Rejected: agents never crowd a refused range out of its first few.
 	RejectedAgents Rejected
 	names          map[string]Named
+	// own are the operator's probes (Own), apart from Providers and the table.
+	own []*Provider
+	// clashed are the probes named like a name of the list's, which keeps its meaning (withOwn).
+	clashed []string
 }
 
 // Named is what a service's or an agent's name stands for.

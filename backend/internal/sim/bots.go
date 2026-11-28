@@ -15,6 +15,7 @@ var (
 	ProberAddr      = netip.MustParseAddr("192.0.2.66")
 	HammerAddr      = netip.MustParseAddr("192.0.2.99")
 	HeadlessAddr    = netip.MustParseAddr("192.0.2.140")
+	OwnProbeAddr    = netip.MustParseAddr("203.0.113.57")
 	Flood64         = netip.MustParsePrefix("2001:db8:b07:7::/64")
 	Flood48         = netip.MustParsePrefix("2001:db8:b03::/48")
 	scannerPrefixes = []netip.Prefix{netip.MustParsePrefix("198.19.128.0/18"), netip.MustParsePrefix("198.19.192.0/19")}
@@ -28,6 +29,17 @@ const (
 	HeadlessUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/142.0.0.0 Safari/537.36"
 	FloodUA    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 )
+
+// The operator's own probe: an uptime monitor on no list, named in the world's probes file (OwnProbesFile) by its
+// address and user agent.
+const (
+	OwnProbeName = "Own Uptime Kuma"
+	OwnProbeUA   = "Uptime-Kuma/2.5.3"
+)
+
+// OwnProbesFile is the world's probes file (refdata.ParseOwn).
+var OwnProbesFile = `{"services": {"` + OwnProbeName + `": {"ipv4": ["` + OwnProbeAddr.String() +
+	`"], "user_agent_patterns": ["Uptime-Kuma/*"]}}}`
 
 var scannerUAs = []string{"Mozilla/5.0 zgrab/0.x", "curl/8.7.1", "Go-http-client/1.1"}
 
@@ -165,6 +177,15 @@ func (w *World) automation(p *dayPlan, s *Site, d int64) {
 			add(record{t: start.Add(time.Duration(i) * 800 * time.Millisecond), ip: WalkerAddr, ua: WalkerUA,
 				method: "GET", path: fmt.Sprintf("/api/v1/ip/192.0.2.%d", i%256), route: "GET /api/v1/ip/{addr}",
 				status: 401, dur: 2, bytes: 31})
+		}
+	}
+	if sc := w.scenario("own-probe"); sc != nil && s.Feed && s.idx == w.firstFeed() && w.Scale > 0 {
+		// Every five minutes at scale 1, a GET of the start page, scaled as the listed probe; its own stream.
+		r := newRng(w.Seed, 14, d)
+		every := min(max(time.Duration(float64(5*time.Minute)/w.Scale), 5*time.Minute), 2*day)
+		for t := d0.Add(time.Duration(r.Int64N(int64(every)))); t.Before(d0.Add(day)); t = t.Add(every) {
+			add(record{t: t, ip: OwnProbeAddr, ua: OwnProbeUA, method: "GET", path: "/", status: 200, dur: 4,
+				bytes: 4200})
 		}
 	}
 	if sc := w.scenario("scan-wave"); sc != nil && s.Feed {

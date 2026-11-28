@@ -71,6 +71,8 @@ var catalogue = []Scenario{
 		From: -40 * h, To: -28 * h, expect: expectScan},
 	{Name: "api-walker", Story: "A script walks the lookup API address by address with a wrong key, every day, " +
 		"a request each 0.8 s.", expect: expectWalker},
+	{Name: "own-probe", Story: "The operator's own Uptime Kuma, on no list, checks the start page every five " +
+		"minutes; the probes file names it by address and client.", expect: expectOwnProbe},
 	{Name: "deploy-error", Story: "A release breaks the lookup page (a script error, some 502s from the API); " +
 		"a fix ships three days later.", From: -5*24*h + 14*h, To: -2*24*h + 10*h, MinDays: 7, expect: expectDeploy},
 	{Name: "flood-addr", Story: "One address floods the start page for an hour.", From: -6 * h, To: -5 * h,
@@ -107,7 +109,7 @@ func Catalogue() []Scenario { return slices.Clone(catalogue) }
 
 // DefaultScenarios is what server -demo and make sim play: the stories that sit well together.
 const DefaultScenarios = "baseline,referrer-spike,scan-wave,api-walker,deploy-error,headless,cred-prober,growth," +
-	"script-inject"
+	"script-inject,own-probe"
 
 // Scenarios parses a comma-separated list of names ("all" for every one), baseline always included.
 func Scenarios(list string) ([]*Scenario, error) {
@@ -572,6 +574,12 @@ func expectScan(w *World, _ *Scenario) []Expectation {
 				return nil
 			})},
 	}
+}
+
+func expectOwnProbe(w *World, _ *Scenario) []Expectation {
+	s := w.Sites[w.firstFeed()].Domain
+	return []Expectation{visitor("the own probe is an uptime probe, by its address and client together", s, "24h",
+		OwnProbeAddr.String(), "monitor", "own probe "+OwnProbeName)}
 }
 
 func expectWalker(w *World, _ *Scenario) []Expectation {

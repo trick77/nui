@@ -35,6 +35,9 @@ func (c *Classifier) service(a netip.Addr, ua string, cls int) string {
 	}
 	bots := c.bots()
 	class := func(p *refdata.Provider) bool { return p != nil && store.ClassCode(p.Class) == cls }
+	if p, ok := bots.Own(a, ua); ok && class(p) {
+		return p.Name
+	}
 	// Rank puts the authoritative owners first: one of the class needs no claim looked up (the write path's cost).
 	ranked := refdata.Rank(bots.ByIP(a), ua)
 	p := first(ranked, func(p *refdata.Provider) bool { return class(p) && p.Authoritative })
