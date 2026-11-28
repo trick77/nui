@@ -657,7 +657,7 @@ describe("dashboard on a domain with a server feed", () => {
       within(v).getByText(`AS64510 Example Cloud${SEP}Hosting`, asIs),
     ).toBeInTheDocument();
     expect(v.textContent).toContain(
-      `Program: python-requests/2.32.3${SEP}Mostly refused${SEP}API calls only${SEP}Rapid requests${SEP}From a data center`,
+      `Identifier: python-requests/2.32.3${SEP}Mostly refused${SEP}API calls only${SEP}Rapid requests${SEP}From a data center`,
     );
     expect(v.textContent).not.toContain("Bot signals");
     expect(within(v).getByText(/Top 7 of 17 addresses/)).toBeInTheDocument();
@@ -849,7 +849,7 @@ describe("dashboard on a domain with a server feed", () => {
     const bot = within(d).getByText("Bot signals").parentElement!;
     expect([...bot.children].map((c) => c.textContent)).toEqual([
       "Bot signals",
-      "Program: python-requests/2.32.3",
+      "Identifier: python-requests/2.32.3",
       "Mostly refused",
       "API calls only",
       "Rapid requests",
@@ -3804,7 +3804,7 @@ describe("separators", () => {
     expect(body()).toContain(`Chrome${SEP}macOS`);
     expect(d.textContent).toMatch(new RegExp(`AS\\d+ [^·]+${SEP}ISP`));
     expect(v.textContent).toContain(
-      `Uses a real browser${SEP}Active on the page${SEP}Loads images and styles${SEP}Also unknown automated: curl/8.4.0, 12 of 330 events (Program: curl/8.4.0)`,
+      `Uses a real browser${SEP}Active on the page${SEP}Loads images and styles${SEP}Also unknown automated: curl/8.4.0, 12 of 330 events (Identifier: curl/8.4.0)`,
     );
     expect(plainDots()).toEqual([]);
 

@@ -227,8 +227,8 @@ describe("signals", () => {
     ["no sign of a browser", BOT, "No real browser"],
     ["no page loaded", BOT, "Never opened a page"],
     ["machine pace", BOT, "Machine pace"],
-    ["client curl/8.4.0", BOT, "Program: curl/8.4.0"],
-    ["client isbot/1.0", BOT, "Program: isbot/1.0"],
+    ["client curl/8.4.0", BOT, "Identifier: curl/8.4.0"],
+    ["client isbot/1.0", BOT, "Identifier: isbot/1.0"],
     ["no user agent", BOT, "Does not identify itself"],
     ["missing browser headers", BOT, "Missing browser headers"],
     ["navigator.webdriver set", BOT, "Remote-controlled browser"],
@@ -275,7 +275,7 @@ describe("signals", () => {
     [
       "also unknown automated: zgrab/0.x, 3 of 9 events (client zgrab/0.x)",
       OTHER,
-      "Also unknown automated: zgrab/0.x, 3 of 9 events (Program: zgrab/0.x)",
+      "Also unknown automated: zgrab/0.x, 3 of 9 events (Identifier: zgrab/0.x)",
     ],
     [
       "also API client: agent/1.0, 1 of 9 events (signed-in API client)",
@@ -305,7 +305,7 @@ describe("signals", () => {
       ]),
     ).toEqual([
       [HUMAN, "Uses a real browser", "Active on the page"],
-      [BOT, "Rapid requests", "Program: curl/8.4.0"],
+      [BOT, "Rapid requests", "Identifier: curl/8.4.0"],
       [OTHER, "Something new"],
     ]);
     expect(grouped([])).toEqual([]);
@@ -321,7 +321,7 @@ describe("signals", () => {
         "assets loaded",
       ]),
     ).toEqual([
-      "Program: curl/8.4.0",
+      "Identifier: curl/8.4.0",
       "Signed in",
       "Something new",
       "Loads images and styles",
@@ -360,7 +360,7 @@ describe("signals", () => {
       "Remote-controlled browser",
       "Loads no images or styles",
       "Client is PetalBot",
-      "Also unknown automated: curl/8.4.0, 3 of 9 events (Program: curl/8.4.0)",
+      "Also unknown automated: curl/8.4.0, 3 of 9 events (Identifier: curl/8.4.0)",
       "12 requests, 3 % refused",
     ]);
   });
