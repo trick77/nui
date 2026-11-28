@@ -24,7 +24,7 @@ const WORDINGS: [string, RegExp, string][] = [
   [BOT, /^no page loaded$/, "Never opened a page"],
   [BOT, /^machine pace$/, "Machine pace"],
   // "client is …" is a listed provider, no program's name starts so.
-  [BOT, /^client (?!is )(.+)$/, "Program: $1"],
+  [BOT, /^client (?!is )(.+)$/, "Identifier: $1"],
   [BOT, /^no user agent$/, "Does not identify itself"],
   [BOT, /^missing browser headers$/, "Missing browser headers"],
   [BOT, /^navigator\.webdriver set$/, "Remote-controlled browser"],
