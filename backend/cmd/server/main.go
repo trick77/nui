@@ -215,7 +215,24 @@ func serve(cfg app.Config, mode runMode, simulated *simcli.Server) error {
 
 	// The jobs report their failures and the size cap to the board; the alert engine reads it.
 	board := alert.NewBoard(nil)
-	ref := refdata.New(refdata.Options{Dir: filepath.Join(cfg.DataDir, "ref"), Report: board})
+	own, err := refdata.LoadOwn(cfg.ProbesFile)
+	if err != nil {
+		return fmt.Errorf("%s: %w", cfg.ProbesFile, err)
+	}
+	if mode == demoRun && len(own) == 0 {
+		// The demo's history holds the simulator's own probe: without its file the first pass would undo it.
+		if own, err = refdata.ParseOwn([]byte(sim.OwnProbesFile)); err != nil {
+			return err
+		}
+	}
+	if len(own) > 0 {
+		names := make([]string, len(own))
+		for i, p := range own {
+			names[i] = p.Name
+		}
+		slog.Info("Own probes loaded", "probes_file", cfg.ProbesFile, "names", strings.Join(names, ", "))
+	}
+	ref := refdata.New(refdata.Options{Dir: filepath.Join(cfg.DataDir, "ref"), Report: board, Own: own})
 	verifier := refdata.NewVerifier(nil, 3*time.Second)
 	cls := &classify.Classifier{DB: st, Sites: reg, Ref: ref, Verifier: verifier, Report: board}
 	if !verifyBots(mode) {

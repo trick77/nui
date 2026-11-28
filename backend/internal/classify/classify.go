@@ -95,6 +95,9 @@ const (
 // reasonAPIClient is the verdict on a program calling with a good key.
 const reasonAPIClient = "signed-in API client"
 
+// reasonOwnProbe starts the verdict on the operator's own probe (refdata.Own), its name follows.
+const reasonOwnProbe = "own probe "
+
 // sideFetches bounds what a person's machine fetches beside the browser (a link preview, an icon, a sign-in callback
 // asked for again without its cookie): a client with fewer events is no actor of its own. Below it one that loaded no
 // page goes with the person it shares the address with, and an automated one is not listed among the person's
@@ -198,6 +201,9 @@ func (c *Classifier) instant(a netip.Addr, ua string) int {
 	var bots *refdata.Bots
 	if c.Ref != nil {
 		bots = c.Ref.Bots()
+	}
+	if p, ok := bots.Own(a, ua); ok {
+		return store.ClassCode(p.Class)
 	}
 	if ps := refdata.Rank(bots.ByIP(a), ua); len(ps) > 0 && ps[0].Authoritative {
 		return store.ClassCode(ps[0].Class)
@@ -588,7 +594,9 @@ func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 		}
 		pending = pending || v == refdata.Pending || v == refdata.Failed
 	}
-	if listed.class != "" && !slices.ContainsFunc(a.uas, func(g uaDay) bool { return vouchedFor(g, f) }) {
+	// The operator's own probe is their word on the client, above any list's address.
+	own := func(g uaDay) bool { _, ok := bots.Own(addr, g.ua); return ok }
+	if listed.class != "" && !slices.ContainsFunc(a.uas, func(g uaDay) bool { return vouchedFor(g, f) || own(g) }) {
 		return decision{class: listed.class, reasons: []string{listed.reason}}
 	}
 	verdicts := make([]clientVerdict, len(a.uas))
@@ -596,7 +604,7 @@ func (c *Classifier) Decide(a actorDay, f siteFacts) decision {
 	var small int64 // the events of the automated clients too small to be an actor
 	for i, g := range a.uas {
 		v := listed
-		if v.class == "" || vouchedFor(g, f) {
+		if v.class == "" || vouchedFor(g, f) || own(g) {
 			v = c.clientVerdict(a.ip, addr, g, f, bots)
 		}
 		verdicts[i] = v
@@ -814,6 +822,9 @@ func vouchedFor(g uaDay, f siteFacts) bool { return apiClient(g, f) || signedInB
 func (c *Classifier) clientVerdict(ip string, addr netip.Addr, g uaDay, f siteFacts, bots *refdata.Bots) clientVerdict {
 	if apiClient(g, f) {
 		return clientVerdict{class: "api", reason: reasonAPIClient}
+	}
+	if p, ok := bots.Own(addr, g.ua); ok {
+		return clientVerdict{class: p.Class, reason: reasonOwnProbe + p.Name}
 	}
 	if p, ok := bots.Claimed(addr, g.ua); ok {
 		inside := slices.Contains(bots.ByIP(addr), p)

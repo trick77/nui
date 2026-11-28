@@ -38,6 +38,8 @@ type Config struct {
 	// NotifyFile holds the alert rules and the channels they send to (docs/notify.example.json). Read at start: a
 	// file with faults never stops it, it sends nothing then.
 	NotifyFile string
+	// ProbesFile lists the operator's own uptime probes, by address and user agent (docs/probes.example.json).
+	ProbesFile string
 	// RetentionMonths is how long the per-address aggregates, actor classes and model usage are kept, and raw events
 	// at most; the other figures stay, unless the size cap takes them.
 	RetentionMonths int
@@ -81,6 +83,7 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 		LogLevel:         r.String("BACKEND_LOG_LEVEL", "info"),
 		SitesFile:        r.String("BACKEND_SITES_FILE", ""),
 		NotifyFile:       r.String("BACKEND_NOTIFY_FILE", ""),
+		ProbesFile:       r.String("BACKEND_PROBES_FILE", ""),
 		RetentionMonths:  r.Int("BACKEND_RETENTION_MONTHS", 25),
 		RawRetentionDays: r.Int("BACKEND_RAW_RETENTION_DAYS", 90),
 		MaxDBMB:          r.Int("BACKEND_MAX_DB_MB", 20480),
@@ -102,6 +105,9 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 	}
 	if cfg.NotifyFile == "" {
 		cfg.NotifyFile = filepath.Join(cfg.ConfDir, "notify.json")
+	}
+	if cfg.ProbesFile == "" {
+		cfg.ProbesFile = filepath.Join(cfg.ConfDir, ProbesFileName)
 	}
 	if cfg.OIDCRedirectURL == "" && cfg.PublicFQDN != "" {
 		cfg.OIDCRedirectURL = "https://" + cfg.PublicFQDN + "/api/auth/callback"
@@ -159,6 +165,9 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 
 // SitesFileName is the sites file's name in the conf directory (and, before it, in the data directory).
 const SitesFileName = "sites.json"
+
+// ProbesFileName is the probes file's name in the conf directory.
+const ProbesFileName = "probes.json"
 
 // SitesPath is the sites file to read. The default in the conf directory falls back to the data directory's, where
 // Trakk kept it before, while the conf one is missing and the data one exists (legacy true): without the fallback an

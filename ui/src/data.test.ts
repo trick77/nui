@@ -258,6 +258,7 @@ describe("signals", () => {
     // A provider: a bot's or an uptime probe's.
     ["client is PetalBot", OTHER, "Client is PetalBot"],
     ["UptimeRobot address range", OTHER, "UptimeRobot address range"],
+    ["own probe Home Kuma", OTHER, "Own probe: Home Kuma"],
     [
       "Samplebot address range, rDNS not verified",
       OTHER,

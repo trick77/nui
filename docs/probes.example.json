@@ -1,0 +1,9 @@
+{
+  "services": {
+    "Own Uptime Kuma": {
+      "ipv4": ["198.51.100.50"],
+      "ipv6": [],
+      "user_agent_patterns": ["Uptime-Kuma/*"]
+    }
+  }
+}

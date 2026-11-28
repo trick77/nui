@@ -190,6 +190,15 @@ docker compose run --rm trakk -new-feed-key
 The key goes to the product's feed emitter (`Authorization: Bearer <key>` on `POST /api/feed`), the hash into
 `sites.json`.
 
+### Own probes
+
+Your own uptime monitor (a self-hosted Uptime Kuma, say) is on no public bot list, so it shows as unknown
+automation. List it in `conf/probes.json` (shape in [docs/probes.example.json](docs/probes.example.json), the services
+format of ipverse's `monitoring.json`): its addresses (`ipv4`, `ipv6`, single addresses or ranges) and its user agent
+patterns (`*` a wildcard). A request is the probe only when both match: another program from that address stays what
+it is, the same monitor software elsewhere too. It then counts as an uptime probe under its name. The file is read at
+start; one with faults stops it, a missing one is none. Days already built keep their classes.
+
 ### Browser script
 
 Adding a product, script and feed: [INTEGRATION.md](INTEGRATION.md), or a [plugin](#plugins). On a page, include the

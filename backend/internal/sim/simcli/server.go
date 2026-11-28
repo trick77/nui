@@ -54,6 +54,9 @@ func NewServer(k sim.Knobs, now time.Time) (*Server, error) {
 	if err := os.WriteFile(filepath.Join(dir, alert.FileName), []byte(NotifyFile), 0o600); err != nil {
 		return fail(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, app.ProbesFileName), []byte(sim.OwnProbesFile), 0o600); err != nil {
+		return fail(err)
+	}
 	return s, nil
 }
 
@@ -81,6 +84,7 @@ func (s *Server) Configure(cfg *app.Config) error {
 	// The temporary directory is the conf directory too: never the developer's own /conf.
 	cfg.DataDir, cfg.ConfDir, cfg.SitesFile = s.Dir, s.Dir, filepath.Join(s.Dir, app.SitesFileName)
 	cfg.NotifyFile = filepath.Join(s.Dir, alert.FileName)
+	cfg.ProbesFile = filepath.Join(s.Dir, app.ProbesFileName)
 	cfg.AuthDisabled, cfg.RefDataDisabled = true, true
 	cfg.Addr = fmt.Sprintf("127.0.0.1:%d", s.Knobs.Port)
 	cfg.TrustedHops = 1

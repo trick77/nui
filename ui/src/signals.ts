@@ -25,6 +25,8 @@ const WORDINGS: [string, RegExp, string][] = [
   [BOT, /^machine pace$/, "Machine pace"],
   // "client is …" is a listed provider, no program's name starts so.
   [BOT, /^client (?!is )(.+)$/, "Identifier: $1"],
+  // The operator's probes file names it (refdata.Own).
+  [OTHER, /^own probe (.+)$/, "Own probe: $1"],
   [BOT, /^no user agent$/, "Does not identify itself"],
   [BOT, /^missing browser headers$/, "Missing browser headers"],
   [BOT, /^navigator\.webdriver set$/, "Remote-controlled browser"],

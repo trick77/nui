@@ -375,7 +375,7 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request, q *query) 
 		"botlist": map[string]any{"services": 0, "updated": nil}, "networks": map[string]any{"updated": nil},
 		"llm": map[string]any{"calls_today": 0, "budget": 0, "configured": false}}
 	if s.Ref != nil {
-		if b := s.Ref.Bots(); b != nil {
+		if b := s.Ref.Bots(); b != nil && len(b.Providers) > 0 {
 			rules["botlist"] = map[string]any{"services": len(b.Providers), "updated": iso(b.Updated)}
 		}
 		if n := s.Ref.Networks(); n != nil {

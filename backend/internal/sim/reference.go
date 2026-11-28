@@ -179,7 +179,11 @@ func OpenReference(dir string) (*Reference, error) {
 			return nil, err
 		}
 	}
-	d := refdata.New(refdata.Options{Dir: dir, Log: quietLog()})
+	own, err := refdata.ParseOwn([]byte(OwnProbesFile))
+	if err != nil {
+		return nil, err
+	}
+	d := refdata.New(refdata.Options{Dir: dir, Log: quietLog(), Own: own})
 	d.LoadCached()
 	ref := &Reference{Dir: dir, Data: d, roles: map[string]botRole{}}
 	// Read again: the loader keeps quiet about a list it cannot use.

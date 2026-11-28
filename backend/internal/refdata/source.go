@@ -52,6 +52,8 @@ type Options struct {
 	// Report takes each refresh that fetched something (job.failed, refdata): a failed download or parse opens it,
 	// the next refresh that gets everything through clears it.
 	Report alert.Reporter
+	// Own are the operator's probes (LoadOwn), joined to every load of the bot list.
+	Own []*Provider
 }
 
 // Data is the current reference data. The zero value has none and answers every lookup with "unknown".
@@ -60,6 +62,8 @@ type Data struct {
 	bots      atomic.Pointer[Bots]
 	networks  atomic.Pointer[Networks]
 	countries atomic.Pointer[Countries]
+	// ownOnly is Bots before the list's first load: the operator's probes alone, nil without any.
+	ownOnly *Bots
 }
 
 // New returns Data for o; Load and Run fill it.
@@ -85,11 +89,21 @@ func New(o Options) *Data {
 	if o.Log == nil {
 		o.Log = slog.Default()
 	}
-	return &Data{o: o}
+	d := &Data{o: o}
+	if len(o.Own) > 0 {
+		d.ownOnly = (&Bots{}).withOwn(o.Own)
+	}
+	return d
 }
 
-// Bots is the current bot list, nil before the first load.
-func (d *Data) Bots() *Bots { return d.bots.Load() }
+// Bots is the current bot list; before the first load the operator's probes alone (no Providers), nil without any:
+// a probe is the operator's word, it needs no list.
+func (d *Data) Bots() *Bots {
+	if b := d.bots.Load(); b != nil {
+		return b
+	}
+	return d.ownOnly
+}
 
 // Networks is the current AS data, nil before the first load.
 func (d *Data) Networks() *Networks { return d.networks.Load() }
@@ -97,8 +111,8 @@ func (d *Data) Networks() *Networks { return d.networks.Load() }
 // Countries is the current country data, nil before the first load.
 func (d *Data) Countries() *Countries { return d.countries.Load() }
 
-// SetBots installs a bot list (tests, and the loaders).
-func (d *Data) SetBots(b *Bots) { d.bots.Store(b) }
+// SetBots installs a bot list with the operator's probes (tests, and the loaders).
+func (d *Data) SetBots(b *Bots) { d.bots.Store(b.withOwn(d.o.Own)) }
 
 // LoadCached loads whatever the cache dir holds, each source on its own: a restart without network still classifies
 // and enriches with the last good copy.
@@ -117,8 +131,14 @@ func (d *Data) LoadCached() {
 func (d *Data) path(file string) string { return filepath.Join(d.o.Dir, file) }
 
 func (d *Data) installBots(b *Bots) {
-	d.bots.Store(b)
+	d.SetBots(b)
+	b = d.Bots()
 	d.o.Log.Info("Bot list loaded", "services", len(b.Providers))
+	if len(b.clashed) > 0 {
+		// Both stay: the probe by its address and client, the list's name with its own meaning; the figures share it.
+		d.o.Log.Warn("Own probe named like a bot list service or agent: name it apart", "names",
+			strings.Join(b.clashed, ", "))
+	}
 	d.logRejected("bot list", b.Rejected)
 	// Info, not Warn: an agent left out costs a name, never an address.
 	if r := b.RejectedAgents; r.Count > 0 {
@@ -186,7 +206,7 @@ func (d *Data) refresh(ctx context.Context) (ok bool) {
 			alert.Fail(d.o.Report, alert.JobRefdata, errors.Join(errs...))
 		}
 	}()
-	if d.stale(crawlersFile) || d.stale(monitorFile) || d.Bots() == nil {
+	if d.stale(crawlersFile) || d.stale(monitorFile) || d.bots.Load() == nil {
 		warn("bot list", d.refreshBots(ctx))
 	}
 	for _, src := range []struct {
